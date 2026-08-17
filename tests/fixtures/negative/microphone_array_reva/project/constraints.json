@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "project": "microphone_array_v2",
+  "revision": "revA",
+  "board": {
+    "shape": "circle",
+    "diameter_mm": 120.0,
+    "thickness_mm": 1.6,
+    "layers": ["F.Cu", "In1.Cu:GND", "In2.Cu:3V3", "B.Cu"],
+    "outer_copper_oz": 1.0,
+    "inner_copper_oz": 0.5,
+    "finish": "ENIG",
+    "mask": "green",
+    "silkscreen": "white",
+    "allowed_track_layers": ["F.Cu", "B.Cu"],
+    "via_covering": "plugged routing vias only"
+  },
+  "rules_mm": {
+    "default_track": 0.20,
+    "absolute_min_track": 0.127,
+    "default_clearance": 0.20,
+    "min_clearance_escape": 0.127,
+    "power_track": 0.60,
+    "copper_to_edge": 0.30,
+    "via_diameter": 0.45,
+    "via_drill": 0.30,
+    "hole_to_hole": 0.25,
+    "hole_to_track": 0.25,
+    "plugged_via_to_mask_opening": 0.40,
+    "silk_line_width": 0.15,
+    "silk_text_height": 1.0
+  },
+  "array": {
+    "microphones": 16,
+    "part": "MSM261DHP006",
+    "lcsc": "C22390138",
+    "port_radius_mm": 54.0,
+    "angular_pitch_deg": 22.5,
+    "channel_zero_direction": "+X",
+    "numbering": "counter-clockwise viewed from top",
+    "port_orientation": "acoustic ports face up (+Z), package rotated so its long axis is tangential",
+    "vdd_volts": 3.3,
+    "pairing": "adjacent channels 2k/2k+1 share one DATA net; even channel L/R=GND, odd channel L/R=VDD"
+  },
+  "clocking": {
+    "reference_oscillator_hz": 24576000,
+    "reference_part": "OT252024.576MJBA4SL",
+    "reference_lcsc": "C5210640",
+    "pdm_clock_hz": 3072000,
+    "pdm_clock_divider": 8,
+    "decimation": 64,
+    "sample_rate_hz": 48000,
+    "fanout": "SN74LVC244APWR, one input net driving 8 series-terminated branches, one branch per microphone pair"
+  },
+  "power": {
+    "source": "Raspberry Pi P1 pins 2 and 4 (5 V) only",
+    "input_protection": "JK-MSMD050-30 PTC (0.5 A hold) then SS14 Schottky, blocking Tang USB-C back-feed into the Pi",
+    "rails": {
+      "+5V": "board input, feeds Tang Nano 9K 5 V header pin and the LDO",
+      "+3V3A": "LP5907MFX-3.3 output, microphone ring supply",
+      "+3V3_CLK": "+3V3A through a ferrite bead, supplies the oscillator and clock buffer",
+      "TANG_3V3": "Tang Nano 9K 3.3 V output, used only as the ESD clamp rail reference"
+    },
+    "budget_ma": {
+      "microphones_16": 24,
+      "oscillator": 15,
+      "clock_buffer": 6,
+      "ldo_quiescent": 1,
+      "tang_nano_9k": 150,
+      "total_typical": 196
+    }
+  },
+  "critical_routes": {
+    "audio_mclk": {"frequency_hz": 24576000, "layer": "F.Cu", "max_vias": 0, "series_ohm": 33},
+    "pdm_clock_root": {"frequency_hz": 3072000, "layer": "F.Cu", "max_vias": 0, "series_ohm": 33},
+    "pdm_clock_branches": {"frequency_hz": 3072000, "count": 8, "series_ohm": 33, "branch_length_match_mm": 5.0},
+    "pdm_data": {"count": 8, "series_ohm": 22, "max_pair_stub_mm": 12.0},
+    "host_spi": {"max_frequency_hz": 25000000, "series_ohm": 33, "esd": "USBLC6-4SC6"}
+  },
+  "host": {
+    "target": "Raspberry Pi Model B (2012), 26-pin P1 header",
+    "transport": "SPI0",
+    "pins_used": "only pins identical on Model B revision 1.0 and revision 2.0",
+    "connector": "2x13 2.54 mm shrouded IDC, hand-soldered, bottom side"
+  },
+  "fpga_module": {
+    "part": "Sipeed Tang Nano 9K",
+    "mounting": "two hand-soldered 1x24 2.54 mm female sockets on the bottom side",
+    "header_row_spacing_mm": 22.86,
+    "socket_drill_mm": 1.0,
+    "banks_used": "3.3 V banks only; J6 positions 2-9 are the 1.8 V bank and are left unconnected"
+  },
+  "assembly": {
+    "smt_side": "top",
+    "hand_soldered": ["J1", "J2", "J3"],
+    "dnp": ["J1", "J2", "J3"],
+    "mounting_holes": {"count": 4, "diameter_mm": 3.2, "radius_mm": 42.0, "angles_deg": [45, 135, 225, 315]}
+  }
+}

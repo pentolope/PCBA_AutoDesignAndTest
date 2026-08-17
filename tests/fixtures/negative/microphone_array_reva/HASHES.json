@@ -1,0 +1,326 @@
+{
+  "fixture": "microphone_array_reva",
+  "description": "Curated copy of microphone-array Rev A. Permanent NEGATIVE regression fixture: the validator must reject it. Never repair this copy.",
+  "digest_policy": {
+    "text": "sha256 over canonical LF bytes; independent of checkout line endings",
+    "binary": "sha256 over exact raw bytes; production artifacts are never normalised",
+    "classified_by": ".gitattributes"
+  },
+  "derived_from": {
+    "repository": "https://github.com/pentolope/PCB_MicrophoneArrayV2",
+    "commit": "9ba07cf720ed0bbb2023d121d544f0144bba7b2f",
+    "path": "verification/fixtures/reva/project"
+  },
+  "curation": {
+    "why": "Legacy autorouter assets were removed when this fixture moved into the toolkit; the toolkit supports KiCad Routing Tools only and carries no reference to the superseded router.",
+    "removed": [
+      "generated/route/board.dsn",
+      "generated/route/fr17.log",
+      "generated/route/merged17.kicad_pcb",
+      "generated/route/merged17.kicad_prl",
+      "generated/route/merged17.kicad_pro",
+      "generated/route/routed17.kicad_pcb",
+      "generated/route/routed17.kicad_pro",
+      "pcbflow.json",
+      "tools/apply_escapes.py",
+      "tools/close_gaps.py",
+      "tools/kicad_specctra.py",
+      "tools/merge_routing.py",
+      "tools/patch_dsn.py",
+      "tools/pcbflow.py"
+    ],
+    "edited": [
+      "README.md",
+      "docs/routing.md",
+      "docs/sources.md",
+      "tools/gen_pcb.py"
+    ],
+    "preserved": "Board geometry, the netlist, the release archive and every defect the negative tests depend on are unchanged."
+  },
+  "normalization_commit": "8205558800c34b7e370552023d8fbc9346418fbb",
+  "pre_normalization_digests": "PRE_NORMALIZATION_HASHES.json",
+  "note": "Line endings were normalised in the commit above. The pre- and post-normalisation raw bytes are NOT identical; only the canonical content is. Design content was not modified.",
+  "file_count": 70,
+  "files": {
+    ".gitattributes": {
+      "sha256": "bb2abed0590cb104acc348aaf3d4c906db88aa8d67c35d632dd921d08648eca0",
+      "kind": "text"
+    },
+    ".gitignore": {
+      "sha256": "d649afde8e312d9dc6a793c5d5cc57eb57ac053fbab23d733bb1537afc635768",
+      "kind": "text"
+    },
+    "MicArrayV2.kicad_sym": {
+      "sha256": "0bca1669f16e8f2303446783b4bc2c7f54b1bcffebf5dfd3d256469ebd0ad811",
+      "kind": "text"
+    },
+    "MicArrayV2.pretty/MSM261DHP006_LGA-8_3x4mm_TopPort.kicad_mod": {
+      "sha256": "51148c4f0fca89c863d4475a52002ef954dc751e57e3aed5486e26e389f2ce64",
+      "kind": "text"
+    },
+    "MicArrayV2.pretty/Oscillator_SMD_YXC_3.2x2.5mm_4Pin.kicad_mod": {
+      "sha256": "879bab6c2bce9a374c115cf56669b1654ca4eee94c390ff314d6b73ef27caadb",
+      "kind": "text"
+    },
+    "MicArrayV2.pretty/TestPoint_Pad_D1.0mm_NoSilk.kicad_mod": {
+      "sha256": "cd701ca4ff02eff4f2c96557b00d7b29d385426a342cf6e9c0e501525c3fa643",
+      "kind": "text"
+    },
+    "MicArrayV2.pretty/TestPoint_Pad_D1.5mm_NoSilk.kicad_mod": {
+      "sha256": "687c9a218e10446af160bae22ed1e2ca86ccab07c168b11e6499995304c71e98",
+      "kind": "text"
+    },
+    "README.md": {
+      "sha256": "24953ca35be0ee2400ab96888f7383945b864df84e01ab3ea08a21e35f307d29",
+      "kind": "text"
+    },
+    "constraints.json": {
+      "sha256": "e5e4877e3335bd88b1329a9bc315891bd14c7edc8b635df9bc9f821af7686b46",
+      "kind": "text"
+    },
+    "docs/architecture.md": {
+      "sha256": "2a76f52cacb5b4b9c9710d5f1e55a4bc9ab1f0d26340757aac9a424552ba86ea",
+      "kind": "text"
+    },
+    "docs/host-interface.md": {
+      "sha256": "6a5686e1272535a0723ce4bf467e35bf5abc9f32d54f481f4083b90c024e91bf",
+      "kind": "text"
+    },
+    "docs/manufacturing.md": {
+      "sha256": "23aeb024d5ac0fdea8d5e39aa556438c6a0b8d3778d86ddabe5c6b3d789357f8",
+      "kind": "text"
+    },
+    "docs/routing.md": {
+      "sha256": "ff8bd990d9ffffc7a25fd84d0d712a0aefe56bdc2ac340794b63bee63ea6600c",
+      "kind": "text"
+    },
+    "docs/sources.md": {
+      "sha256": "eff514883bc20ff1bf6d38c41866bba08a0ed01e0a797bd57374f3647c7dc123",
+      "kind": "text"
+    },
+    "docs/status.md": {
+      "sha256": "615dcd5eb04e9a51164ee7cbf1fd151f1433f67f59ed636938a7c07fdc5e7303",
+      "kind": "text"
+    },
+    "fp-lib-table": {
+      "sha256": "c61bcf9d94d0feb56e5252ee958183f26bb2dc3eef3a92a3574b85fc1e7c244a",
+      "kind": "text"
+    },
+    "generated/drc.json": {
+      "sha256": "eabebbc22cc561b67fcee56b2219d030d28fed57b88ec8f59fb87bf78a00c725",
+      "kind": "text"
+    },
+    "generated/drc_pass1.json": {
+      "sha256": "d65e0c1925a7ca3ce3f3856ed87b0fe0c05c7e2ed72b1e253811b402ab392954",
+      "kind": "text"
+    },
+    "generated/drc_routed.json": {
+      "sha256": "f6588262912ba3376d4072cebbb73be738d5e7f579ba0360b50e61d2ac0f056f",
+      "kind": "text"
+    },
+    "generated/erc.json": {
+      "sha256": "8c82a0270ae7a50c5c24d76e5f054baf49ca733d87fece72795b8b84acd5228c",
+      "kind": "text"
+    },
+    "generated/netlist.net": {
+      "sha256": "d2a58196c31581ca750c4ddd56de87c78392ef4eb84a5b097be806a40062d8d8",
+      "kind": "text"
+    },
+    "generated/release/MANIFEST.md": {
+      "sha256": "7f272593429f4514a26e9e6341241fc2fd1009ee678667f749d633a6e254128b",
+      "kind": "binary"
+    },
+    "generated/release/bom.csv": {
+      "sha256": "8dbdc7dc144a9dffc79b9d3d06bb52761a83d726b0eb459fba376d300e39e8a1",
+      "kind": "binary"
+    },
+    "generated/release/cpl.csv": {
+      "sha256": "b4d02eac068c4f017d7f744862a78557474bd3200bfd94f4598278290d7ab48f",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-B_Cu.gbr": {
+      "sha256": "a630aed6b0c9cc6b512317454470e49e1f85e26bb1c586eac3cd7ec7d0b4eae7",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-B_Mask.gbr": {
+      "sha256": "45969fbb456604a8ad26e5c1e3538f222aabef88cf599765124971bd91d4a24f",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-B_Paste.gbr": {
+      "sha256": "3f55cf4df0b928ee721d8950e9327ff0014d87975ea0bcefbf7d632d481b93e9",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-B_Silkscreen.gbr": {
+      "sha256": "9937090cf2e3a50c528c059bae85da3e517e7b5f12d57c6ae30180198d841698",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-Edge_Cuts.gbr": {
+      "sha256": "76d56dce027b1dab873e90c841b564a74fdcf981686dabac6200abbce492c8e6",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-F_Cu.gbr": {
+      "sha256": "ddf826a66421d41eac72dbd4d8d581a53aa4771f3384127557b76af7d973ae87",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-F_Mask.gbr": {
+      "sha256": "6e510a32c9f93956927d205c124ee7b7af6320ebd0b7481e4a3a5227275430a2",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-F_Paste.gbr": {
+      "sha256": "a59522717d46d03deb87b74bb624e7b8990c6a28313bc0e90cb9f7aa3e9fe662",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-F_Silkscreen.gbr": {
+      "sha256": "3fbc4af296efb21073e5d4c74c0a139d9bccdf9e9dfcdab19f0a3f35b51ab0c0",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-GND1.gbr": {
+      "sha256": "9239dac43bc9241a6e6eafb62d1f8bd79c5633d588793cc86cc257ba509c27bb",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-GND2.gbr": {
+      "sha256": "6313f7bff2c46c1cd2905d7f16489d5a7f65d727db44f2ecfd8f2b3f3c8d0c6f",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-NPTH-drl_map.gbr": {
+      "sha256": "eba9174eb04897ec255a528a1d9ffb129c534565c97065a22ea0e6fad4b9040a",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-NPTH.drl": {
+      "sha256": "026750c9070a7fbff900fb59939d34002d727a80b488b2a36875c0d80336557d",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-PTH-drl_map.gbr": {
+      "sha256": "601782d5e2958a0f03144f4893210fafdc4696d78c0cb50d5e0a72a4460b1ce7",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-PTH.drl": {
+      "sha256": "650258775edbb10ce78e4273f0cc8796a94c3b4c63426234e1ae5e18a6b8166b",
+      "kind": "binary"
+    },
+    "generated/release/gerbers/microphone_array_v2-job.gbrjob": {
+      "sha256": "82daafc9ee33dd2c549f8058e482fe5efd31b42b6caf7e566039d6620e6ade35",
+      "kind": "binary"
+    },
+    "generated/release/microphone_array_v2-revA-fabrication.zip": {
+      "sha256": "a3c4c5d2b3282c06cc37fce987b2dd4712548ae0ec38ea4efc484124e038fa3d",
+      "kind": "binary"
+    },
+    "generated/release/positions.csv": {
+      "sha256": "305e391553aad2e0ea7647e4b7571495a5777fe80d91dce5947bfa2ee623b964",
+      "kind": "binary"
+    },
+    "generated/release/renders/bottom.png": {
+      "sha256": "1e9f2ab6d54ca5ab18cac63705f9af71dcc28b05e531d57a2367638701958096",
+      "kind": "binary"
+    },
+    "generated/release/renders/top.png": {
+      "sha256": "81ab2663e1f5f44bcba56f4dcad9bdde85d0edb68847c4bcf6b1baa52ff5dd56",
+      "kind": "binary"
+    },
+    "generated/release/schematic.pdf": {
+      "sha256": "50f934d1b15316f0f249491d9a55b289de488995fce1bfe05e051bb1dd60ee0c",
+      "kind": "binary"
+    },
+    "generated/render/bottom.png": {
+      "sha256": "6f30329ab525bcbdc329f5ab2919958c03cb3cca6712d0ab8d6cd57f27703702",
+      "kind": "binary"
+    },
+    "generated/render/manual.png": {
+      "sha256": "653bf143a03f9cc2d8135d22f40fbe662737085b05723b673aa6ed33aef9a5eb",
+      "kind": "binary"
+    },
+    "generated/render/top.png": {
+      "sha256": "e9b593e7aa8501108bfb6e33132b2fe897e291c57dca70fe1ba6b04a7fdda6a2",
+      "kind": "binary"
+    },
+    "generated/render/top_routed.png": {
+      "sha256": "0bc4d18c4cc083367be24195352658678d147735107443e41f208f1c582096f6",
+      "kind": "binary"
+    },
+    "generated/test_points.py": {
+      "sha256": "abcaefae08cc1e84228d41142620ac5448794eee79dcad54261c210120dd7924",
+      "kind": "text"
+    },
+    "microphone_array_v2.kicad_pcb": {
+      "sha256": "f6e5c6b8143f0db3bc17bc00a55c2fa65ef84e223c920a67624f6e9532854181",
+      "kind": "text"
+    },
+    "microphone_array_v2.kicad_prl": {
+      "sha256": "5209561ab49da1d159a902b29d1b2b01d00a5b58cca7db86d37161d0c60dc68d",
+      "kind": "text"
+    },
+    "microphone_array_v2.kicad_pro": {
+      "sha256": "6ed53986b7dc3fb9dbbd45cc99da0b5640fa40b7c71d4bd86698477fe676d5c4",
+      "kind": "text"
+    },
+    "microphone_array_v2.kicad_sch": {
+      "sha256": "9ceb4ee88d92f9642be2c4e20e72243d6a49a8da67437eac4e717a56bee0a669",
+      "kind": "text"
+    },
+    "sym-lib-table": {
+      "sha256": "4b5054b6aa4757be815711ca4dcdd02c65639daf33f04bcebc59dc5de460bee2",
+      "kind": "text"
+    },
+    "tools/check_netlist_parity.py": {
+      "sha256": "02b5f870c9fa2108da3083992375c135ef41966d43fcf813693961e8aa4ddc17",
+      "kind": "text"
+    },
+    "tools/check_placement.py": {
+      "sha256": "5cdb1e4518fe0a8bfc783a1eb7e64cb758e25016e3734ea2638a61660c725600",
+      "kind": "text"
+    },
+    "tools/check_routes.py": {
+      "sha256": "9afbed3704793cfe1ef0eb48c66ae20c58d19cd4065358d87ca07934325e2c5f",
+      "kind": "text"
+    },
+    "tools/cleanup_tracks.py": {
+      "sha256": "c272f942d3ed6483fe7e857b453ae2e9d46b5b9b7eee3a99ec5241afa85fb559",
+      "kind": "text"
+    },
+    "tools/design.py": {
+      "sha256": "c5ecaf5415b9c5a87646cef993c617bb9add519f1ca53faa2f713007bff175ab",
+      "kind": "text"
+    },
+    "tools/gen_pcb.py": {
+      "sha256": "8e7fc3e069999615672b85b25d2f0ffbcb82d0d8fe4f2c996a84ed4e5e928b32",
+      "kind": "text"
+    },
+    "tools/gen_schematic.py": {
+      "sha256": "6d7eee06691e2bf2417ff3f2c8de1f0519aaa227a17c6c9a220cff918c01bfbe",
+      "kind": "text"
+    },
+    "tools/gen_symbols.py": {
+      "sha256": "6e7463bb678658da71e6a3a34499bb794c218fbc16caac7300f5e984638df03a",
+      "kind": "text"
+    },
+    "tools/jlc_lookup.py": {
+      "sha256": "7fbb67aaefcb297d0386528518ec333ccddc31797712aec4564536adc53dbf25",
+      "kind": "text"
+    },
+    "tools/make_release.py": {
+      "sha256": "c33405ccec5511a28968fba325e1cd9bbf000a3c6fb7d73b057922e3319ffcf9",
+      "kind": "text"
+    },
+    "tools/netlist.py": {
+      "sha256": "be7e48ee11581203331fbf8fcd3fe754d775ada8a9987ed021cfcd45cbac267b",
+      "kind": "text"
+    },
+    "tools/patch_board.py": {
+      "sha256": "e7658325507f247c865092175472988c9b692207c29a535897e4dce9613d41f0",
+      "kind": "text"
+    },
+    "tools/place_testpoints.py": {
+      "sha256": "b1055fe401447089214b5dbc20cc6155dbd815c215a7390956e5828eb3e71f84",
+      "kind": "text"
+    },
+    "tools/plot_layer.py": {
+      "sha256": "5ca3e32cc9bffb048d91f1e0c1c10b412d05b43c83bd1eaf44084d2a05acc8e2",
+      "kind": "text"
+    },
+    "tools/sexpr.py": {
+      "sha256": "33b79e3c8f21060e818a4e43733f732757c9f8615a829b18858e0634aa2fe514",
+      "kind": "text"
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "board": {
+    "design_settings": {
+      "rule_severities": {
+        "missing_courtyard": "warning",
+        "track_not_centered_on_via": "warning",
+        "tuning_profile_track_geometries": "warning",
+        "footprint_filters_mismatch": "warning",
+        "footprint_type_mismatch": "warning"
+      }
+    },
+    "drc_exclusions": [],
+    "layer_presets": [],
+    "viewports": []
+  },
+  "boards": [],
+  "cvpcb": {
+    "equivalence_files": []
+  },
+  "erc": {
+    "erc_exclusions": [],
+    "meta": {
+      "version": 0
+    },
+    "pin_map": [],
+    "rule_severities": {
+      "single_global_label": "warning",
+      "four_way_junction": "warning",
+      "simulation_model_issue": "warning",
+      "footprint_filter": "warning"
+    }
+  },
+  "libraries": {
+    "pinned_footprint_libs": [],
+    "pinned_symbol_libs": []
+  },
+  "meta": {
+    "filename": "clean.kicad_pro",
+    "version": 3
+  },
+  "net_settings": {
+    "classes": [
+      {
+        "name": "Default",
+        "clearance": 0.2,
+        "track_width": 0.25,
+        "via_diameter": 0.6,
+        "via_drill": 0.3
+      }
+    ]
+  },
+  "pcbnew": {
+    "last_paths": {},
+    "page_layout_descr_file": ""
+  },
+  "schematic": {
+    "legacy_lib_dir": "",
+    "legacy_lib_list": []
+  },
+  "sheets": [
+    [
+      "11111111-2222-3333-4444-555555555555",
+      "Root"
+    ]
+  ],
+  "text_variables": {}
+}

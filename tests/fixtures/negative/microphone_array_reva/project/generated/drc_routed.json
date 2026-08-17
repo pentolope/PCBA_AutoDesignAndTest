@@ -1,0 +1,682 @@
+{
+    "$schema": "https://schemas.kicad.org/drc.v1.json",
+    "coordinate_units": "mm",
+    "date": "2026-08-02T00:41:57",
+    "ignored_checks": [
+        {
+            "description": "Footprint has no courtyard defined",
+            "key": "missing_courtyard"
+        },
+        {
+            "description": "Track endpoint not centered on via",
+            "key": "track_not_centered_on_via"
+        },
+        {
+            "description": "Tuning profile track geometries",
+            "key": "tuning_profile_track_geometries"
+        },
+        {
+            "description": "Footprint doesn't match symbol's footprint filters",
+            "key": "footprint_filters_mismatch"
+        },
+        {
+            "description": "Footprint component type doesn't match footprint pads",
+            "key": "footprint_type_mismatch"
+        }
+    ],
+    "included_severities": [
+        "error",
+        "warning",
+        "exclusion"
+    ],
+    "kicad_version": "10.0.5",
+    "schematic_parity": [],
+    "source": "merged17.kicad_pcb",
+    "unconnected_items": [
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Track [MIC_VDD_10] on F.Cu, length 0.4535 mm",
+                    "pos": {
+                        "x": 113.923411,
+                        "y": 184.379531
+                    },
+                    "uuid": "14cd0ac4-06b0-4153-8756-32874eb45be4"
+                },
+                {
+                    "description": "Pad 1 [MIC_VDD_10] of CM11 on F.Cu",
+                    "pos": {
+                        "x": 116.754632,
+                        "y": 186.376031
+                    },
+                    "uuid": "3a362b37-ca5d-4ad2-85e2-68a096cb7499"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Pad 1 [MIC_VDD_8] of CM9 on F.Cu",
+                    "pos": {
+                        "x": 100.770236,
+                        "y": 152.213713
+                    },
+                    "uuid": "f9b7f936-1d0f-4fbc-9532-b1f5ca509a94"
+                },
+                {
+                    "description": "Track [MIC_VDD_8] on F.Cu, length 1.7000 mm",
+                    "pos": {
+                        "x": 98.48,
+                        "y": 148.8
+                    },
+                    "uuid": "68b7f250-4bf2-4f69-990c-426a12da9b96"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Track [MIC_VDD_0] on F.Cu, length 1.7000 mm",
+                    "pos": {
+                        "x": 201.52,
+                        "y": 151.2
+                    },
+                    "uuid": "545b117a-866f-473c-9713-746a447f7bf8"
+                },
+                {
+                    "description": "Pad 1 [MIC_VDD_0] of CM1 on F.Cu",
+                    "pos": {
+                        "x": 199.229763,
+                        "y": 147.786286
+                    },
+                    "uuid": "b85f0bd7-c05a-4716-8ae1-fc5662ac0466"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Track [MIC_VDD_6] on F.Cu, length 1.7000 mm",
+                    "pos": {
+                        "x": 114.418386,
+                        "y": 112.72133
+                    },
+                    "uuid": "f4783e66-872e-4e91-bfb9-1b8795289931"
+                },
+                {
+                    "description": "Pad 1 [MIC_VDD_6] of CM7 on F.Cu",
+                    "pos": {
+                        "x": 113.623968,
+                        "y": 116.754632
+                    },
+                    "uuid": "fefa70d8-8bdd-48e8-be7c-5ea416f4dbce"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Track [MIC_VDD_14] on F.Cu, length 1.7000 mm",
+                    "pos": {
+                        "x": 185.581613,
+                        "y": 187.278669
+                    },
+                    "uuid": "a14f004f-6068-4e3d-b2a6-db275649bbb9"
+                },
+                {
+                    "description": "Pad 1 [MIC_VDD_14] of CM15 on F.Cu",
+                    "pos": {
+                        "x": 186.376031,
+                        "y": 183.245367
+                    },
+                    "uuid": "3b692738-1ac4-4fe2-9d4e-df16eb8b42f8"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Track [MIC_VDD_12] on F.Cu, length 1.7000 mm",
+                    "pos": {
+                        "x": 148.800001,
+                        "y": 201.52
+                    },
+                    "uuid": "f53a07e0-7e4b-4460-91cd-0bfe9e7b2f6d"
+                },
+                {
+                    "description": "Pad 1 [MIC_VDD_12] of CM13 on F.Cu",
+                    "pos": {
+                        "x": 152.213713,
+                        "y": 199.229763
+                    },
+                    "uuid": "721d1af3-4868-416e-b090-d36959ff1a71"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Pad 20 [+3V3_CLK] of U2 on F.Cu",
+                    "pos": {
+                        "x": 152.8625,
+                        "y": 150.075
+                    },
+                    "uuid": "d2c8936f-975f-4539-ad2b-9412b11e3ad7"
+                },
+                {
+                    "description": "Via [+3V3_CLK] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 153.4093,
+                        "y": 148.9978
+                    },
+                    "uuid": "18d10d83-2a23-4478-845a-0207d907792b"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Track [MIC_VDD_2] on F.Cu, length 1.7000 mm",
+                    "pos": {
+                        "x": 187.278669,
+                        "y": 114.418386
+                    },
+                    "uuid": "3e377655-f065-4b8d-ac9b-69a671f5c690"
+                },
+                {
+                    "description": "Pad 1 [MIC_VDD_2] of CM3 on F.Cu",
+                    "pos": {
+                        "x": 183.245367,
+                        "y": 113.623968
+                    },
+                    "uuid": "b2b0d9a7-2e57-4914-bace-644d66917190"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Pad 1 [MIC_VDD_4] of CM5 on F.Cu",
+                    "pos": {
+                        "x": 147.786286,
+                        "y": 100.770236
+                    },
+                    "uuid": "431fc7e3-08c5-4892-a4a2-3fbe0da7c00f"
+                },
+                {
+                    "description": "Track [MIC_VDD_4] on F.Cu, length 1.7000 mm",
+                    "pos": {
+                        "x": 151.2,
+                        "y": 98.48
+                    },
+                    "uuid": "4969b2d5-fd1d-48f4-b098-1b3d9baa80b2"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        }
+    ],
+    "violations": [
+        {
+            "description": "Tracks crossing",
+            "items": [
+                {
+                    "description": "Track [PDM_D0] on F.Cu, length 4.3501 mm",
+                    "pos": {
+                        "x": 195.51,
+                        "y": 150.0
+                    },
+                    "uuid": "21590032-d57b-424a-9aea-8f897d32e3d4"
+                },
+                {
+                    "description": "Track [MIC_DOUT_0] on F.Cu, length 1.6971 mm",
+                    "pos": {
+                        "x": 195.689999,
+                        "y": 148.800002
+                    },
+                    "uuid": "c7459b1e-d056-4eb1-881f-8e9c8775828c"
+                }
+            ],
+            "severity": "error",
+            "type": "tracks_crossing"
+        },
+        {
+            "description": "Hole clearance violation (board setup constraints hole clearance 0.2500 mm; actual 0.2477 mm)",
+            "items": [
+                {
+                    "description": "Track [PDM_CLK_Y3] on F.Cu, length 3.9911 mm",
+                    "pos": {
+                        "x": 150.8656,
+                        "y": 152.0756
+                    },
+                    "uuid": "dc2da80c-1f95-4a22-a8b1-0d6491009707"
+                },
+                {
+                    "description": "Via [PDM_CLK_FPGA] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 148.3524,
+                        "y": 150.2309
+                    },
+                    "uuid": "caefb07e-618f-4fbe-b3a9-8cfd2c532bad"
+                }
+            ],
+            "severity": "error",
+            "type": "hole_clearance"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_VDD_10] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 113.923,
+                        "y": 184.38
+                    },
+                    "uuid": "2c2bea60-70c4-4276-81dc-d91aadd6acc4"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_VDD_8] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 100.18,
+                        "y": 148.8
+                    },
+                    "uuid": "75de36b2-be44-4572-9c0a-397f56ada048"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_VDD_0] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 199.82,
+                        "y": 151.2
+                    },
+                    "uuid": "521e5d8c-3189-4ef2-b528-069218bb8ea2"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_VDD_6] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 115.62,
+                        "y": 113.923
+                    },
+                    "uuid": "ae0a5369-0ce7-49f4-9d90-b735c4b8d486"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_VDD_14] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 184.38,
+                        "y": 186.077
+                    },
+                    "uuid": "3010678a-cfbc-4091-930f-a30f71ad1259"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_VDD_12] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 148.8,
+                        "y": 199.82
+                    },
+                    "uuid": "320038c5-09bc-45d1-a3c1-4fd9ba6f7934"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_VDD_2] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 186.077,
+                        "y": 115.62
+                    },
+                    "uuid": "28cd3899-5816-4e5d-9b35-f2d26d30a6a2"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_VDD_4] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 151.2,
+                        "y": 100.18
+                    },
+                    "uuid": "01296cf3-63bb-44a3-a85e-c2c9ba029052"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "Via is not connected or connected on only one layer",
+            "items": [
+                {
+                    "description": "Via [MIC_DOUT_0] on F.Cu - B.Cu",
+                    "pos": {
+                        "x": 199.82,
+                        "y": 148.8
+                    },
+                    "uuid": "c52b683e-dae3-4b52-bf53-4f0ac75ae1f8"
+                }
+            ],
+            "severity": "warning",
+            "type": "via_dangling"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK7",
+                    "pos": {
+                        "x": 112.367777,
+                        "y": 112.367777
+                    },
+                    "uuid": "149d4e34-0664-4330-a4c2-fa7083120d2d"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK12",
+                    "pos": {
+                        "x": 129.633587,
+                        "y": 199.168868
+                    },
+                    "uuid": "1a6e92a8-edc0-485b-af0d-c107c1828312"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK4",
+                    "pos": {
+                        "x": 170.366412,
+                        "y": 100.831131
+                    },
+                    "uuid": "1b986619-8ea9-4684-a3cb-51e4cf1956c4"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK14",
+                    "pos": {
+                        "x": 170.366412,
+                        "y": 199.168868
+                    },
+                    "uuid": "28a02681-ebca-4520-b69a-6369c29a5864"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK15",
+                    "pos": {
+                        "x": 187.632222,
+                        "y": 187.632222
+                    },
+                    "uuid": "2b018eb9-c3f5-4a4e-85ae-995cdaa590c8"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK16",
+                    "pos": {
+                        "x": 199.168868,
+                        "y": 170.366412
+                    },
+                    "uuid": "3d1bcdf8-edf5-401d-ba0a-c613ad992c9e"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK3",
+                    "pos": {
+                        "x": 187.632222,
+                        "y": 112.367777
+                    },
+                    "uuid": "578b965b-3f4d-48ce-9f57-c20528e32b5b"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK9",
+                    "pos": {
+                        "x": 96.78,
+                        "y": 150.0
+                    },
+                    "uuid": "68f611ba-fc45-4757-9879-00ccfe1def7d"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK8",
+                    "pos": {
+                        "x": 100.831131,
+                        "y": 129.633587
+                    },
+                    "uuid": "75c2ff46-44f3-4d66-bb1b-76179566f326"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK13",
+                    "pos": {
+                        "x": 150.0,
+                        "y": 203.22
+                    },
+                    "uuid": "9947aea8-40e7-4fb6-978b-7a62b57f55b8"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK1",
+                    "pos": {
+                        "x": 203.22,
+                        "y": 150.0
+                    },
+                    "uuid": "a89b74c5-e33b-4286-bd7b-4eece5eed606"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK11",
+                    "pos": {
+                        "x": 112.367777,
+                        "y": 187.632222
+                    },
+                    "uuid": "b742114f-0b8f-4bd1-a557-5d396011e137"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK5",
+                    "pos": {
+                        "x": 150.0,
+                        "y": 96.78
+                    },
+                    "uuid": "bb605a07-5b8b-4635-81b2-b0ae12b12100"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint X1",
+                    "pos": {
+                        "x": 143.0,
+                        "y": 143.0
+                    },
+                    "uuid": "c59bc6b2-5027-40e5-8621-9a26d3bab110"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK2",
+                    "pos": {
+                        "x": 199.168868,
+                        "y": 129.633587
+                    },
+                    "uuid": "cdae6831-c67d-4d0a-aadf-a060165fa89e"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK10",
+                    "pos": {
+                        "x": 100.831131,
+                        "y": 170.366412
+                    },
+                    "uuid": "e60ce79f-b1f6-44b8-972a-ad0545c7e1b4"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'MicArrayV2'",
+            "items": [
+                {
+                    "description": "Footprint MK6",
+                    "pos": {
+                        "x": 129.633587,
+                        "y": 100.831131
+                    },
+                    "uuid": "f4982452-590d-4d5e-8051-fed7fcc3abc8"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        }
+    ]
+}

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "manufacturer": "JLCPCB",
+  "description": [
+    "Substantiated JLCPCB process limits. A value belongs here only if it",
+    "carries its provenance: an authoritative source, a URL or document",
+    "identifier, a retrieval or effective date, units, the service or process",
+    "it applies to, and any conditions or exceptions.",
+    "",
+    "A value is NEVER promoted here because one board happens to use it. If it",
+    "cannot be substantiated it is classified instead as configurable toolkit",
+    "policy, a selected board constraint, a conservative design target, or a",
+    "board waiver - and it stays with the board.",
+    "",
+    "Nothing here is fetched at validation time. These are frozen figures with",
+    "recorded retrieval dates; re-checking them against the manufacturer is a",
+    "deliberate, reviewed act, not something a release does on its own."
+  ],
+  "limits": {
+    "plugged_via_to_mask_opening_mm": {
+      "value": 0.35,
+      "units": "mm",
+      "name": "JLCPCB ordinary ink via plugging (tented/plugged vias)",
+      "rule": "Minimum distance from a plugged via to an adjacent solder-mask opening (pad) so the ink dam is retained.",
+      "source": "JLCPCB PCB capabilities",
+      "url": "https://jlcpcb.com/capabilities/pcb-capabilities",
+      "retrieved": "2026-08-04",
+      "applies_to": "PCB fabrication, ordinary ink via plugging",
+      "interpretation": "Measured from the via annular-ring edge to the nearest solder-mask aperture edge, on the same board side. Vias whose annulus intersects an aperture cannot be plugged at all and are reported separately.",
+      "exceptions": "Does not apply to a filled-and-capped or resin-plugged process, which a board must order explicitly."
+    }
+  },
+  "unsubstantiated": {
+    "description": [
+      "Figures inherited from a board's own tooling that are PLAUSIBLY",
+      "manufacturer-wide but for which no authoritative source has been",
+      "recorded. They are kept here, unused by any gate, so the work of",
+      "substantiating them is visible rather than forgotten.",
+      "",
+      "Until each carries a source, a URL or document id, and a retrieval date,",
+      "it must be supplied by a board as its own constraint - not read from",
+      "here. Do not promote one to `limits` without that evidence."
+    ],
+    "component_body_spacing_by_package_pair_mm": {
+      "status": "UNSUBSTANTIATED - do not use as a JLCPCB-wide requirement",
+      "origin": "PCB_MicrophoneArrayV2 tools/check_placement.py, commit 9ba07cf, where it is described only as 'JLCPCB recommended minimum body-to-body spacing, by package pair' with no citation",
+      "units": "mm",
+      "pairs": {
+        "chip|chip": 0.18,
+        "chip|1206": 0.25,
+        "1206|1206": 0.35,
+        "chip|QFN": 1.0,
+        "chip|SOIC": 0.4,
+        "chip|SOT": 0.2,
+        "SOT|SOT": 0.4,
+        "SOIC|SOIC": 0.5,
+        "QFN|QFN": 1.0
+      },
+      "default": 0.2,
+      "what_would_substantiate_it": "A JLCPCB assembly capability page or DFM document stating minimum component-to-component spacing, with a retrieval date. Until then a board that wants this check supplies the matrix in its own manifest."
+    }
+  }
+}

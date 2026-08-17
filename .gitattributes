@@ -1,2 +1,57 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Line-ending policy.
+#
+# Two classes of file, deliberately treated differently:
+#
+#   toolkit and fixture sources   normalised to LF in the repository AND in the
+#                                 working tree, so a checkout is byte-identical
+#                                 on every platform and a frozen-fixture digest
+#                                 means something.
+#
+#   fabrication output            never touched. Gerbers, drills, fabrication
+#                                 archives and the BOM/CPL a fixture ships are
+#                                 hashed as exact raw bytes; normalising them
+#                                 would invalidate the recorded digests.
+
+# Default: text, normalised to LF in the repo and on checkout.
+*                    text=auto eol=lf
+
+# --- KiCad and project sources: explicit LF -------------------------------
+*.kicad_pcb          text eol=lf
+*.kicad_sch          text eol=lf
+*.kicad_pro          text eol=lf
+*.kicad_prl          text eol=lf
+*.kicad_sym          text eol=lf
+*.kicad_mod          text eol=lf
+*.kicad_dru          text eol=lf
+*.kicad_wks          text eol=lf
+fp-lib-table         text eol=lf
+sym-lib-table        text eol=lf
+*.py                 text eol=lf
+*.md                 text eol=lf
+*.json               text eol=lf
+*.net                text eol=lf
+*.csv                text eol=lf
+
+# --- Fabrication output: exact bytes, never normalised --------------------
+# A release directory is hashed by PROV.FIXTURE_INTEGRITY and by the archive
+# gates as raw bytes. Git must perform no EOL translation in either direction,
+# or relocating a fixture silently changes its digests.
+#
+# Both forms are required and they do different jobs. The first is what Git
+# applies at checkout, where paths are repository-relative. The second is what
+# pcbqa.canonical.AttributePolicy.classify applies, where paths are relative to
+# the project root being hashed - so without it a released bom.csv would fall
+# through to the `*.csv text` rule above and be hashed as normalised text.
+tests/fixtures/**/generated/release/** -text
+generated/release/**                   -text
+
+*.gbr                binary
+*.gbrjob             binary
+*.drl                binary
+*.zip                binary
+*.pdf                binary
+*.png                binary
+*.jpg                binary
+*.step               binary
+*.stp                binary
+*.wrl                binary

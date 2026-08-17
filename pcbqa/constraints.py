@@ -1,0 +1,84 @@
+"""Typed constraints.
+
+Every policy comparison a gate makes must go through a `Constraint` obtained by
+stable ID. The constraint carries its value, units and manifest provenance, and
+the result records all three, so "which number did this gate actually apply and
+where did it come from" is answerable from the JSON report alone.
+
+Computational tolerances - the numbers that exist because arithmetic is finite,
+not because a fabricator said so - live in a separate versioned geometry
+profile and are reported as such. They are never mixed in with process limits.
+"""
+
+from __future__ import annotations
+
+
+class ConstraintError(Exception):
+    pass
+
+
+class Constraint:
+    __slots__ = ("id", "key", "value", "units", "manifest", "sha256", "kind")
+
+    def __init__(self, cid, key, value, units, manifest_name, sha256, kind="policy"):
+        self.id = cid
+        self.key = key
+        self.value = value
+        self.units = units
+        self.manifest = manifest_name
+        self.sha256 = sha256
+        self.kind = kind
+
+    @property
+    def provenance(self):
+        return f"{self.manifest}#{self.key}@{self.sha256[:12]}"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "value": self.value,
+            "units": self.units,
+            "kind": self.kind,
+            "manifest_key": self.key,
+            "provenance": self.provenance,
+        }
+
+    # Comparisons are expressed on the constraint so a gate never writes a
+    # bare numeric literal next to a measurement.
+    def exceeded_by(self, measured):
+        return measured > self.value
+
+    def under(self, measured):
+        return measured < self.value
+
+    def not_equal(self, measured):
+        return measured != self.value
+
+    def __repr__(self):
+        return f"<Constraint {self.id}={self.value}{self.units or ''}>"
+
+
+class GeometryProfile:
+    """Versioned computational tolerances, separate from process policy."""
+
+    def __init__(self, data, manifest_name, sha256):
+        self.data = data
+        self.manifest = manifest_name
+        self.sha256 = sha256
+
+    @property
+    def version(self):
+        return self.data.get("version", "unversioned")
+
+    def tolerance(self, name):
+        if name not in self.data.get("tolerances", {}):
+            raise ConstraintError(
+                f"geometry profile {self.version!r} declares no tolerance {name!r}")
+        entry = self.data["tolerances"][name]
+        return Constraint(f"geometry.{name}", f"geometry_profile.tolerances.{name}.value",
+                          entry["value"], entry.get("units"),
+                          self.manifest, self.sha256, kind="tolerance")
+
+    def to_dict(self):
+        return {"version": self.version,
+                "tolerances": self.data.get("tolerances", {})}

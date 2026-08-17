@@ -1,0 +1,15 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Production output: exact bytes, never normalised.
+#
+# The root .gitattributes says the same thing about this directory, but a
+# nested attributes file wins over the root for the paths beneath it, so the
+# `* text=auto` above was silently overriding it. That LF-normalised the twenty
+# frozen production artifacts in the repository while HASHES.json continued to
+# record the raw bytes they were frozen from - so the fixture reproduced only
+# on a checkout that happened to leave them alone, and failed everywhere else.
+#
+# These are the release this fixture exists to hold still. Their SHA-256 is
+# the fixture.
+generated/release/** -text

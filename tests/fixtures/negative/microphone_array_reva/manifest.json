@@ -1,0 +1,665 @@
+{
+  "schema_version": 2,
+  "board_id": "microphone_array_v2-revA",
+  "constraint_version": "revA-frozen-2026-08-01",
+  "description": "Curated microphone-array Rev A, preserved as a NEGATIVE integration fixture. Every threshold below is the frozen Rev A requirement. Do not relax anything here to make the fixture pass. See README.md for what this fixture is and is not.",
+  "project_root": "project",
+  "tools": {
+    "kicad_cli": "C:\\Program Files\\KiCad\\10.0\\bin\\kicad-cli.exe"
+  },
+  "sources": {
+    "pcb": "microphone_array_v2.kicad_pcb",
+    "schematic": "microphone_array_v2.kicad_sch",
+    "project": "microphone_array_v2.kicad_pro"
+  },
+  "board_origin_mm": [
+    150.0,
+    150.0
+  ],
+  "documentation_globs": [
+    "README.md",
+    "docs/*.md",
+    "constraints.json"
+  ],
+  "fixture": {
+    "hash_file": "../HASHES.json",
+    "attributes_file": "../../../../../.gitattributes",
+    "reject_globs": [
+      "*.lck",
+      "~*",
+      ".#*",
+      "*.bak",
+      "*.tmp",
+      "*~",
+      "*.kicad_pcb-bak",
+      "*.kicad_sch-bak"
+    ],
+    "inventory_policy": "exact: every recorded file must be present and unchanged, and every present file must be recorded"
+  },
+  "artifacts": {
+    "gerber_dir": "generated/release/gerbers",
+    "bom": "generated/release/bom.csv",
+    "cpl": "generated/release/cpl.csv",
+    "position_tolerance_mm": 0.01,
+    "cpl_fields": {
+      "designator": "Designator",
+      "x": "Mid X",
+      "y": "Mid Y",
+      "side": "Layer",
+      "rotation": "Rotation"
+    },
+    "cpl_origin": {
+      "frame": "drill/plot origin at the page origin",
+      "offset_mm": [
+        0.0,
+        0.0
+      ]
+    },
+    "gerber_export_flags": [
+      "--layers",
+      "F.Cu,In1.Cu,In2.Cu,B.Cu,F.Paste,B.Paste,F.Silkscreen,B.Silkscreen,F.Mask,B.Mask,Edge.Cuts",
+      "--no-protel-ext",
+      "--use-drill-file-origin",
+      "--subtract-soldermask"
+    ]
+  },
+  "checks": {
+    "description": "The mandatory ERC/DRC options, severities and exit-code meanings are defined and verified by the validator (pcbqa.gates.g_checks), not here: a board that could relax them could pass a check it never ran. Only additional board-specific options belong in this block.",
+    "erc": {
+      "extra_flags": []
+    },
+    "drc": {
+      "extra_flags": [],
+      "forbidden_severities": [
+        "ignore"
+      ],
+      "permitted_ignored_rules": []
+    }
+  },
+  "reports": {
+    "files": [
+      "generated/*.json"
+    ],
+    "source_field": "source",
+    "date_field": "date",
+    "require_source_hash": true,
+    "tolerance_seconds": 0,
+    "source_closure": [
+      "*.kicad_sch",
+      "**/*.kicad_sch",
+      "*.kicad_pcb",
+      "*.kicad_pro",
+      "*.kicad_dru"
+    ],
+    "source_hash_field": "source_sha256",
+    "closure_field": "source_closure_sha256"
+  },
+  "stackup": {
+    "expected": [
+      {
+        "role": "signal"
+      },
+      {
+        "role": "plane",
+        "plane_net": "GND"
+      },
+      {
+        "role": "plane",
+        "plane_net": "+3V3A"
+      },
+      {
+        "role": "signal"
+      }
+    ]
+  },
+  "via_mask": {
+    "metric": "annulus_to_opening_mm",
+    "design_target_mm": 0.4,
+    "process": {
+      "name": "JLCPCB ordinary ink via plugging (tented/plugged vias)",
+      "limit_mm": 0.35,
+      "rule": "Minimum distance from a plugged via to an adjacent solder-mask opening (pad) so the ink dam is retained.",
+      "url": "https://jlcpcb.com/capabilities/pcb-capabilities",
+      "retrieved": "2026-08-04",
+      "interpretation": "Measured from the via annular-ring edge to the nearest solder-mask aperture edge, on the same board side. Vias whose annulus intersects an aperture cannot be plugged at all and are reported separately."
+    },
+    "pad_contact": {
+      "populated_pad_attributes": [
+        "SMD"
+      ],
+      "require_paste": true
+    },
+    "contact_semantics": "annulus_contacts counts zero-distance tangency as contact; annulus_strict_overlaps counts positive shared area only",
+    "mask_dam_rule": "contact"
+  },
+  "routing": {
+    "permitted_turn_degrees": [
+      0.0,
+      45.0
+    ],
+    "angle_tolerance_deg": 1.0,
+    "min_segment_mm": 0.25,
+    "short_segment_justification": {
+      "allow_pad_or_via_entry": true
+    },
+    "hygiene": {
+      "forbid_duplicate_geometry": true,
+      "forbid_net_crossings": true,
+      "forbid_dangling": true
+    }
+  },
+  "net_topology": {
+    "rules": [
+      {
+        "id": "PDM_CLOCK_BRANCHES",
+        "net_regex": "^PDM_CLK_B\\d+$",
+        "source_pad_regex": "^RC\\d+\\.2$",
+        "load_pad_regex": "^MK\\d+\\.3$",
+        "max_spread_mm": 5.0,
+        "max_vias_per_net": 0,
+        "permitted_layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "id": "PDM_CLOCK_ROOT",
+        "net_regex": "^PDM_CLK_IN$",
+        "source_pad_regex": "^R2\\.2$",
+        "load_pad_regex": "^U2\\.(2|4|6|8|11|13|15|17)$",
+        "max_vias_per_net": 0,
+        "permitted_layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "id": "AUDIO_MCLK",
+        "net_regex": "^AUDIO_MCLK$",
+        "source_pad_regex": "^R1\\.2$",
+        "load_pad_regex": "^J\\d+\\.\\d+$",
+        "max_vias_per_net": 0,
+        "permitted_layers": [
+          "F.Cu"
+        ]
+      }
+    ]
+  },
+  "connector_gender_tokens": {
+    "female": [
+      "pinsocket",
+      "socket",
+      "receptacle",
+      "female"
+    ],
+    "male": [
+      "pinheader",
+      "pin header",
+      "male",
+      "plug",
+      "header_"
+    ]
+  },
+  "connector_contracts": [
+    {
+      "id": "HOST_DIRECT_STACK",
+      "reference": "J1",
+      "required_gender": "female",
+      "required_positions": 26,
+      "required_rows": 2,
+      "required_pitch_mm": 2.54,
+      "required_side": "back",
+      "population": {
+        "dnp": true,
+        "exclude_from_bom": true
+      },
+      "unconnected_net_prefix": "unconnected-",
+      "pin_map": {
+        "1": null,
+        "2": "PI_5V",
+        "3": null,
+        "4": "PI_5V",
+        "5": null,
+        "6": "GND",
+        "9": "GND",
+        "14": "GND",
+        "20": "GND",
+        "25": "GND",
+        "16": "PI_SYNC",
+        "18": "PI_STATUS",
+        "19": "PI_MOSI",
+        "21": "PI_MISO",
+        "22": "PI_IRQ",
+        "23": "PI_SCLK",
+        "24": "PI_CS_N",
+        "26": "PI_RESET_N"
+      },
+      "documentation": {
+        "must_not_claim": [
+          {
+            "label": "ribbon cable",
+            "pattern": "\\bribbon\\b"
+          },
+          {
+            "label": "IDC connector",
+            "pattern": "\\bIDC\\b"
+          },
+          {
+            "label": "shrouded/keyed connector",
+            "pattern": "\\bshroud(ed)?\\b|\\bkeyed\\b"
+          }
+        ],
+        "must_claim": [
+          {
+            "label": "female stacking socket",
+            "pattern": "female (2x13|stacking|socket)|stacking (socket|header)"
+          },
+          {
+            "label": "direct board-to-board mating",
+            "pattern": "direct(ly)? (board[- ]to[- ]board|plug|stack)|plugs? (straight )?(on)?to the (Raspberry )?Pi"
+          }
+        ]
+      }
+    }
+  ],
+  "placement_rules": [
+    {
+      "id": "MIC_ACOUSTIC_PORT_RING",
+      "reference_regex": "^MK\\d+$",
+      "count": 16,
+      "reference_offset_local_mm": [
+        0.0,
+        -0.78
+      ],
+      "polar": {
+        "radius_mm": 54.0,
+        "tolerance_mm": 0.05,
+        "angular_pitch_deg": 22.5,
+        "angle_tolerance_deg": 0.05
+      },
+      "rotation": {
+        "mode": "radial",
+        "offset_deg": 270.0,
+        "tolerance_deg": 0.1
+      }
+    }
+  ],
+  "source_authority": {
+    "authority": "native_kicad",
+    "claim_scan": [
+      {
+        "claim": "native_kicad_is_authority",
+        "files": [
+          "README.md",
+          "docs/*.md"
+        ],
+        "pattern": "no longer (regenerated|reproducible)|source of truth for routing|edited in place"
+      },
+      {
+        "claim": "python_model_is_authority",
+        "files": [
+          "README.md",
+          "docs/*.md"
+        ],
+        "pattern": "generated from `?tools/netlist\\.py|single source of truth|Nothing in the KiCad files should be hand-edited|do not hand-edit"
+      }
+    ],
+    "mutually_exclusive_claims": [
+      [
+        "native_kicad_is_authority",
+        "python_model_is_authority"
+      ]
+    ],
+    "forbidden_derivations": [
+      {
+        "files": [
+          "tools/make_release.py"
+        ],
+        "pattern": "import netlist|nl\\.build\\(\\)",
+        "issue": "released BOM/CPL data is taken from a Python model instead of the native KiCad project"
+      }
+    ]
+  },
+  "archive": {
+    "zip": "generated/release/microphone_array_v2-revA-fabrication.zip",
+    "manifest": "generated/release/MANIFEST.md",
+    "manifest_required_fields": [
+      "sha256",
+      "kicad",
+      "command",
+      "constraint"
+    ],
+    "allow": [
+      {
+        "file_function": "Copper,L1,Top",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Copper,L2,Inr",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Copper,L3,Inr",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Copper,L4,Bot",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Soldermask,Top",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Soldermask,Bot",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Legend,Top",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Legend,Bot",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Paste,Top",
+        "require_payload": false,
+        "min_count": 1
+      },
+      {
+        "file_function": "Paste,Bot",
+        "require_payload": false,
+        "min_count": 1
+      },
+      {
+        "file_function": "Profile,NP",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Drill/plated",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "Drill/nonplated",
+        "require_payload": true,
+        "min_count": 1
+      },
+      {
+        "file_function": "JobFile",
+        "require_payload": true,
+        "min_count": 1
+      }
+    ],
+    "deny": [
+      {
+        "file_function": "Drillmap",
+        "reason": "drill-map drawings are documentation, not fabrication data, and can be mistaken for a copper or legend layer by an importer"
+      }
+    ],
+    "pre_normalization_digests": "../PRE_NORMALIZATION_HASHES.json"
+  },
+  "constraint_parity": {
+    "rival_scan": {
+      "files": [
+        "tools/check_routes.py"
+      ],
+      "watched_constants": {
+        "BRANCH_SKEW_LIMIT_MM": {
+          "manifest_key": "net_topology.rules.0.max_spread_mm"
+        },
+        "MIN_SEGMENT_MM": {
+          "manifest_key": "routing.min_segment_mm"
+        },
+        "MAX_TURN_DEGREES": {
+          "manifest_key": "routing.permitted_turn_degrees.1"
+        }
+      }
+    }
+  },
+  "waivers": [],
+  "geometry_profile": {
+    "version": "geom-1",
+    "tolerances": {
+      "polygon_chord_error_mm": {
+        "value": 0.001,
+        "units": "mm",
+        "why": "outward chord error when polygonising arcs; conservative direction only.",
+        "provenance": "maximum chord error when a curve is approximated by a polygon, applied outward (pcbnew ERROR_OUTSIDE) so an approximation can never over-state a clearance. Removed constants: native_gerber_match_mm and coincidence_mm were declared but never applied; coordinate_match_mm and contact_mm carry those roles."
+      },
+      "rotation_match_deg": {
+        "value": 0.1,
+        "units": "deg",
+        "why": "CPL rotation is written to 4 dp; this bounds formatting round-trip."
+      },
+      "coordinate_match_mm": {
+        "value": 0.002,
+        "units": "mm",
+        "why": "Gerber coordinates are written at 1e-6 mm; this bounds format round-trip when matching an exported object to a native one."
+      },
+      "dimension_match_mm": {
+        "value": 0.002,
+        "units": "mm",
+        "why": "aperture and drill diameters are written to 6 dp."
+      },
+      "clearance_match_mm": {
+        "value": 0.01,
+        "units": "mm",
+        "why": "native shapes are polygonised outward at 1 um; Gerber apertures are re-polygonised independently, so identical geometry can differ by a few chord errors."
+      },
+      "layer_symmetric_difference_mm2": {
+        "value": 0.05,
+        "units": "mm2",
+        "why": "two independent polygonisations of the same layer differ only by chord error along shared boundaries."
+      },
+      "contact_mm": {
+        "value": 1e-06,
+        "units": "mm",
+        "why": "Two independent polygonisations of the same tangency can leave a sub-nanometre gap. Separation at or below this is treated as contact, i.e. as loss of the solder-mask ink dam."
+      },
+      "waiver_location_mm": {
+        "value": 0.001,
+        "units": "mm",
+        "provenance": "waiver matching: a finding must be at the coordinate the reviewer approved. One micrometre is below KiCad's own report rounding, so a genuinely relocated finding never matches an old waiver."
+      }
+    }
+  },
+  "assembly": {
+    "schematic_fields": [
+      "LCSC",
+      "MPN",
+      "Manufacturer",
+      "Description"
+    ],
+    "required_part_fields": [
+      "LCSC"
+    ],
+    "bom_fields": {
+      "designators": "Designator",
+      "value": "Comment",
+      "footprint": "Footprint",
+      "quantity": "Quantity",
+      "LCSC": "LCSC Part #"
+    },
+    "schematic_export": {
+      "description": "How the authoritative assembly data is read out of the native schematic. One row per symbol, no grouping, no reference ranges: this is the design authority, not a report.",
+      "fields": [
+        "Reference",
+        "Value",
+        "Footprint",
+        "${DNP}",
+        "${EXCLUDE_FROM_BOM}",
+        "LCSC",
+        "MPN",
+        "Manufacturer",
+        "Description"
+      ],
+      "labels": [
+        "Reference",
+        "Value",
+        "Footprint",
+        "DNP",
+        "ExcludeFromBOM",
+        "LCSC",
+        "MPN",
+        "Manufacturer",
+        "Description"
+      ],
+      "reference_label": "Reference",
+      "value_label": "Value",
+      "footprint_label": "Footprint",
+      "dnp_label": "DNP",
+      "exclude_label": "ExcludeFromBOM",
+      "true_tokens": [
+        "1",
+        "true",
+        "yes",
+        "x",
+        "dnp"
+      ],
+      "flags": []
+    },
+    "compared_part_fields": [
+      "LCSC",
+      "MPN",
+      "Manufacturer"
+    ]
+  },
+  "release_profile": {
+    "id": "jlcpcb-4layer-assembled",
+    "visual_review_evidence": "generated/release/visual_review.json",
+    "mandatory_gates": [
+      "PROV.FIXTURE_INTEGRITY",
+      "PROV.SOURCE_AUTHORITY",
+      "PROV.REPORT_FRESHNESS",
+      "ERC.AUTHORITATIVE",
+      "DRC.AUTHORITATIVE",
+      "DRC.NO_SUPPRESSED_RULES",
+      "STACK.NATIVE_VS_MANIFEST",
+      "STACK.GERBER_PARITY",
+      "VIA.MASK_CLEARANCE_TARGET",
+      "VIA.MASK_CLEARANCE_PROCESS",
+      "VIA.ANNULUS_MASK_OVERLAP",
+      "VIA.IN_PAD_CONTACT",
+      "VIA.NATIVE_GERBER_AGREEMENT",
+      "NET.TOPOLOGY",
+      "ROUTE.ANGLE_STYLE",
+      "ROUTE.TINY_SEGMENTS",
+      "ROUTE.GEOMETRY_HYGIENE",
+      "CONTRACT.CONNECTOR",
+      "CONTRACT.PLACEMENT",
+      "BOM.NATIVE_PARITY",
+      "CPL.NATIVE_PARITY",
+      "ARCH.CONTENTS",
+      "ARCH.PROVENANCE",
+      "CFG.NO_RIVAL_THRESHOLDS",
+      "CFG.THRESHOLD_PARITY"
+    ]
+  },
+  "release_generation": {
+    "description": "Every command a clean-room release runs, and the field names the artifacts it generates actually carry. The ERC and DRC option sets are taken from the validator so a release cannot run a weaker check than validation demands.",
+    "lock_file_globs": [
+      "*.lck",
+      "~*.lck",
+      ".#*",
+      "*-lock",
+      "*.kicad_prl-lock"
+    ],
+    "purge_globs": [
+      "generated/**",
+      "generated"
+    ],
+    "erc": {
+      "output": "erc.json"
+    },
+    "drc": {
+      "output": "drc.json"
+    },
+    "drill": {
+      "flags": [
+        "--format",
+        "excellon",
+        "--excellon-separate-th",
+        "--drill-origin",
+        "plot"
+      ]
+    },
+    "bom": {
+      "output": "bom.csv",
+      "fields": [
+        "${QUANTITY}",
+        "Reference",
+        "Value",
+        "Footprint",
+        "LCSC"
+      ],
+      "labels": [
+        "Quantity",
+        "Designator",
+        "Comment",
+        "Footprint",
+        "LCSC Part #"
+      ],
+      "group_by": [
+        "Value",
+        "Footprint",
+        "LCSC"
+      ],
+      "flags": [
+        "--exclude-dnp",
+        "--ref-range-delimiter",
+        ""
+      ],
+      "field_map": {
+        "designators": "Designator",
+        "value": "Comment",
+        "footprint": "Footprint",
+        "quantity": "Quantity",
+        "LCSC": "LCSC Part #"
+      }
+    },
+    "cpl": {
+      "output": "cpl.csv",
+      "flags": [
+        "--format",
+        "csv",
+        "--units",
+        "mm",
+        "--side",
+        "both",
+        "--exclude-dnp"
+      ],
+      "field_map": {
+        "designator": "Ref",
+        "x": "PosX",
+        "y": "PosY",
+        "side": "Side",
+        "rotation": "Rot"
+      },
+      "origin": {
+        "frame": "absolute page origin",
+        "offset_mm": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "archive": {
+      "zip": "microphone_array_v2-revA-fabrication.zip",
+      "manifest": "MANIFEST.md"
+    }
+  },
+  "derived_from": {
+    "repository": "https://github.com/pentolope/PCB_MicrophoneArrayV2",
+    "commit": "9ba07cf720ed0bbb2023d121d544f0144bba7b2f",
+    "manifest": "verification/boards/reva.json"
+  }
+}

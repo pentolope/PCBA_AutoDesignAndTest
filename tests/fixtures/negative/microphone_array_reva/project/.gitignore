@@ -1,0 +1,7 @@
+# Python bytecode from the tools/ generators and checkers
+__pycache__/
+*.py[cod]
+
+# KiCad local scratch
+*-backups/
+fp-info-cache

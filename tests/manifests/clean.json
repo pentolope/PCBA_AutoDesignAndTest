@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "board_id": "pcbqa-clean-fixture",
+  "constraint_version": "1",
+  "description": "Positive control for the ERC and DRC gates: a board with nothing to report, used to prove those gates can pass at all and - once mutated - can fail for the right reason. It opts into no other gate, so it declares no artifacts, archive or release profile.",
+  "project_root": "../fixtures/clean/project",
+  "sources": {
+    "pcb": "clean.kicad_pcb",
+    "schematic": "clean.kicad_sch",
+    "project": "clean.kicad_pro"
+  },
+  "tools": {
+    "kicad_cli": "C:\\Program Files\\KiCad\\10.0\\bin\\kicad-cli.exe"
+  },
+  "checks": {
+    "description": "Mandatory options and severities are the validator's, not this board's.",
+    "erc": {
+      "extra_flags": []
+    },
+    "drc": {
+      "extra_flags": [],
+      "forbidden_severities": [
+        "ignore"
+      ],
+      "permitted_ignored_rules": []
+    }
+  },
+  "geometry_profile": {
+    "id": "clean-fixture-geometry-v1",
+    "units": "mm unless stated",
+    "provenance": "only the tolerances the ERC/DRC gates apply",
+    "tolerances": {
+      "waiver_location_mm": {
+        "value": 0.001,
+        "units": "mm",
+        "provenance": "waiver matching: a finding must be at the coordinate the reviewer approved. One micrometre is below KiCad's own report rounding, so a genuinely relocated finding never matches an old waiver."
+      }
+    }
+  },
+  "waivers": []
+}

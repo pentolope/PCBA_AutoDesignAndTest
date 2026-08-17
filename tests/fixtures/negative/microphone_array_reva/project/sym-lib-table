@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "MicArrayV2")(type "KiCad")(uri "${KIPRJMOD}/MicArrayV2.kicad_sym")(options "")(descr "Project symbols for the 16-channel PDM microphone array"))
+)

@@ -1,0 +1,16 @@
+# Byte-compiled Python.
+#
+# These matter more here than in most repositories: a fixture ships .py files,
+# and `PROV.FIXTURE_INTEGRITY` holds its fixtures to an exact inventory - every
+# recorded file present and unchanged, and every present file recorded. A stray
+# __pycache__ inside a fixture is therefore a gate failure, which is correct
+# behaviour and a nuisance to debug. Never commit one, and never run
+# `compileall` over tests/.
+__pycache__/
+*.py[cod]
+
+# The validator's own output tree: attempts, published releases and pointers.
+out/
+
+# Scratch.
+*.log

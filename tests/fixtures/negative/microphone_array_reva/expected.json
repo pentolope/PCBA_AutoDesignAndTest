@@ -1,0 +1,114 @@
+{
+  "fixture": "microphone_array_reva",
+  "note": "This is a NEGATIVE fixture. The suite passes by proving the validator rejects it. Statuses below are the intended verdict for each gate. Never edit a value here to make a suite green: if a gate moves, investigate the toolkit.",
+  "derived_from": {
+    "repository": "https://github.com/pentolope/PCB_MicrophoneArrayV2",
+    "commit": "9ba07cf720ed0bbb2023d121d544f0144bba7b2f",
+    "expectation": "verification/boards/reva.expected.json"
+  },
+  "reconciliation": {
+    "status_changes_vs_baseline": 0,
+    "explained_measurement_changes": [
+      {
+        "gate": "DRC.AUTHORITATIVE",
+        "measurement": "constraint_manifest_sha256",
+        "why": "manifest deliberately edited: paths, description, derived_from"
+      },
+      {
+        "gate": "DRC.AUTHORITATIVE",
+        "measurement": "generated_utc",
+        "why": "run timestamp"
+      },
+      {
+        "gate": "DRC.AUTHORITATIVE",
+        "measurement": "report_meta",
+        "why": "run timestamp inside the KiCad report header"
+      },
+      {
+        "gate": "ERC.AUTHORITATIVE",
+        "measurement": "constraint_manifest_sha256",
+        "why": "manifest deliberately edited: paths, description, derived_from"
+      },
+      {
+        "gate": "ERC.AUTHORITATIVE",
+        "measurement": "generated_utc",
+        "why": "run timestamp"
+      },
+      {
+        "gate": "ERC.AUTHORITATIVE",
+        "measurement": "report_meta",
+        "why": "run timestamp inside the KiCad report header"
+      },
+      {
+        "gate": "PROV.FIXTURE_INTEGRITY",
+        "measurement": "files_present",
+        "why": "curation: 84 -> 70 files, legacy router assets removed"
+      },
+      {
+        "gate": "PROV.FIXTURE_INTEGRITY",
+        "measurement": "files_recorded",
+        "why": "curation: 84 -> 70 files, legacy router assets removed"
+      },
+      {
+        "gate": "PROV.REPORT_FRESHNESS",
+        "measurement": "source_closure_sha256",
+        "why": "closure includes configuration_identity(manifest), which the deliberate manifest edit changes; the closure file set is unchanged"
+      },
+      {
+        "gate": "STACK.GERBER_PARITY",
+        "measurement": "fresh_export_command",
+        "why": "absolute attempt-directory paths"
+      }
+    ],
+    "unexplained_changes": 0
+  },
+  "verdict": "REJECTED",
+  "gates": {
+    "ARCH.CONTENTS": "FAIL",
+    "ARCH.PROVENANCE": "FAIL",
+    "BOM.NATIVE_PARITY": "PASS",
+    "CFG.NO_RIVAL_THRESHOLDS": "FAIL",
+    "CFG.THRESHOLD_PARITY": "PASS",
+    "CONTRACT.CONNECTOR": "FAIL",
+    "CONTRACT.PLACEMENT": "PASS",
+    "CPL.NATIVE_PARITY": "PASS",
+    "CPL.ORIENTATION": "NOT_APPLICABLE",
+    "DRC.AUTHORITATIVE": "FAIL",
+    "DRC.NO_SUPPRESSED_RULES": "FAIL",
+    "ERC.AUTHORITATIVE": "FAIL",
+    "FAB.LAYER_IDENTITY": "NOT_APPLICABLE",
+    "NET.TOPOLOGY": "FAIL",
+    "PROV.FIXTURE_INTEGRITY": "PASS",
+    "PROV.RELEASE_COHERENCE": "PASS",
+    "PROV.REPORT_FRESHNESS": "FAIL",
+    "PROV.SOURCE_AUTHORITY": "FAIL",
+    "PROV.SOURCE_CLOSURE": "NOT_APPLICABLE",
+    "ROUTE.ANGLE_STYLE": "FAIL",
+    "ROUTE.GEOMETRY_HYGIENE": "PASS",
+    "ROUTE.TINY_SEGMENTS": "FAIL",
+    "STACK.GERBER_PARITY": "PASS",
+    "STACK.NATIVE_VS_MANIFEST": "FAIL",
+    "VIA.ANNULUS_MASK_OVERLAP": "FAIL",
+    "VIA.IN_PAD_CONTACT": "FAIL",
+    "VIA.MASK_CLEARANCE_PROCESS": "FAIL",
+    "VIA.MASK_CLEARANCE_TARGET": "FAIL",
+    "VIA.NATIVE_GERBER_AGREEMENT": "PASS"
+  },
+  "anchors": {
+    "VIA.MASK_CLEARANCE_TARGET.vias_total": 184,
+    "VIA.MASK_CLEARANCE_TARGET.vias_below_limit": 70,
+    "VIA.MASK_CLEARANCE_PROCESS.vias_below_limit": 63,
+    "VIA.ANNULUS_MASK_OVERLAP.annulus_strict_overlaps": 23,
+    "VIA.IN_PAD_CONTACT.centres_inside_openings": 11,
+    "VIA.IN_PAD_CONTACT.centres_inside_populated": 9,
+    "VIA.IN_PAD_CONTACT.centres_inside_unpopulated": 2,
+    "VIA.IN_PAD_CONTACT.partial_overlap_populated_strict": 3,
+    "ROUTE.TINY_SEGMENTS.below_limit_total": 88,
+    "ROUTE.ANGLE_STYLE.off_style_sharper_than_permitted_max": 69,
+    "VIA.ANNULUS_MASK_OVERLAP.annulus_tangencies": 1,
+    "VIA.IN_PAD_CONTACT.populated_pad_contacts_total": 13,
+    "BOM.NATIVE_PARITY.bom_lines": 15,
+    "BOM.NATIVE_PARITY.schematic_populated": 103,
+    "CPL.NATIVE_PARITY.schematic_populated": 103
+  }
+}
