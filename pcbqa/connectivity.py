@@ -36,17 +36,26 @@ IU = 1e6
 
 
 class Element:
-    """One piece of copper: a track, an arc, a pad or a via."""
+    """One piece of copper: a track, an arc, a pad, a via, or part of a track.
 
-    __slots__ = ("kind", "ref", "shape", "layers", "length_mm", "obj")
+    `part_of` is set when an element is one piece of a track that was split at
+    the points other copper lands on it. The whole track is still what `obj`
+    refers to, so layer, width and every other property are read from it
+    exactly as before; only `length_mm` and `shape` describe the piece.
+    """
 
-    def __init__(self, kind, ref, shape, layers, length_mm, obj=None):
+    __slots__ = ("kind", "ref", "shape", "layers", "length_mm", "obj",
+                 "part_of")
+
+    def __init__(self, kind, ref, shape, layers, length_mm, obj=None,
+                 part_of=None):
         self.kind = kind
         self.ref = ref
         self.shape = shape
         self.layers = frozenset(layers)
         self.length_mm = length_mm
         self.obj = obj
+        self.part_of = part_of
 
     def touches(self, other):
         if self.layers.isdisjoint(other.layers):
@@ -78,6 +87,128 @@ def _arc_points(arc, steps=24):
     return [((centre.x / IU) + radius * math.cos(a0 + sweep * i / steps),
              (centre.y / IU) + radius * math.sin(a0 + sweep * i / steps))
             for i in range(steps + 1)]
+
+
+def _centre_line(track):
+    """The centre line of a track or arc, as a LineString (mm), or None."""
+    if isinstance(track, pcbnew.PCB_ARC):
+        line = LineString(_arc_points(track))
+    else:
+        start, end = track.GetStart(), track.GetEnd()
+        line = LineString([(start.x / IU, start.y / IU),
+                           (end.x / IU, end.y / IU)])
+    return line if line.length > 0 else None
+
+
+def _substring(line, start, end):
+    """The piece of `line` between two distances along it."""
+    if end - start <= 1e-12:
+        return None
+    head = line.interpolate(start)
+    coords = [(head.x, head.y)]
+    walked = 0.0
+    points = list(line.coords)
+    for a, b in zip(points, points[1:]):
+        walked += math.hypot(b[0] - a[0], b[1] - a[1])
+        if start < walked < end:
+            coords.append((b[0], b[1]))
+    tail = line.interpolate(end)
+    coords.append((tail.x, tail.y))
+    cleaned = []
+    for point in coords:
+        if not cleaned or point != cleaned[-1]:
+            cleaned.append(point)
+    if len(cleaned) < 2:
+        return None
+    return LineString(cleaned)
+
+
+def split_track_elements(elements, tolerance_mm=1e-6):
+    """Replace each track with the pieces between the things that touch it.
+
+    Why this exists
+    ---------------
+    The cost of entering an element is that element's whole length. That is
+    exact when copper only ever meets copper end to end, and it is not how
+    boards are built: a stub landing part-way along a 30 mm track makes the
+    walk from that stub to the nearer end cost 30 mm instead of 4 mm. For a
+    spread comparison between similar branches the error largely cancels and
+    the model was good enough. For a propagation delay on an arbitrary board
+    it is simply wrong, and wrong in a direction nothing else would catch.
+
+    So each track is cut where another element lands *along* it, and the
+    pieces become the graph's elements. Entering a piece then costs the piece,
+    and a walk can only leave a piece at one of its ends - which is what makes
+    the whole-element cost model exact again rather than approximately right.
+
+    Copper meeting a track at one of its own ends is not a cut. That is how
+    tracks are ordinarily joined, and cutting there would move where a
+    measurement begins rather than correct what it counts: a pad overlapping
+    the last fraction of a millimetre of its own track would quietly shorten
+    every path through it. The existing convention - a walk from a pad is
+    charged the track it enters - is preserved exactly.
+
+    Opt-in. `NetTopologyRule` and every measurement that predates this keeps
+    the unsplit graph, because changing what those numbers mean is a separate
+    decision from making a new measurement accurate.
+    """
+    if not any(e.kind == "track" for e in elements):
+        return elements
+    tree = STRtree([e.shape for e in elements])
+    out = [e for e in elements if e.kind != "track"]
+    for index, element in enumerate(elements):
+        if element.kind != "track":
+            continue
+        line = _centre_line(element.obj)
+        if line is None:
+            out.append(element)
+            continue
+        ends = (Point(line.coords[0]), Point(line.coords[-1]))
+        cuts = {0.0, line.length}
+        for other_index in tree.query(element.shape):
+            other_index = int(other_index)
+            if other_index == index:
+                continue
+            other = elements[other_index]
+            if not element.touches(other):
+                continue
+            meeting = element.shape.intersection(other.shape)
+            if meeting.is_empty:
+                continue
+            # Only copper that lands *along* this track is a cut. Copper
+            # meeting it at an end is how tracks are normally joined, and
+            # cutting there would move where a measurement starts - a pad
+            # overlapping the last fraction of a millimetre of its own track
+            # would silently shorten every path through it, which is a change
+            # to what the existing definition means rather than a correction
+            # of it. What is being fixed here is the other case: a stub or a
+            # pad landing in the middle, where charging the whole track is
+            # simply wrong.
+            if any(meeting.distance(end) <= tolerance_mm for end in ends):
+                continue
+            # `project` clamps to the line, so copper lying alongside this
+            # track rather than across it still yields a point on the centre
+            # line instead of raising.
+            cuts.add(line.project(meeting.centroid))
+        ordered = sorted(cuts)
+        merged = [ordered[0]]
+        for value in ordered[1:]:
+            if value - merged[-1] > tolerance_mm:
+                merged.append(value)
+        if len(merged) < 3:                     # nothing lands mid-track
+            out.append(element)
+            continue
+        half = max(element.obj.GetWidth() / 2.0, 1.0) / IU
+        for start, end in zip(merged, merged[1:]):
+            piece = _substring(line, start, end)
+            if piece is None:
+                continue
+            out.append(Element(
+                "track", element.ref,
+                piece.buffer(half, cap_style=1, quad_segs=16),
+                element.layers, piece.length, element.obj,
+                part_of=element))
+    return out
 
 
 def build_elements(board, net_name, pad_polygon):
@@ -118,9 +249,13 @@ def build_elements(board, net_name, pad_polygon):
 class NetGraph:
     """Connectivity graph for one net, built from copper intersection."""
 
-    def __init__(self, board, net_name, pad_polygon):
+    def __init__(self, board, net_name, pad_polygon, split_at_junctions=False):
         self.net = net_name
-        self.elements = build_elements(board, net_name, pad_polygon)
+        self.split_at_junctions = split_at_junctions
+        elements = build_elements(board, net_name, pad_polygon)
+        if split_at_junctions:
+            elements = split_track_elements(elements)
+        self.elements = elements
         self.adj = defaultdict(list)
         self._link()
 
@@ -155,7 +290,24 @@ class NetGraph:
         return sorted(used)
 
     def total_track_mm(self):
+        """Total routed copper on the net.
+
+        The pieces of a split track sum to the track, so this is the same
+        number whether or not the graph was split.
+        """
         return sum(e.length_mm for e in self.elements if e.kind == "track")
+
+    def track_objects(self):
+        """The distinct KiCad tracks behind the elements, split or not."""
+        seen, out = set(), []
+        for element in self.elements:
+            if element.kind != "track":
+                continue
+            if id(element.obj) in seen:
+                continue
+            seen.add(id(element.obj))
+            out.append(element.obj)
+        return out
 
     def path_length(self, source_refs, target_ref):
         """Shortest electrical path length, or None if not connected."""
