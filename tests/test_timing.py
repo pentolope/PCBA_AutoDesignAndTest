@@ -29,8 +29,8 @@ if HERE not in sys.path:
 
 import pcbnew                                                      # noqa: E402
 
-from pcbqa import (canonical, cleanroom, core, electrical_path,     # noqa: E402
-                   geom, propagation, stackup_physical)
+from pcbqa import (canonical, cleanroom, component_models, core,    # noqa: E402
+                   electrical_path, geom, propagation, stackup_physical)
 from pcbqa.core import Context, Manifest, Status                    # noqa: E402
 from pcbqa.electrical_path import PathError                         # noqa: E402
 from pcbqa.gates import g_timing, g_geometry                        # noqa: E402,F401
@@ -76,6 +76,29 @@ LENGTH_FIRST_TO_SECOND_MM = 6.0    # L1.1 -> L2.1
 LENGTH_VIA_TOP_MM = 10.0           # D2.1 -> via
 LENGTH_VIA_BOTTOM_MM = 10.0        # via  -> L3.1
 
+# A T-junction: a stub lands in the middle of a run rather than at its end.
+LENGTH_TEE_RUN_MM = 20.0           # D3.1 -> L5.1, straight through
+LENGTH_TEE_TO_JUNCTION_MM = 10.0   # D3.1 -> where the stub lands
+LENGTH_TEE_STUB_MM = 7.0           # the stub itself
+# What the walk to the stub's load costs, split and unsplit. The unsplit graph
+# charges the whole run whichever end you leave from; the split graph charges
+# only the half actually travelled. Both are exactly calculable, which is the
+# point of the fixture.
+TEE_SPLIT_MM = LENGTH_TEE_TO_JUNCTION_MM + LENGTH_TEE_STUB_MM        # 17.0
+TEE_UNSPLIT_MM = LENGTH_TEE_RUN_MM + LENGTH_TEE_STUB_MM              # 27.0
+
+# A path that changes layer twice and changes width with it.
+LENGTH_M_TOP_A_MM = 5.0
+LENGTH_M_BOTTOM_MM = 10.0
+LENGTH_M_TOP_B_MM = 7.0
+WIDE_TRACK_MM = 0.4
+PATH_MULTI_VIA_MM = (LENGTH_M_TOP_A_MM + LENGTH_M_BOTTOM_MM
+                     + LENGTH_M_TOP_B_MM)                            # 22.0
+
+# A series part the board says is not fitted.
+LENGTH_DNP_IN_MM = 9.5
+LENGTH_DNP_OUT_MM = 9.5
+
 PATH_TO_L1_MM = LENGTH_PRE_SERIES_MM + LENGTH_TO_FIRST_LOAD_MM          # 24.0
 PATH_TO_L2_MM = PATH_TO_L1_MM + LENGTH_FIRST_TO_SECOND_MM               # 30.0
 PATH_VIA_MM = LENGTH_VIA_TOP_MM + LENGTH_VIA_BOTTOM_MM                  # 20.0
@@ -105,16 +128,20 @@ def expected_microstrip_ps_per_mm(width_mm=TRACK_WIDTH_MM,
 
 def build_board(directory, with_stackup=True):
     """The fixture board: a series-resistor fan-out and a via transition."""
-    board = synth.new_board(layers=4, size_mm=40.0)
+    board = synth.new_board(layers=4, size_mm=60.0)
     gnd = synth.add_net(board, "GND")
     sig_a = synth.add_net(board, "SIG_A")
     sig_b = synth.add_net(board, "SIG_B")
     sig_v = synth.add_net(board, "SIG_V")
+    sig_t = synth.add_net(board, "SIG_T")
+    sig_m = synth.add_net(board, "SIG_M")
+    sig_d = synth.add_net(board, "SIG_D")
+    sig_e = synth.add_net(board, "SIG_E")
 
     # Both inner layers are poured on GND, so they are reference planes
     # because copper is actually on them and not because a file says so.
     synth.add_zone(board, gnd, (pcbnew.In1_Cu, pcbnew.In2_Cu),
-                   (82.0, 82.0, 118.0, 118.0))
+                   (72.0, 72.0, 128.0, 128.0))
 
     # --- driver -> series resistor -> two loads, all on F.Cu ---------------
     synth.add_pad_footprint(board, "D1", 85.0, 95.0, pcbnew.PAD_SHAPE_RECT,
@@ -142,6 +169,45 @@ def build_board(directory, with_stackup=True):
     synth.add_via(board, 95.0, 105.0, net=sig_v)
     synth.add_track(board, (95.0, 105.0), (105.0, 105.0), net=sig_v,
                     layer=pcbnew.B_Cu, width_mm=TRACK_WIDTH_MM)
+
+    # --- a T-junction: the stub lands mid-run, not at an end --------------
+    synth.add_pad_footprint(board, "D3", 85.0, 85.0, pcbnew.PAD_SHAPE_RECT,
+                            (0.5, 0.5), net=sig_t)
+    synth.add_pad_footprint(board, "L4", 95.0, 78.0, pcbnew.PAD_SHAPE_RECT,
+                            (0.5, 0.5), net=sig_t)
+    synth.add_pad_footprint(board, "L5", 105.0, 85.0, pcbnew.PAD_SHAPE_RECT,
+                            (0.5, 0.5), net=sig_t)
+    synth.add_track(board, (85.0, 85.0), (105.0, 85.0), net=sig_t,
+                    width_mm=TRACK_WIDTH_MM)
+    synth.add_track(board, (95.0, 85.0), (95.0, 78.0), net=sig_t,
+                    width_mm=TRACK_WIDTH_MM)
+
+    # --- two layer changes and a width change ----------------------------
+    synth.add_pad_footprint(board, "D5", 85.0, 75.0, pcbnew.PAD_SHAPE_RECT,
+                            (0.5, 0.5), net=sig_m)
+    synth.add_pad_footprint(board, "L7", 107.0, 75.0, pcbnew.PAD_SHAPE_RECT,
+                            (0.5, 0.5), net=sig_m)
+    synth.add_track(board, (85.0, 75.0), (90.0, 75.0), net=sig_m,
+                    layer=pcbnew.F_Cu, width_mm=TRACK_WIDTH_MM)
+    synth.add_via(board, 90.0, 75.0, net=sig_m)
+    synth.add_track(board, (90.0, 75.0), (100.0, 75.0), net=sig_m,
+                    layer=pcbnew.B_Cu, width_mm=WIDE_TRACK_MM)
+    synth.add_via(board, 100.0, 75.0, net=sig_m)
+    synth.add_track(board, (100.0, 75.0), (107.0, 75.0), net=sig_m,
+                    layer=pcbnew.F_Cu, width_mm=TRACK_WIDTH_MM)
+
+    # --- a series part the board says is not fitted -----------------------
+    synth.add_pad_footprint(board, "D4", 85.0, 115.0, pcbnew.PAD_SHAPE_RECT,
+                            (0.5, 0.5), net=sig_d)
+    unfitted, _pads = synth.add_two_pad_footprint(
+        board, "RD1", 95.0, 115.0, 1.0, (sig_d, sig_e), value="0R")
+    unfitted.SetDNP(True)
+    synth.add_pad_footprint(board, "L6", 105.0, 115.0, pcbnew.PAD_SHAPE_RECT,
+                            (0.5, 0.5), net=sig_e)
+    synth.add_track(board, (85.0, 115.0), (94.5, 115.0), net=sig_d,
+                    width_mm=TRACK_WIDTH_MM)
+    synth.add_track(board, (95.5, 115.0), (105.0, 115.0), net=sig_e,
+                    width_mm=TRACK_WIDTH_MM)
 
     path = os.path.join(directory, "timing.kicad_pcb")
     synth.save(board, path)
@@ -266,8 +332,20 @@ class Fixture:
         results = core.run_all(self.ctx, only=only)
         return {r.gate_id: r for r in results}
 
-    def analysis(self):
-        return g_timing.analysis(self.ctx)
+    def geometry(self):
+        return g_timing.geometry(self.ctx)
+
+    def stackup(self):
+        return g_timing.stackup(self.ctx)
+
+    def propagation(self):
+        return g_timing.propagation_analysis(self.ctx)
+
+    def delayed(self):
+        """`{(path id, destination): delay record}` for every resolved path."""
+        paths, state = self.geometry(), self.propagation()
+        return {key: state.delays[key]
+                for key in (paths.key(r) for _n, r in paths.all_paths())}
 
     def dispose(self):
         shutil.rmtree(self.root, ignore_errors=True)
@@ -302,8 +380,10 @@ class WhatAPathMeasures(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.fixture = make(tag="measure")
-        cls.state = cls.fixture.analysis()
-        cls.by_path = {r["resolved"].id + "->" + r["resolved"].destination.label: r
+        cls.state = cls.fixture.geometry()
+        cls.delays = cls.fixture.delayed()
+        cls.by_path = {r["resolved"].id + "->" + r["resolved"].destination.label:
+                       dict(r, delay=cls.delays[cls.state.key(r)])
                        for _n, r in cls.state.all_paths()}
 
     def test_single_net_copper_path_length(self):
@@ -350,7 +430,11 @@ class WhatAPathMeasures(unittest.TestCase):
         self.assertIsNone(traversals[0]["declared_delay_model"])
         contributed = record["delay"]["component_traversals"][0]
         self.assertEqual(contributed["delay_ps"], 0.0)
+        self.assertEqual(contributed["model_status"], "unmodelled")
         self.assertIn("R1", record["delay"]["unmodelled_component_delay"])
+        # An unmodelled traversal is an acknowledged omission, so the total is
+        # a lower bound rather than a value.
+        self.assertTrue(record["delay"]["delay_is_lower_bound"])
 
     def test_the_whole_path_spans_both_sides_of_the_series_component(self):
         """The point of the abstraction: not just the post-resistor copper."""
@@ -391,8 +475,12 @@ class WhatAPathMeasures(unittest.TestCase):
                              "{}: {}".format(key, delay["insufficient"]))
             self.assertAlmostEqual(delay["delay_ps"], length * per_mm, places=4,
                                    msg=key)
-            self.assertEqual(delay["fidelity"],
-                             propagation.ANALYTIC_TRANSMISSION_LINE)
+            # A path whose component contribution is unmodelled cannot claim
+            # analytic fidelity for the whole of itself.
+            expected = (propagation.UNKNOWN_CONTRIBUTION
+                        if delay["component_traversals"]
+                        else propagation.ANALYTIC_TRANSMISSION_LINE)
+            self.assertEqual(delay["fidelity"], expected, key)
 
     def test_skew_in_time_is_the_mismatch_times_the_propagation_constant(self):
         results = self.fixture.gates(only={"TIMING.INTERCONNECT_SKEW"})
@@ -411,7 +499,9 @@ class WhatAPathMeasures(unittest.TestCase):
         self.assertEqual(measurements["propagation_model"],
                          propagation.HAMMERSTAD)
         self.assertEqual(measurements["via_delay_model"], propagation.VIA_NONE)
-        self.assertEqual(measurements["backend"], "analytic")
+        self.assertEqual(measurements["backend_requested"], "analytic")
+        self.assertEqual(measurements["backend_used"], "analytic")
+        self.assertFalse(measurements["backend_fell_back"])
         self.assertIn("interconnect", measurements["scope"])
 
 
@@ -560,8 +650,7 @@ class ViaTreatment(unittest.TestCase):
 
     def test_by_default_a_via_contributes_length_but_no_delay(self):
         fixture = make(tag="via_none")
-        state = fixture.analysis()
-        record = _find(state, "layer_change")
+        record = _find(fixture, "layer_change")
         self.assertEqual(len(record["delay"]["vias"]), 1)
         via = record["delay"]["vias"][0]
         self.assertEqual(via["model"], propagation.VIA_NONE)
@@ -574,7 +663,7 @@ class ViaTreatment(unittest.TestCase):
             document["timing"]["propagation"]["via_delay_model"] = \
                 propagation.VIA_GEOMETRIC
         fixture = make(mutate=mutate, tag="via_geom")
-        record = _find(fixture.analysis(), "layer_change")
+        record = _find(fixture, "layer_change")
         via = record["delay"]["vias"][0]
         expected = (VIA_VERTICAL_MM * math.sqrt(FIXTURE_EPSILON_R)
                     / 0.299792458)
@@ -638,7 +727,9 @@ class WhatADelayActuallyNeeds(unittest.TestCase):
         issues = stack.completeness()
         self.assertTrue(issues)
         self.assertTrue(all("needed_for" in issue for issue in issues), issues)
-        self.assertTrue(any("loss" in issue["needed_for"] for issue in issues))
+        self.assertTrue(
+            any(issue.get("field") == stackup_physical.NEEDS_LOSS_TANGENT
+                for issue in issues), issues)
 
     def test_a_via_across_an_unknown_stackup_reports_no_length_not_a_crash(self):
         """The failure that took down the first real-board run."""
@@ -665,10 +756,12 @@ class WhatADelayActuallyNeeds(unittest.TestCase):
                        "via_top_layer": "F.Cu", "via_bottom_layer": "B.Cu"})
 
 
-def _find(state, path_id):
-    for _interface, record in state.all_paths():
+def _find(fixture, path_id):
+    """One resolved path plus its delay record, by route id."""
+    paths, delays = fixture.geometry(), fixture.delayed()
+    for _interface, record in paths.all_paths():
         if record["resolved"].id == path_id:
-            return record
+            return dict(record, delay=delays[paths.key(record)])
     raise AssertionError("no resolved path {!r}".format(path_id))
 
 
@@ -694,7 +787,7 @@ class ApplicabilityAndFailClosed(unittest.TestCase):
         fixture = make(with_stackup=False, tag="nostack")
         results = fixture.gates(only={"STACK.PHYSICAL"})
         self.assertEqual(results["STACK.PHYSICAL"].status, Status.FAIL)
-        self.assertIn("incomplete", results["STACK.PHYSICAL"].reason)
+        self.assertIn("does not state", results["STACK.PHYSICAL"].reason)
 
     def test_a_declared_delay_limit_that_cannot_be_evaluated_blocks(self):
         """An unevaluated requirement is not a satisfied one."""
@@ -754,16 +847,19 @@ class ApplicabilityAndFailClosed(unittest.TestCase):
         self.assertTrue(any("does not exist" in str(f.get("issue", ""))
                             for f in result.findings), result.findings)
 
-    def test_a_missing_stackup_supplement_blocks_rather_than_being_ignored(self):
+    def test_a_missing_stackup_supplement_blocks_the_gates_that_need_it(self):
+        """And only those. Connectivity never needed the supplement."""
         def mutate(document, _project):
             document["timing"]["physical_stackup"]["supplement"] = \
                 "models/absent.json"
         fixture = make(mutate=mutate, tag="nosupp")
-        results = fixture.gates(only={"STACK.PHYSICAL",
-                                      "TIMING.PATH_INTEGRITY"})
-        for gate_id, result in sorted(results.items()):
-            self.assertEqual(result.status, Status.ERROR,
-                             "{}: {}".format(gate_id, result.reason))
+        results = fixture.gates(only={"STACK.PHYSICAL", "TIMING.PATH_INTEGRITY",
+                                      "TIMING.INTERCONNECT_DELAY"})
+        self.assertEqual(results["STACK.PHYSICAL"].status, Status.ERROR)
+        self.assertEqual(results["TIMING.INTERCONNECT_DELAY"].status,
+                         Status.ERROR)
+        self.assertEqual(results["TIMING.PATH_INTEGRITY"].status, Status.PASS,
+                         results["TIMING.PATH_INTEGRITY"].reason)
 
     def test_an_interface_that_declares_no_route_blocks(self):
         def mutate(document, _project):
@@ -806,12 +902,18 @@ class DeclarationsThatCannotBeSatisfied(unittest.TestCase):
         self.assertEqual(result.status, Status.FAIL)
 
     def test_a_traversal_that_does_not_change_net_refuses(self):
+        """Caught at declaration now, which is earlier and board-independent.
+
+        Two guards make this unreachable at resolution time: a traversal from
+        a pad to itself is refused when the declaration is read, and a path
+        whose copper steps name the same net twice is a loop. Both were added
+        because "the part bridges nothing" is a statement about the
+        declaration, and a declaration that cannot be a path on any board
+        should never reach one.
+        """
         def mutate(document, _project):
             steps = document["timing"]["interfaces"]["series"]["routes"][
                 "template"]["steps"]
-            # Cross R1 from pad 1 back to pad 1, and follow it with copper on
-            # the net that pad is really on, so the net-agreement check is
-            # satisfied and the traversal itself is what has to be caught.
             steps[1]["to_pad"] = "1"
             steps[2]["net"] = "SIG_A"
             steps[2]["from"] = "R1.1"
@@ -820,8 +922,15 @@ class DeclarationsThatCannotBeSatisfied(unittest.TestCase):
         result = fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
             "TIMING.PATH_INTEGRITY"]
         self.assertEqual(result.status, Status.FAIL)
-        self.assertTrue(any("joins nothing" in str(f.get("issue", ""))
+        self.assertTrue(any("traverses nothing" in str(f.get("issue", ""))
                             for f in result.findings), result.findings)
+
+    def test_the_resolver_still_guards_a_same_net_traversal(self):
+        """Defence in depth: PathResolver is usable without the declaration
+        checks in front of it, so it keeps its own guard."""
+        source = open(os.path.join(paths.PACKAGE, "electrical_path.py"),
+                      encoding="utf-8").read()
+        self.assertIn("a traversal that does not change net joins", source)
 
     def test_a_path_that_skips_its_series_component_is_caught(self):
         """Exactly the defect the abstraction exists to prevent."""
@@ -955,7 +1064,7 @@ class WhereAStackupComesFrom(unittest.TestCase):
 
     def test_a_board_with_no_stackup_block_says_so_rather_than_assuming_fr4(self):
         fixture = make(with_stackup=False, tag="source_none")
-        stack = fixture.analysis().stackup
+        stack = fixture.stackup().stackup
         self.assertTrue(stack.empty)
         self.assertEqual(stack.source, stackup_physical.NATIVE)
         self.assertTrue(any("no (setup (stackup" in note
@@ -966,7 +1075,7 @@ class WhereAStackupComesFrom(unittest.TestCase):
 
     def test_native_data_are_read_from_the_board(self):
         fixture = make(tag="source_native")
-        stack = fixture.analysis().stackup
+        stack = fixture.stackup().stackup
         self.assertEqual(stack.source, stackup_physical.NATIVE)
         self.assertEqual(stack.copper_layer_names,
                          ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
@@ -983,7 +1092,7 @@ class WhereAStackupComesFrom(unittest.TestCase):
             document["timing"]["physical_stackup"]["supplement"] = \
                 "models/supplement.json"
         fixture = make(mutate=mutate, with_stackup=False, tag="supp")
-        stack = fixture.analysis().stackup
+        stack = fixture.stackup().stackup
         self.assertEqual(stack.completeness(), [])
         self.assertIn(stackup_physical.DECLARED, stack.source)
 
@@ -1006,7 +1115,7 @@ class WhereAStackupComesFrom(unittest.TestCase):
 
     def test_reference_planes_come_from_poured_copper(self):
         fixture = make(tag="planes")
-        self.assertEqual(sorted(fixture.analysis().reference_layers),
+        self.assertEqual(sorted(fixture.stackup().reference_layers),
                          ["In1.Cu", "In2.Cu"])
 
 
@@ -1044,10 +1153,16 @@ class BackendsStayOptional(unittest.TestCase):
         def mutate(document, _project):
             document["timing"]["propagation"]["backend"] = "openems"
         fixture = make(mutate=mutate, tag="openems")
-        result = fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
-            "TIMING.PATH_INTEGRITY"]
-        self.assertEqual(result.status, Status.ERROR)
-        self.assertIn("openems", result.reason.lower())
+        results = fixture.gates(only={"TIMING.PATH_INTEGRITY",
+                                      "TIMING.INTERCONNECT_DELAY",
+                                      "TIMING.INTERCONNECT_SKEW"})
+        for gate_id in ("TIMING.INTERCONNECT_DELAY",
+                        "TIMING.INTERCONNECT_SKEW"):
+            self.assertEqual(results[gate_id].status, Status.ERROR, gate_id)
+            self.assertIn("openems", results[gate_id].reason.lower())
+        # The geometry question never needed the solver.
+        self.assertEqual(results["TIMING.PATH_INTEGRITY"].status, Status.PASS,
+                         results["TIMING.PATH_INTEGRITY"].reason)
 
     def test_the_solver_stub_refuses_rather_than_estimating(self):
         from pcbqa.backends import openems
@@ -1235,7 +1350,9 @@ class ARegisteredConsumersTimingPolicy(unittest.TestCase):
                        stackup_physical.MERGED))
         self.assertIn(measurements["propagation_model"], propagation.MODELS)
         self.assertIn(measurements["via_delay_model"], propagation.VIA_MODELS)
-        self.assertTrue(measurements["backend"])
+        self.assertTrue(measurements["backend_requested"])
+        self.assertTrue(measurements["backend_used"])
+        self.assertIn("backend_fell_back", measurements)
 
     def test_no_delay_is_reported_where_the_stackup_cannot_support_one(self):
         """The whole point: absent material data produce absence, not numbers."""
@@ -1267,6 +1384,881 @@ def _declared_routes(interface):
         routes.extend(electrical_path.expand_template(spec["template"],
                                                       spec["bindings"]))
     return routes
+
+
+# ---------------------------------------------------------------------------
+# provenance, checked against something other than the declaration
+# ---------------------------------------------------------------------------
+
+def _pinning(*extra):
+    """A mutation that pins the modules the applicable gates say they need."""
+    def mutate(document, _project):
+        needed = sorted(core.derivation_modules())
+        document["reports"]["implementation_closure"] = [
+            name for name in needed if name not in extra]
+    return mutate
+
+
+class ProvenanceIsCheckedIndependently(unittest.TestCase):
+    """Removing a dependency must fail even though nothing contradicts itself.
+
+    The trap this replaces compared the closure's executed modules against the
+    manifest key the closure was built from. That comparison holds however
+    wrong the manifest is: delete an entry and both sides shrink together. The
+    requirement has to come from somewhere the board cannot edit, which is the
+    gate registry - each gate states which modules compute what it reports.
+    """
+
+    def test_a_complete_declaration_passes(self):
+        fixture = make(mutate=_pinning(), tag="prov_ok")
+        result = fixture.gates(only={"PROV.DERIVATION_CLOSURE"})[
+            "PROV.DERIVATION_CLOSURE"]
+        self.assertEqual(result.status, Status.PASS, result.reason)
+        self.assertTrue(result.measurements["derivation_modules_required"])
+
+    def test_dropping_a_timing_dependency_is_caught(self):
+        """The whole point. Manifest and closure agree; the toolkit does not."""
+        fixture = make(mutate=_pinning("pcbqa.propagation"), tag="prov_gap")
+        result = fixture.gates(only={"PROV.DERIVATION_CLOSURE"})[
+            "PROV.DERIVATION_CLOSURE"]
+        self.assertEqual(result.status, Status.FAIL, result.reason)
+        self.assertEqual([f["module"] for f in result.findings],
+                         ["pcbqa.propagation"])
+        self.assertIn("TIMING.INTERCONNECT_DELAY",
+                      result.findings[0]["required_by"])
+
+    def test_the_declaration_and_the_closure_still_agree_with_each_other(self):
+        """So a test comparing those two would have passed on the broken board."""
+        fixture = make(mutate=_pinning("pcbqa.propagation"), tag="prov_agree")
+        policy = canonical.AttributePolicy.load(paths.ATTRIBUTES)
+        closure = cleanroom.source_closure(fixture.manifest, policy)
+        executed = sorted(k[len("<executed>"):] for k in closure
+                          if k.startswith("<executed>"))
+        declared = sorted(fixture.manifest.get(
+            "reports.implementation_closure"))
+        self.assertEqual(executed, declared,
+                         "the two sides of the old check must still match, or "
+                         "this test is not demonstrating anything")
+
+    def test_a_gate_that_is_not_applicable_demands_nothing(self):
+        """A board with no timing policy keeps its previous obligations."""
+        def mutate(document, project):
+            _pinning()(document, project)
+            document.pop("timing")
+            document["reports"]["implementation_closure"] = []
+        fixture = make(mutate=mutate, tag="prov_none")
+        result = fixture.gates(only={"PROV.DERIVATION_CLOSURE"})[
+            "PROV.DERIVATION_CLOSURE"]
+        self.assertEqual(result.status, Status.PASS, result.reason)
+
+    def test_every_declared_derivation_module_is_importable(self):
+        """A registry naming a module that does not exist would fail closed
+        for the wrong reason, and only on a board unlucky enough to run it."""
+        import importlib
+        for module in sorted(core.derivation_modules()):
+            self.assertTrue(importlib.import_module(module))
+
+
+# ---------------------------------------------------------------------------
+# component models
+# ---------------------------------------------------------------------------
+
+def _series_model(model):
+    def mutate(document, _project):
+        steps = document["timing"]["interfaces"]["series"]["routes"][
+            "template"]["steps"]
+        steps[1]["delay_model"] = model
+    return mutate
+
+
+class ComponentModelsFailSafely(unittest.TestCase):
+
+    def test_no_model_is_a_lower_bound_not_a_zero(self):
+        fixture = make(tag="cm_none")
+        record = _find(fixture, "series_branch_to_L1")["delay"]
+        traversal = record["component_traversals"][0]
+        self.assertEqual(traversal["model_status"], component_models.UNMODELLED)
+        self.assertEqual(traversal["delay_ps"], 0.0)
+        self.assertTrue(record["delay_is_lower_bound"])
+        self.assertEqual(record["fidelity"], propagation.UNKNOWN_CONTRIBUTION)
+
+    def test_a_declared_but_unimplemented_model_is_never_a_silent_zero(self):
+        """The defect this contract exists to prevent."""
+        fixture = make(mutate=_series_model({"model": "ibis"}), tag="cm_ibis")
+        record = _find(fixture, "series_branch_to_L1")["delay"]
+        traversal = record["component_traversals"][0]
+        self.assertEqual(traversal["model_status"],
+                         component_models.UNSUPPORTED)
+        self.assertIsNone(traversal["delay_ps"])
+        self.assertIsNone(record["delay_ps"])
+        self.assertTrue(any(i["portion"] == "component"
+                            for i in record["insufficient"]), record)
+
+    def test_an_unimplemented_model_blocks_a_declared_limit(self):
+        def mutate(document, project):
+            _series_model({"model": "touchstone"})(document, project)
+            document["timing"]["interfaces"]["series"]["limits"] = {
+                "max_delay_ps": 1e6}
+        fixture = make(mutate=mutate, tag="cm_block")
+        result = fixture.gates(only={"TIMING.INTERCONNECT_DELAY"})[
+            "TIMING.INTERCONNECT_DELAY"]
+        self.assertEqual(result.status, Status.FAIL, result.reason)
+
+    def test_an_explicit_zero_needs_a_justification(self):
+        with self.assertRaises(component_models.ComponentModelError):
+            component_models.evaluate({"model": "none"}, "R1.1")
+
+    def test_a_justified_zero_is_exact_rather_than_a_bound(self):
+        fixture = make(mutate=_series_model(
+            {"model": "none",
+             "justification": "series termination; transit below resolution"}),
+            tag="cm_zero")
+        record = _find(fixture, "series_branch_to_L1")["delay"]
+        traversal = record["component_traversals"][0]
+        self.assertEqual(traversal["model_status"],
+                         component_models.IMPLEMENTED)
+        self.assertEqual(traversal["delay_ps"], 0.0)
+        self.assertFalse(record["delay_is_lower_bound"])
+        # The traversal is a declared model, but the copper it sits on is an
+        # analytic estimate and the path is worth its weakest portion. The
+        # distinction that matters here is against UNKNOWN_CONTRIBUTION: a
+        # justified zero is not the same as no model.
+        self.assertEqual(record["fidelity"],
+                         propagation.ANALYTIC_TRANSMISSION_LINE)
+        self.assertEqual(traversal["fidelity"], propagation.DECLARED_MODEL)
+        self.assertAlmostEqual(record["delay_ps"],
+                               PATH_TO_L1_MM * expected_microstrip_ps_per_mm(),
+                               places=4)
+
+    def test_a_fixed_delay_is_added_and_needs_provenance(self):
+        with self.assertRaises(component_models.ComponentModelError):
+            component_models.evaluate({"model": "fixed_delay",
+                                       "delay_ps": 12.0}, "R1.1")
+        fixture = make(mutate=_series_model(
+            {"model": "fixed_delay", "delay_ps": 12.0,
+             "provenance": "fixture value, not a real part"}), tag="cm_fixed")
+        record = _find(fixture, "series_branch_to_L1")["delay"]
+        self.assertFalse(record["delay_is_lower_bound"])
+        self.assertAlmostEqual(
+            record["delay_ps"],
+            PATH_TO_L1_MM * expected_microstrip_ps_per_mm() + 12.0, places=4)
+
+    def test_a_negative_fixed_delay_refuses(self):
+        with self.assertRaises(component_models.ComponentModelError):
+            component_models.evaluate({"model": "fixed_delay",
+                                       "delay_ps": -1.0,
+                                       "provenance": "x"}, "R1.1")
+
+    def test_an_unknown_model_name_refuses_at_declaration_time(self):
+        with self.assertRaises(PathError):
+            electrical_path.step_from_spec(
+                {"kind": "component", "reference": "R1", "from_pad": "1",
+                 "to_pad": "2", "delay_model": {"model": "vibes"}}, 1)
+
+    def test_a_bare_string_model_refuses(self):
+        with self.assertRaises(component_models.ComponentModelError):
+            component_models.evaluate("none", "R1.1")
+
+    def test_every_reserved_name_is_refused_rather_than_unknown(self):
+        for name in component_models.RESERVED_MODELS:
+            contribution = component_models.evaluate({"model": name}, "R1.1")
+            self.assertEqual(contribution.kind, component_models.UNSUPPORTED,
+                             name)
+            self.assertFalse(contribution.evaluable, name)
+
+
+# ---------------------------------------------------------------------------
+# population state
+# ---------------------------------------------------------------------------
+
+DNP_ROUTE = {
+    "paths": [{
+        "id": "through_unfitted",
+        "steps": [
+            {"kind": "copper", "net": "SIG_D", "from": "D4.1", "to": "RD1.1"},
+            {"kind": "component", "reference": "RD1", "from_pad": "1",
+             "to_pad": "2"},
+            {"kind": "copper", "net": "SIG_E", "from": "RD1.2", "to": "L6.1"},
+        ],
+    }],
+}
+
+
+def _dnp_interface(extra_step=None):
+    def mutate(document, _project):
+        route = copy.deepcopy(DNP_ROUTE)
+        if extra_step:
+            route["paths"][0]["steps"][1].update(extra_step)
+        document["timing"]["interfaces"] = {
+            "unfitted": {"description": "crosses a part marked DNP",
+                         "routes": route}}
+    return mutate
+
+
+class UnpopulatedPartsDoNotConduct(unittest.TestCase):
+    """Two nets on two pads is a footprint, not a connection."""
+
+    def test_a_path_through_a_dnp_part_refuses(self):
+        fixture = make(mutate=_dnp_interface(), tag="dnp")
+        result = fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
+            "TIMING.PATH_INTEGRITY"]
+        self.assertEqual(result.status, Status.FAIL, result.reason)
+        self.assertTrue(any("do-not-populate" in str(f.get("issue", ""))
+                            for f in result.findings), result.findings)
+
+    def test_a_build_variant_may_say_it_is_fitted(self):
+        fixture = make(mutate=_dnp_interface(
+            {"assume_populated": {"justification": "fitted in the RF build"}}),
+            tag="dnp_ok")
+        result = fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
+            "TIMING.PATH_INTEGRITY"]
+        self.assertEqual(result.status, Status.PASS, result.reason)
+        row = result.measurements["interfaces"]["unfitted"]["paths"][0]
+        self.assertAlmostEqual(row["copper_length_mm"],
+                               LENGTH_DNP_IN_MM + LENGTH_DNP_OUT_MM, places=4)
+
+    def test_that_override_has_to_be_justified(self):
+        with self.assertRaises(PathError):
+            electrical_path.step_from_spec(
+                {"kind": "component", "reference": "R1", "from_pad": "1",
+                 "to_pad": "2", "assume_populated": True}, 1)
+
+    def test_the_population_state_is_recorded_either_way(self):
+        fixture = make(tag="dnp_record")
+        traversal = _find(fixture, "series_branch_to_L1")[
+            "resolved"].component_traversals()[0]
+        self.assertIn("dnp", traversal)
+        self.assertFalse(traversal["dnp"])
+
+
+# ---------------------------------------------------------------------------
+# backends
+# ---------------------------------------------------------------------------
+
+class BackendFallbackSemantics(unittest.TestCase):
+
+    def setUp(self):
+        from pcbqa.backends import openems
+        if openems.executable():                        # pragma: no cover
+            self.skipTest("openEMS is installed here")
+
+    def test_a_required_backend_that_is_missing_blocks(self):
+        from pcbqa import backends
+        with self.assertRaises(backends.BackendUnavailable):
+            backends.select("openems", {"required": True})
+
+    def test_silence_means_required(self):
+        from pcbqa import backends
+        with self.assertRaises(backends.BackendUnavailable):
+            backends.select("openems", {})
+
+    def test_an_optional_backend_falls_back_and_says_so(self):
+        from pcbqa import backends
+        selection = backends.select("openems", {"required": False})
+        self.assertEqual(selection.used, backends.ANALYTIC)
+        self.assertEqual(selection.requested, "openems")
+        self.assertTrue(selection.fell_back)
+        self.assertIn("fallback", selection.detail.lower() + " fallback")
+
+    def test_a_fallback_to_something_unimplemented_refuses(self):
+        from pcbqa import backends
+        with self.assertRaises(backends.BackendError):
+            backends.select("openems", {"required": False,
+                                        "fallback": "handwaving"})
+
+    def test_a_backend_cannot_fall_back_to_itself(self):
+        from pcbqa import backends
+        with self.assertRaises(backends.BackendError):
+            backends.select("openems", {"required": False,
+                                        "fallback": "openems"})
+
+    def test_the_gates_report_the_backend_that_actually_ran(self):
+        def mutate(document, _project):
+            document["timing"]["propagation"].update(
+                {"backend": "openems", "required": False})
+        fixture = make(mutate=mutate, tag="backend_fb")
+        result = fixture.gates(only={"TIMING.INTERCONNECT_DELAY"})[
+            "TIMING.INTERCONNECT_DELAY"]
+        self.assertNotEqual(result.status, Status.ERROR, result.reason)
+        self.assertEqual(result.measurements["backend_requested"], "openems")
+        self.assertEqual(result.measurements["backend_used"], "analytic")
+        self.assertTrue(result.measurements["backend_fell_back"])
+
+    def test_a_required_backend_blocks_delay_but_not_geometry(self):
+        def mutate(document, _project):
+            document["timing"]["propagation"]["backend"] = "openems"
+        fixture = make(mutate=mutate, tag="backend_req")
+        results = fixture.gates(only={"TIMING.PATH_INTEGRITY",
+                                      "TIMING.INTERCONNECT_DELAY"})
+        self.assertEqual(results["TIMING.INTERCONNECT_DELAY"].status,
+                         Status.ERROR)
+        self.assertEqual(results["TIMING.PATH_INTEGRITY"].status, Status.PASS)
+
+
+# ---------------------------------------------------------------------------
+# stackup applicability and contradictions
+# ---------------------------------------------------------------------------
+
+def _supplement(layers, **top):
+    def mutate(document, project):
+        directory = os.path.join(project, "models")
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "supplement.json"), "w",
+                  encoding="utf-8") as handle:
+            json.dump({"layers": layers, **top}, handle)
+        document["timing"]["physical_stackup"]["supplement"] = \
+            "models/supplement.json"
+    return mutate
+
+
+def _fixture_layers(**overrides):
+    out = []
+    for entry in FIXTURE_STACKUP:
+        entry = dict(entry, kind=_kind(entry))
+        for field, value in overrides.items():
+            if field in entry:
+                entry[field] = value
+        out.append(entry)
+    return out
+
+
+class StackupApplicabilityFollowsTheAnalysis(unittest.TestCase):
+    """Complete for what, exactly."""
+
+    def test_a_stackup_missing_only_unread_fields_is_sufficient(self):
+        """Loss tangent and copper weight are not inputs to this model."""
+        layers = _fixture_layers(loss_tangent=None)
+        for entry in layers:
+            if entry["kind"] == "copper":
+                entry["thickness_mm"] = None
+
+        def mutate(document, project):
+            _supplement(layers)(document, project)
+            document["timing"]["physical_stackup"]["require_complete"] = True
+        fixture = make(mutate=mutate, with_stackup=False, tag="stack_enough")
+        result = fixture.gates(only={"STACK.PHYSICAL"})["STACK.PHYSICAL"]
+        self.assertEqual(result.status, Status.PASS, result.reason)
+        self.assertEqual(result.measurements["insufficient_fields"], [])
+        # And the full inventory still records what is absent.
+        self.assertTrue(result.measurements["full_inventory_gaps"])
+
+    def test_the_same_stackup_is_insufficient_for_a_model_that_reads_more(self):
+        layers = _fixture_layers()
+        for entry in layers:
+            if entry["kind"] == "copper":
+                entry["thickness_mm"] = None
+
+        def mutate(document, project):
+            _supplement(layers)(document, project)
+            document["timing"]["physical_stackup"]["require_complete"] = True
+            document["timing"]["propagation"]["model"] = propagation.HAMMERSTAD_T
+        fixture = make(mutate=mutate, with_stackup=False, tag="stack_tcorr")
+        result = fixture.gates(only={"STACK.PHYSICAL"})["STACK.PHYSICAL"]
+        self.assertEqual(result.status, Status.FAIL, result.reason)
+        self.assertTrue(any(f.get("field") == stackup_physical.
+                            NEEDS_COPPER_THICKNESS
+                            for f in result.findings), result.findings)
+
+    def test_a_layer_nothing_routes_on_cannot_block_an_analysis(self):
+        """Only the layers the declared paths use are consulted."""
+        stack = stackup_physical.from_declaration({"layers": _fixture_layers()})
+        stack.layers[3].epsilon_r = None            # the inner core
+        missing = stack.completeness(
+            required={stackup_physical.NEEDS_EPSILON_R}, layers=["F.Cu"])
+        self.assertEqual(missing, [])
+        self.assertTrue(stack.completeness(
+            required={stackup_physical.NEEDS_EPSILON_R}))
+
+    def test_a_declared_constant_removes_the_geometry_requirement(self):
+        required = propagation.required_stackup_fields(
+            propagation.HAMMERSTAD, propagation.VIA_NONE,
+            {"F.Cu": True}, ["F.Cu"])
+        self.assertEqual(required, set())
+
+
+class StackupContradictionsAlwaysBlock(unittest.TestCase):
+
+    def _contradiction(self, layers, tag, **top):
+        fixture = make(mutate=_supplement(layers, **top), with_stackup=False,
+                       tag=tag)
+        return fixture.gates(only={"STACK.PHYSICAL"})["STACK.PHYSICAL"]
+
+    def test_layers_thicker_than_the_board_are_impossible(self):
+        layers = _fixture_layers()
+        layers[3]["thickness_mm"] = 40.0
+        result = self._contradiction(layers, "sx_thick",
+                                     total_thickness_mm=1.6)
+        self.assertEqual(result.status, Status.FAIL, result.reason)
+        self.assertIn("overall thickness", result.reason + str(result.findings))
+
+    def test_a_permittivity_below_one_is_impossible(self):
+        stack = stackup_physical.from_declaration(
+            {"layers": _fixture_layers(epsilon_r=0.5)})
+        self.assertTrue(any("below 1" in p["issue"]
+                            for p in stack.contradictions()))
+
+    def test_a_negative_thickness_is_impossible(self):
+        stack = stackup_physical.from_declaration(
+            {"layers": _fixture_layers(thickness_mm=-0.1)})
+        self.assertTrue(any("positive length" in p["issue"]
+                            for p in stack.contradictions()))
+
+    def test_two_adjacent_copper_layers_are_impossible(self):
+        layers = [entry for entry in _fixture_layers()
+                  if entry["name"] != "dielectric 1"]
+        stack = stackup_physical.from_declaration({"layers": layers})
+        self.assertTrue(any("adjacent" in p["issue"]
+                            for p in stack.contradictions()))
+
+    def test_a_stackup_describing_other_copper_layers_is_caught(self):
+        stack = stackup_physical.from_declaration(
+            {"layers": _fixture_layers()})
+        problems = stack.contradictions(["F.Cu", "In1.Cu", "B.Cu"])
+        self.assertTrue(any("copper layers" in p["issue"] for p in problems),
+                        problems)
+
+    def test_a_contradiction_blocks_whatever_the_completeness_policy_says(self):
+        layers = _fixture_layers()
+        layers[3]["thickness_mm"] = 40.0
+
+        def mutate(document, project):
+            _supplement(layers, total_thickness_mm=1.6)(document, project)
+            document["timing"]["physical_stackup"]["require_complete"] = False
+        fixture = make(mutate=mutate, with_stackup=False, tag="sx_policy")
+        result = fixture.gates(only={"STACK.PHYSICAL"})["STACK.PHYSICAL"]
+        self.assertEqual(result.status, Status.FAIL, result.reason)
+
+    def test_a_supplement_may_not_add_a_copper_layer(self):
+        native = stackup_physical.from_declaration(
+            {"layers": _fixture_layers()}, source=stackup_physical.NATIVE)
+        extra = _fixture_layers() + [
+            {"name": "In9.Cu", "kind": "copper", "type": "copper",
+             "thickness_mm": 0.0175}]
+        with self.assertRaises(stackup_physical.StackupError):
+            stackup_physical.merge(
+                native, stackup_physical.from_declaration({"layers": extra}))
+
+
+# ---------------------------------------------------------------------------
+# transmission-line classification
+# ---------------------------------------------------------------------------
+
+class ClassificationIsConservative(unittest.TestCase):
+
+    def _stack(self, **kwargs):
+        stack = stackup_physical.from_declaration(
+            {"layers": _fixture_layers()})
+        for key, value in kwargs.items():
+            setattr(stack, key, value)
+        return stack
+
+    def test_outer_is_decided_by_the_board_not_by_the_declaration(self):
+        """A supplement missing the bottom layer must not promote an inner one."""
+        partial = stackup_physical.from_declaration(
+            {"layers": _fixture_layers()[:-1]})
+        partial.board_copper_layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+        self.assertEqual(
+            partial.reference_geometry("In2.Cu", {"In1.Cu"}).mode,
+            propagation.EMBEDDED_MICROSTRIP)
+        # Without the board's own list it would have looked like the last
+        # copper layer there is, and therefore outer.
+        partial.board_copper_layers = None
+        self.assertEqual(
+            partial.reference_geometry("In2.Cu", {"In1.Cu"}).mode,
+            propagation.MICROSTRIP)
+
+    def test_a_signal_layer_between_a_trace_and_a_plane_hides_the_plane(self):
+        stack = self._stack()
+        geometry = stack.reference_geometry("F.Cu", {"In2.Cu"})
+        self.assertIsNone(geometry.mode)
+
+    def test_no_model_is_chosen_for_an_unclassifiable_layer(self):
+        stack = self._stack()
+        model = propagation.PropagationModel(stack, {"In2.Cu"})
+        with self.assertRaises(propagation.Unsupported):
+            model.conductor("F.Cu", TRACK_WIDTH_MM)
+
+    def test_the_implemented_geometries_are_exactly_these(self):
+        """A guard against quietly widening what the analytic model claims."""
+        stack = self._stack()
+        model = propagation.PropagationModel(stack, {"F.Cu", "In2.Cu"})
+        supported = set()
+        for layer in stack.copper_layer_names:
+            try:
+                supported.add(model.conductor(layer, TRACK_WIDTH_MM)["mode"])
+            except propagation.PropagationError:
+                continue
+        self.assertTrue(supported <= {propagation.MICROSTRIP,
+                                      propagation.STRIPLINE,
+                                      propagation.ASYMMETRIC_STRIPLINE},
+                        supported)
+
+
+# ---------------------------------------------------------------------------
+# path declarations, as an external interface
+# ---------------------------------------------------------------------------
+
+def _route(steps, path_id="p"):
+    return {"paths": [{"id": path_id, "steps": steps}]}
+
+
+class PathDeclarationRobustness(unittest.TestCase):
+
+    def _refuses(self, steps):
+        with self.assertRaises(PathError):
+            electrical_path.paths_from_spec(_route(steps))
+
+    def test_two_copper_steps_in_a_row_refuse(self):
+        self._refuses([
+            {"kind": "copper", "net": "A", "from": "X.1", "to": "Y.1"},
+            {"kind": "copper", "net": "B", "from": "Y.1", "to": "Z.1"}])
+
+    def test_two_component_steps_in_a_row_refuse(self):
+        self._refuses([
+            {"kind": "copper", "net": "A", "from": "X.1", "to": "R1.1"},
+            {"kind": "component", "reference": "R1", "from_pad": "1",
+             "to_pad": "2"},
+            {"kind": "component", "reference": "R2", "from_pad": "1",
+             "to_pad": "2"},
+            {"kind": "copper", "net": "B", "from": "R2.2", "to": "Z.1"}])
+
+    def test_a_repeated_net_is_a_loop(self):
+        self._refuses([
+            {"kind": "copper", "net": "A", "from": "X.1", "to": "R1.1"},
+            {"kind": "component", "reference": "R1", "from_pad": "1",
+             "to_pad": "2"},
+            {"kind": "copper", "net": "A", "from": "R1.2", "to": "Z.1"}])
+
+    def test_crossing_one_part_twice_refuses(self):
+        self._refuses([
+            {"kind": "copper", "net": "A", "from": "X.1", "to": "R1.1"},
+            {"kind": "component", "reference": "R1", "from_pad": "1",
+             "to_pad": "2"},
+            {"kind": "copper", "net": "B", "from": "R1.2", "to": "R1.3"},
+            {"kind": "component", "reference": "R1", "from_pad": "3",
+             "to_pad": "4"},
+            {"kind": "copper", "net": "C", "from": "R1.4", "to": "Z.1"}])
+
+    def test_a_component_crossed_pad_to_the_same_pad_refuses(self):
+        self._refuses([
+            {"kind": "copper", "net": "A", "from": "X.1", "to": "R1.1"},
+            {"kind": "component", "reference": "R1", "from_pad": "1",
+             "to_pad": "1"},
+            {"kind": "copper", "net": "B", "from": "R1.1", "to": "Z.1"}])
+
+    def test_a_copper_step_from_a_pad_to_itself_refuses(self):
+        self._refuses([{"kind": "copper", "net": "A", "from": "X.1",
+                        "to": "X.1"}])
+
+    def test_an_ambiguous_source_refuses_by_default(self):
+        def mutate(document, _project):
+            steps = document["timing"]["interfaces"]["series"]["routes"][
+                "template"]["steps"]
+            steps[2]["from"] = "^(R1\\.2|L1\\.1)$"
+        fixture = make(mutate=mutate, tag="ambiguous")
+        result = fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
+            "TIMING.PATH_INTEGRITY"]
+        self.assertEqual(result.status, Status.FAIL, result.reason)
+        self.assertTrue(any("stable declaration" in str(f.get("issue", ""))
+                            for f in result.findings), result.findings)
+
+    def test_an_ambiguous_source_is_allowed_when_declared(self):
+        def mutate(document, _project):
+            steps = document["timing"]["interfaces"]["series"]["routes"][
+                "template"]["steps"]
+            steps[2]["from"] = "^(R1\\.2|L1\\.1)$"
+            steps[2]["source_selection"] = "shortest"
+        fixture = make(mutate=mutate, tag="ambiguous_ok")
+        result = fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
+            "TIMING.PATH_INTEGRITY"]
+        self.assertEqual(result.status, Status.PASS, result.reason)
+
+    def test_one_malformed_route_does_not_blind_the_others(self):
+        def mutate(document, _project):
+            interface = document["timing"]["interfaces"]["series"]
+            interface["routes"] = {
+                "paths": [
+                    {"id": "good", "steps": [
+                        {"kind": "copper", "net": "SIG_B", "from": "R1.2",
+                         "to": "L1.1"}]},
+                    {"id": "broken", "steps": [
+                        {"kind": "copper", "net": "SIG_B", "from": "R1.2",
+                         "to": "R1.2"}]},
+                ]}
+            interface.pop("expected_path_count")
+            interface.pop("required_component_crossings")
+        fixture = make(mutate=mutate, tag="partial")
+        result = fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
+            "TIMING.PATH_INTEGRITY"]
+        self.assertEqual(result.status, Status.FAIL)
+        rows = result.measurements["interfaces"]["series"]["paths"]
+        self.assertEqual([r["path"] for r in rows], ["good"])
+        self.assertEqual([f["path"] for f in result.findings], ["broken"])
+
+    def test_duplicate_path_ids_are_reported_not_silently_merged(self):
+        paths_built, problems = electrical_path.build_paths({"paths": [
+            {"id": "same", "steps": [{"kind": "copper", "net": "A",
+                                      "from": "X.1", "to": "Y.1"}]},
+            {"id": "same", "steps": [{"kind": "copper", "net": "A",
+                                      "from": "X.1", "to": "Z.1"}]}]})
+        self.assertEqual(len(paths_built), 1)
+        self.assertEqual(len(problems), 1)
+
+
+# ---------------------------------------------------------------------------
+# connectivity accuracy
+# ---------------------------------------------------------------------------
+
+class ConnectivityAccuracy(unittest.TestCase):
+    """A stub landing mid-track must not charge the whole track."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = make(tag="accuracy")
+        geom.configure(0.001)
+        cls.board = cls.fixture.ctx.board()
+
+    def _graph(self, split):
+        from pcbqa.connectivity import NetGraph
+        return NetGraph(self.board, "SIG_T", geom.pad_copper_polygon,
+                        split_at_junctions=split)
+
+    def test_the_unsplit_graph_charges_the_whole_run(self):
+        """The pre-existing behaviour, unchanged and still the default."""
+        self.assertAlmostEqual(
+            self._graph(False).path_length(["D3.1"], "L4.1"),
+            TEE_UNSPLIT_MM, places=4)
+
+    def test_the_split_graph_charges_only_what_is_travelled(self):
+        self.assertAlmostEqual(
+            self._graph(True).path_length(["D3.1"], "L4.1"),
+            TEE_SPLIT_MM, places=4)
+
+    def test_a_walk_that_uses_the_whole_run_is_unchanged_by_splitting(self):
+        for split in (False, True):
+            self.assertAlmostEqual(
+                self._graph(split).path_length(["D3.1"], "L5.1"),
+                LENGTH_TEE_RUN_MM, places=4)
+
+    def test_splitting_does_not_change_the_copper_total(self):
+        self.assertAlmostEqual(self._graph(False).total_track_mm(),
+                               self._graph(True).total_track_mm(), places=4)
+
+    def test_the_default_is_unsplit_so_existing_measurements_are_untouched(self):
+        from pcbqa.connectivity import NetGraph
+        graph = NetGraph(self.board, "SIG_T", geom.pad_copper_polygon)
+        self.assertFalse(graph.split_at_junctions)
+
+    def test_electrical_paths_use_the_accurate_graph(self):
+        def mutate(document, _project):
+            document["timing"]["interfaces"] = {"tee": {
+                "description": "a stub landing mid-run",
+                "routes": _route([{"kind": "copper", "net": "SIG_T",
+                                   "from": "D3.1", "to": "L4.1"}], "tee")}}
+        fixture = make(mutate=mutate, tag="accuracy_path")
+        row = fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
+            "TIMING.PATH_INTEGRITY"].measurements[
+                "interfaces"]["tee"]["paths"][0]
+        self.assertAlmostEqual(row["copper_length_mm"], TEE_SPLIT_MM, places=3)
+
+    def test_a_pad_at_a_track_end_does_not_shorten_the_measurement(self):
+        """The convention that was there before, deliberately preserved."""
+        from pcbqa.connectivity import NetGraph
+        graph = NetGraph(self.board, "SIG_A", geom.pad_copper_polygon,
+                         split_at_junctions=True)
+        self.assertAlmostEqual(graph.path_length(["D1.1"], "R1.1"),
+                               LENGTH_PRE_SERIES_MM, places=6)
+
+
+class MultipleViasAndMixedWidths(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        def mutate(document, _project):
+            document["timing"]["interfaces"] = {"multi": {
+                "description": "two layer changes and a width change",
+                "expected_path_count": 1,
+                "routes": _route([{"kind": "copper", "net": "SIG_M",
+                                   "from": "D5.1", "to": "L7.1"}], "multi")}}
+        cls.fixture = make(mutate=mutate, tag="multivia")
+        cls.record = _find(cls.fixture, "multi")
+
+    def test_both_via_transitions_are_recorded(self):
+        transitions = self.record["resolved"].via_transitions()
+        self.assertEqual(len(transitions), 2)
+        self.assertEqual([t["from_layer"] for t in transitions],
+                         ["F.Cu", "B.Cu"])
+        self.assertEqual([t["to_layer"] for t in transitions],
+                         ["B.Cu", "F.Cu"])
+
+    def test_length_is_split_across_layers(self):
+        by_layer = self.record["resolved"].length_by_layer_mm()
+        self.assertAlmostEqual(by_layer["F.Cu"],
+                               LENGTH_M_TOP_A_MM + LENGTH_M_TOP_B_MM, places=4)
+        self.assertAlmostEqual(by_layer["B.Cu"], LENGTH_M_BOTTOM_MM, places=4)
+
+    def test_each_width_is_modelled_separately(self):
+        conductors = {(c["layer"], c["width_mm"]): c["length_mm"]
+                      for c in self.record["resolved"].conductors()}
+        self.assertAlmostEqual(conductors[("F.Cu", TRACK_WIDTH_MM)],
+                               LENGTH_M_TOP_A_MM + LENGTH_M_TOP_B_MM, places=4)
+        self.assertAlmostEqual(conductors[("B.Cu", WIDE_TRACK_MM)],
+                               LENGTH_M_BOTTOM_MM, places=4)
+
+    def test_the_delay_sums_the_two_widths_at_their_own_velocities(self):
+        narrow = expected_microstrip_ps_per_mm(TRACK_WIDTH_MM)
+        wide = expected_microstrip_ps_per_mm(WIDE_TRACK_MM)
+        self.assertNotAlmostEqual(narrow, wide, places=3)
+        self.assertAlmostEqual(
+            self.record["delay"]["delay_ps"],
+            (LENGTH_M_TOP_A_MM + LENGTH_M_TOP_B_MM) * narrow
+            + LENGTH_M_BOTTOM_MM * wide, places=4)
+
+
+# ---------------------------------------------------------------------------
+# fidelity
+# ---------------------------------------------------------------------------
+
+class FidelityCannotOverstate(unittest.TestCase):
+
+    def test_the_weakest_portion_decides(self):
+        self.assertEqual(
+            propagation.weakest({propagation.ANALYTIC_TRANSMISSION_LINE,
+                                 propagation.UNKNOWN_CONTRIBUTION}),
+            propagation.UNKNOWN_CONTRIBUTION)
+        self.assertEqual(
+            propagation.weakest({propagation.DECLARED_PROPAGATION,
+                                 propagation.ANALYTIC_TRANSMISSION_LINE}),
+            propagation.ANALYTIC_TRANSMISSION_LINE)
+
+    def test_an_unrecognised_fidelity_never_ranks_high(self):
+        self.assertEqual(
+            propagation.weakest({propagation.DEVICE_AWARE, "from-the-future"}),
+            "from-the-future")
+        self.assertEqual(propagation.fidelity_rank("from-the-future"), -1)
+
+    def test_nothing_measured_is_geometry_only(self):
+        self.assertEqual(propagation.weakest(set()),
+                         propagation.GEOMETRY_ONLY)
+
+    def test_the_ladder_keeps_its_distinctions(self):
+        rank = propagation.fidelity_rank
+        self.assertLess(rank(propagation.GEOMETRY_ONLY),
+                        rank(propagation.UNKNOWN_CONTRIBUTION))
+        self.assertLess(rank(propagation.UNKNOWN_CONTRIBUTION),
+                        rank(propagation.ANALYTIC_TRANSMISSION_LINE))
+        self.assertLess(rank(propagation.ANALYTIC_TRANSMISSION_LINE),
+                        rank(propagation.DECLARED_PROPAGATION))
+        self.assertLess(rank(propagation.DECLARED_PROPAGATION),
+                        rank(propagation.QUASI_STATIC_EXTRACTED))
+        self.assertLess(rank(propagation.QUASI_STATIC_EXTRACTED),
+                        rank(propagation.FULL_WAVE_EXTRACTED))
+        self.assertLess(rank(propagation.FULL_WAVE_EXTRACTED),
+                        rank(propagation.DEVICE_AWARE))
+
+    def test_a_path_with_no_modelled_copper_reports_nothing(self):
+        """A total of zero would be a number where nothing was measured."""
+        stack = stackup_physical.from_declaration(
+            {"layers": _fixture_layers()})
+        model = propagation.PropagationModel(stack, {"In1.Cu"})
+
+        class _Empty:
+            id = "empty"
+            source = electrical_path.Endpoint("A.1", "N", "source")
+            destination = electrical_path.Endpoint("B.1", "N", "destination")
+            copper_length_mm = 0.0
+
+            @staticmethod
+            def length_by_layer_mm():
+                return {}
+
+            @staticmethod
+            def conductors():
+                return []
+
+            @staticmethod
+            def via_transitions():
+                return []
+
+            @staticmethod
+            def component_traversals():
+                return []
+
+        record = model.evaluate(_Empty())
+        self.assertIsNone(record["delay_ps"])
+        self.assertEqual(record["fidelity"], propagation.GEOMETRY_ONLY)
+
+
+class TheBackendResultContract(unittest.TestCase):
+    """What any backend has to return, so the gates need not know which ran."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = make(tag="contract")
+        cls.record = _find(cls.fixture, "layer_change")["delay"]
+
+    def test_a_path_result_carries_every_contract_field(self):
+        for field in propagation.PATH_RESULT_FIELDS:
+            self.assertIn(field, self.record, field)
+
+    def test_a_conductor_result_carries_every_contract_field(self):
+        for conductor in self.record["conductors"]:
+            for field in propagation.CONDUCTOR_RESULT_FIELDS:
+                self.assertIn(field, conductor, field)
+
+    def test_a_via_result_carries_every_contract_field(self):
+        for via in self.record["vias"]:
+            for field in propagation.VIA_RESULT_FIELDS:
+                self.assertIn(field, via, field)
+
+    def test_the_backend_that_ran_is_named_on_the_result(self):
+        self.assertEqual(self.record["backend"], "analytic")
+
+    def test_the_gates_read_no_backend_specific_field(self):
+        """A gate reaching into a backend's internals could not survive a
+        second backend, so it must not."""
+        source = open(os.path.join(paths.PACKAGE, "gates", "g_timing.py"),
+                      encoding="utf-8").read()
+        for token in ("openems", "openEMS", "s2p", "touchstone"):
+            self.assertNotIn(token, source, token)
+
+
+class AnUndeclaredViaTreatmentIsAnOmission(unittest.TestCase):
+    """`none` chosen is a decision; `none` inherited is nobody having asked."""
+
+    def _record(self, tag, propagation_spec):
+        def mutate(document, _project):
+            document["timing"]["propagation"] = propagation_spec
+        fixture = make(mutate=mutate, tag=tag)
+        return _find(fixture, "layer_change")["delay"]
+
+    def test_declaring_none_makes_the_zero_exact(self):
+        record = self._record("via_declared", {
+            "backend": "analytic", "model": propagation.HAMMERSTAD,
+            "via_delay_model": propagation.VIA_NONE})
+        self.assertFalse(record["delay_is_lower_bound"])
+        self.assertEqual(record["vias"][0]["fidelity"],
+                         propagation.DECLARED_MODEL)
+
+    def test_declaring_nothing_makes_the_total_a_lower_bound(self):
+        record = self._record("via_silent", {
+            "backend": "analytic", "model": propagation.HAMMERSTAD})
+        self.assertTrue(record["delay_is_lower_bound"])
+        self.assertEqual(record["vias"][0]["fidelity"],
+                         propagation.UNKNOWN_CONTRIBUTION)
+        self.assertEqual(record["fidelity"], propagation.UNKNOWN_CONTRIBUTION)
+
+    def test_a_path_with_no_vias_is_unaffected_either_way(self):
+        def mutate(document, _project):
+            document["timing"]["propagation"] = {
+                "backend": "analytic", "model": propagation.HAMMERSTAD}
+            steps = document["timing"]["interfaces"]["series"]["routes"][
+                "template"]["steps"]
+            steps[1]["delay_model"] = {"model": "none",
+                                       "justification": "fixture"}
+        fixture = make(mutate=mutate, tag="via_none_path")
+        record = _find(fixture, "series_branch_to_L1")["delay"]
+        self.assertFalse(record["delay_is_lower_bound"])
 
 
 if __name__ == "__main__":                                  # pragma: no cover
