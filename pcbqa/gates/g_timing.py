@@ -26,10 +26,9 @@ from __future__ import annotations
 import os
 import re
 
-from ..core import Status, gate
+from ..core import gate
 from .. import electrical_path, geom, propagation, stackup_physical
 from ..electrical_path import PathError
-from ..propagation import PropagationError
 from ..stackup_physical import StackupError
 
 
