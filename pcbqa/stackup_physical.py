@@ -45,6 +45,33 @@ COPPER = "copper"
 DIELECTRIC = "dielectric"
 OTHER = "other"
 
+#: What an analysis may need from a stackup. Named separately because
+#: different analyses need different subsets, and a stackup that cannot
+#: support one may support another perfectly well. A first-order delay needs a
+#: height and a permittivity; it does not need a loss tangent, and refusing it
+#: for the want of one would be refusing an answer it never had to ask about.
+NEEDS_DIELECTRIC_THICKNESS = "dielectric_thickness"
+NEEDS_EPSILON_R = "epsilon_r"
+NEEDS_LOSS_TANGENT = "loss_tangent"
+NEEDS_COPPER_THICKNESS = "copper_thickness"
+
+ALL_FIELDS = (NEEDS_DIELECTRIC_THICKNESS, NEEDS_EPSILON_R,
+              NEEDS_LOSS_TANGENT, NEEDS_COPPER_THICKNESS)
+
+_FIELD_OF = {
+    NEEDS_DIELECTRIC_THICKNESS: ("thickness_mm", "thickness"),
+    NEEDS_EPSILON_R: ("epsilon_r", "relative permittivity"),
+    NEEDS_LOSS_TANGENT: ("loss_tangent", "loss tangent"),
+}
+
+_NEEDED_FOR = {
+    NEEDS_DIELECTRIC_THICKNESS: "any propagation delay",
+    NEEDS_EPSILON_R: "any propagation delay",
+    NEEDS_LOSS_TANGENT: "attenuation, which no model here computes",
+    NEEDS_COPPER_THICKNESS: "the thickness-corrected microstrip model and "
+                            "via geometry",
+}
+
 # KiCad's own layer type strings, mapped to what a field solver cares about.
 _DIELECTRIC_TYPES = ("core", "prepreg")
 
@@ -182,11 +209,17 @@ class PhysicalStackup:
     """An ordered physical stack, and what can be asked of it."""
 
     def __init__(self, layers, source, declared_total_thickness_mm=None,
-                 notes=None):
+                 notes=None, board_copper_layers=None):
         self.layers = list(layers)
         self.source = source
         self.declared_total_thickness_mm = declared_total_thickness_mm
         self.notes = list(notes or [])
+        #: The board's own copper stack, when the caller knows it. Which layer
+        #: is outer decides whether a trace has air on one side, and answering
+        #: that from a supplemental declaration that might be missing a layer
+        #: would be answering it about the wrong board.
+        self.board_copper_layers = (list(board_copper_layers)
+                                    if board_copper_layers else None)
 
     # -- shape -------------------------------------------------------------
     @property
@@ -212,40 +245,148 @@ class PhysicalStackup:
     def empty(self):
         return not self.layers
 
-    # -- what is missing ---------------------------------------------------
-    def completeness(self):
-        """Every field a propagation model would need and does not have."""
+    # -- what is missing, for the question being asked ---------------------
+    def relevant_dielectrics(self, layers=None):
+        """The dielectrics that could matter to traces on `layers`.
+
+        A dielectric between two copper layers neither of which carries any of
+        the paths under analysis cannot make that analysis impossible, and
+        demanding it would be demanding data for its own sake.
+        """
+        if layers is None:
+            return [l for l in self.layers if l.is_dielectric]
+        wanted = set(layers)
+        out, pending, seen_copper = [], [], None
+        for entry in self.layers:
+            if entry.is_copper:
+                if pending and (seen_copper in wanted or entry.name in wanted):
+                    out.extend(pending)
+                pending, seen_copper = [], entry.name
+            elif entry.is_dielectric:
+                pending.append(entry)
+        if pending and seen_copper in wanted:
+            out.extend(pending)
+        return out
+
+    def completeness(self, required=None, layers=None):
+        """Every field the requested analysis needs and does not have.
+
+        `required` is a set of the NEEDS_* capabilities. Omitted, it reports
+        the whole inventory - which is what a human reading a report wants -
+        with each entry tagged by the capability it belongs to, so a reader can
+        still tell what actually blocks something.
+        """
+        wanted = set(ALL_FIELDS if required is None else required)
         problems = []
         if self.empty:
             problems.append({
                 "issue": "no physical stackup is available at all",
+                "needed_for": "every analysis",
                 "detail": "the board file carries no (stackup ...) block and "
                           "no supplemental declaration was provided"})
             return problems
-        for entry in self.layers:
-            if entry.is_copper and entry.thickness_mm is None:
-                problems.append({
-                    "layer": entry.name,
-                    "issue": "copper thickness is not stated",
-                    "needed_for": "the thickness-corrected microstrip model "
-                                  "and for via geometry, not for the "
-                                  "zero-thickness model"})
-            if not entry.is_dielectric:
-                continue
-            for field, label, needed in (
-                    ("thickness_mm", "thickness", "delay"),
-                    ("epsilon_r", "relative permittivity", "delay"),
-                    ("loss_tangent", "loss tangent", "loss, not delay")):
-                if getattr(entry, field) is None:
-                    problems.append({"layer": entry.name,
-                                     "issue": "{} is not stated".format(label),
-                                     "needed_for": needed})
+
+        if NEEDS_COPPER_THICKNESS in wanted:
+            for entry in self.copper_layers:
+                if layers is not None and entry.name not in layers:
+                    continue
+                if entry.thickness_mm is None:
+                    problems.append({
+                        "layer": entry.name, "field": NEEDS_COPPER_THICKNESS,
+                        "issue": "copper thickness is not stated",
+                        "needed_for": "the thickness-corrected microstrip "
+                                      "model and via geometry"})
+
+        for entry in self.relevant_dielectrics(layers):
+            for capability in (NEEDS_DIELECTRIC_THICKNESS, NEEDS_EPSILON_R,
+                               NEEDS_LOSS_TANGENT):
+                if capability not in wanted:
+                    continue
+                attribute, label = _FIELD_OF[capability]
+                if getattr(entry, attribute) is None:
+                    problems.append({
+                        "layer": entry.name, "field": capability,
+                        "issue": "{} is not stated".format(label),
+                        "needed_for": _NEEDED_FOR[capability]})
             if not entry.uniform:
                 problems.append({
-                    "layer": entry.name,
+                    "layer": entry.name, "field": NEEDS_EPSILON_R,
                     "issue": "is built from sub-layers with different "
                              "permittivities, which no single-dielectric "
-                             "model represents"})
+                             "model represents",
+                    "needed_for": _NEEDED_FOR[NEEDS_EPSILON_R]})
+        return problems
+
+    # -- what is wrong, as opposed to absent -------------------------------
+    def contradictions(self, board_copper_layers=None):
+        """Declarations that cannot describe a real board.
+
+        Distinct from `completeness`, and more serious: a missing figure means
+        an analysis cannot run, while a contradictory one means the stackup
+        being reasoned about is not a stackup. Absence never produces a wrong
+        answer; a contradiction can.
+        """
+        problems = []
+        seen = {}
+        for entry in self.layers:
+            if entry.name in seen:
+                problems.append({
+                    "layer": entry.name,
+                    "issue": "the stackup names this layer more than once, so "
+                             "no question about it has one answer"})
+            seen[entry.name] = entry
+            if entry.thickness_mm is not None and entry.thickness_mm <= 0:
+                problems.append({
+                    "layer": entry.name, "value": entry.thickness_mm,
+                    "issue": "thickness is not a positive length"})
+            if entry.epsilon_r is not None and entry.epsilon_r < 1.0:
+                problems.append({
+                    "layer": entry.name, "value": entry.epsilon_r,
+                    "issue": "relative permittivity is below 1, which no "
+                             "dielectric has"})
+            if entry.loss_tangent is not None and not (
+                    0.0 <= entry.loss_tangent < 1.0):
+                problems.append({
+                    "layer": entry.name, "value": entry.loss_tangent,
+                    "issue": "loss tangent is outside the range a passive "
+                             "dielectric can have"})
+
+        # Two copper layers with nothing between them are one copper layer.
+        previous = None
+        for entry in self.layers:
+            if entry.is_copper:
+                if previous is not None:
+                    problems.append({
+                        "layers": [previous, entry.name],
+                        "issue": "two copper layers are adjacent with no "
+                                 "dielectric between them"})
+                previous = entry.name
+            elif entry.is_dielectric:
+                previous = None
+
+        # The parts cannot be thicker than the whole. Only the over-thickness
+        # direction is checked: a declaration that omits solder mask and
+        # silkscreen legitimately sums to less than the board, so under is not
+        # evidence of anything, while over always is.
+        total = self.declared_total_thickness_mm
+        summed = self.summed_thickness_mm()
+        if total is not None and summed is not None and summed > total + 1e-6:
+            problems.append({
+                "issue": "the declared layers sum to more than the board's "
+                         "overall thickness, so at least one of the two is "
+                         "wrong",
+                "summed_mm": summed, "overall_mm": total})
+
+        if board_copper_layers is not None and self.copper_layer_names:
+            if list(board_copper_layers) != self.copper_layer_names:
+                problems.append({
+                    "issue": "the physical stackup's copper layers are not the "
+                             "board's copper layers, in order; every question "
+                             "about which layer is outer, or which plane is "
+                             "next to which trace, would be answered about a "
+                             "different board",
+                    "board": list(board_copper_layers),
+                    "stackup": self.copper_layer_names})
         return problems
 
     # -- geometry ----------------------------------------------------------
@@ -289,8 +430,10 @@ class PhysicalStackup:
             # One reference plane. Whether that makes this a microstrip
             # depends on what is on the other side, and the only thing that
             # puts air there is being an outer copper layer.
-            outer = self.copper_layer_names[:1] + self.copper_layer_names[-1:]
-            mode = "microstrip" if signal_layer in outer else "embedded_microstrip"
+            known = self.board_copper_layers or self.copper_layer_names
+            outer = known[:1] + known[-1:]
+            mode = ("microstrip" if signal_layer in outer
+                    else "embedded_microstrip")
             gaps = [above_gap if above is not None else below_gap]
 
         # `problems` is what stops a PROPAGATION DELAY from being derived, and
@@ -375,6 +518,7 @@ class PhysicalStackup:
             "source": self.source,
             "layers": [l.to_dict() for l in self.layers],
             "copper_layers": self.copper_layer_names,
+            "board_copper_layers": self.board_copper_layers,
             "summed_thickness_mm": self.summed_thickness_mm(),
             "declared_total_thickness_mm": self.declared_total_thickness_mm,
             "notes": self.notes,
@@ -637,6 +781,14 @@ def merge(native, declared):
                     c["layer"], c["field"], c["native"], c["declared"])
                     for c in conflicts[:6])))
     extra = [name for name in by_name if native.layer(name) is None]
+    invented_copper = sorted(name for name in extra
+                             if by_name[name].is_copper)
+    if invented_copper:
+        raise StackupError(
+            "the board's supplemental stackup adds copper layer(s) {} that the "
+            "board file does not have. A supplement fills in what the design "
+            "authority does not say; it does not add layers to the "
+            "design".format(", ".join(invented_copper)))
     notes = list(native.notes) + list(declared.notes)
     if extra:
         notes.append("supplemental declaration names layer(s) the board file "
@@ -651,6 +803,13 @@ def merge(native, declared):
 # ---------------------------------------------------------------------------
 # which copper layers are reference planes
 # ---------------------------------------------------------------------------
+
+def board_copper_layers(board):
+    """The board's copper layers in physical order, canonically named."""
+    import pcbnew
+    return [pcbnew.LayerName(layer)
+            for layer in board.GetEnabledLayers().CuStack()]
+
 
 def plane_layers(board, reference_nets):
     """Copper layers carrying a zone on one of the reference nets.
