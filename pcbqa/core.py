@@ -329,17 +329,49 @@ def load_manifest(path):
 _REGISTRY = []
 
 
-def gate(gate_id, title, requires=(), order=100):
-    """Register a gate. `requires` lists manifest keys the gate needs; when any
-    is absent the gate reports NOT_APPLICABLE with the reason instead of
-    silently passing."""
+def gate(gate_id, title, requires=(), order=100, derives=()):
+    """Register a gate.
+
+    `requires` lists manifest keys the gate needs; when any is absent the gate
+    reports NOT_APPLICABLE with the reason instead of silently passing.
+
+    `derives` names the modules whose code *computes* what this gate reports,
+    as opposed to reading it off the board. It is the toolkit's own statement
+    about its own implementation, and it exists so that whether a board's
+    provenance covers the code behind a result can be checked against
+    something other than the board's own declaration of what that code is.
+    A board saying "these are my implementation dependencies" cannot be
+    validated by re-reading the same sentence.
+
+    A gate that only reports what the board already contains derives nothing
+    and declares nothing here. That is the common case and it is correct: if
+    the value would be the same whoever wrote the reader, the reader is not
+    part of the value's provenance.
+    """
     def wrap(fn):
         _REGISTRY.append({
             "id": gate_id, "title": title, "requires": tuple(requires),
-            "fn": fn, "order": order,
+            "fn": fn, "order": order, "derives": tuple(derives),
         })
         return fn
     return wrap
+
+
+def derivation_modules(gate_ids=None):
+    """Every module the registered gates say derives a result.
+
+    `gate_ids` narrows it to a subset - normally the gates that actually ran
+    and reported something on the board in hand, because a gate that was never
+    applicable derived nothing that needs covering.
+    """
+    wanted = None if gate_ids is None else set(gate_ids)
+    out = {}
+    for entry in registered():
+        if wanted is not None and entry["id"] not in wanted:
+            continue
+        for name in entry.get("derives", ()):
+            out.setdefault(name, []).append(entry["id"])
+    return {name: sorted(gates) for name, gates in sorted(out.items())}
 
 
 def registered():

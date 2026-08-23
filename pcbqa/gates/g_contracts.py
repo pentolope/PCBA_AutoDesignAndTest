@@ -38,7 +38,11 @@ def _docs(ctx, patterns):
 # ---------------------------------------------------------------------------
 
 @gate("NET.TOPOLOGY", "Critical-net topology and length matching",
-      requires=("net_topology.rules",))
+      requires=("net_topology.rules",),
+      # These lengths are computed, not read: a shortest connected walk over
+      # copper polygons is an answer this code produces, so a board pinning
+      # its inputs has to pin this too.
+      derives=("pcbqa.connectivity", "pcbqa.rules", "pcbqa.gates.g_contracts"))
 def net_topology(ctx, res):
     board = ctx.board()
     # Connectivity is decided by whether copper shapes actually intersect, so

@@ -133,7 +133,10 @@ def _rederive(ctx, spec):
 @gate("CPL.ORIENTATION",
       "Placement angles come from a reviewed, evidence-backed registry",
       requires=("artifacts.cpl", "artifacts.cpl_fields",
-                "release_generation.cpl_orientation"))
+                "release_generation.cpl_orientation"),
+      # The offsets are derived from frozen evidence by this code, not
+      # read off the board.
+      derives=("pcbqa.orientation", "pcbqa.gates.g_orientation"))
 def cpl_orientation(ctx, res):
     spec = ctx.manifest.get("release_generation.cpl_orientation")
     path = ctx.manifest.resolve(ctx.manifest.get("artifacts.cpl"))
