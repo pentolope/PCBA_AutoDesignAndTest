@@ -18,10 +18,12 @@ import. What this module owns is the decision, and one rule:
 
   * a board that asks for a backend and does not get it is an ERROR;
   * a board that asks for the analytic backend gets it;
-  * a board that says a solver is optional gets the analytic backend, and the
-    result records which one it actually was.
+  * a board that declares `"required": false` gets its fallback, and every
+    result records which backend actually ran and that it was a fallback.
 
-Nothing silently downgrades. `evaluate` on an unavailable backend raises.
+Nothing silently downgrades: the *only* route to a different backend than the
+one requested is the board having said so in writing, and `Selection` carries
+that fact into the report rather than leaving the two cases looking alike.
 """
 
 from __future__ import annotations
@@ -53,12 +55,49 @@ def available(name, spec=None):
                   "{}".format(name, ", ".join(KNOWN))
 
 
-def require(name, spec=None):
-    """The backend, or an exception saying why not.
+class Selection:
+    """Which backend a board asked for, which one ran, and why.
 
-    Called by a gate only when a board actually selected a non-analytic
-    backend, which is what keeps a solver out of the import path of an
-    ordinary run.
+    A separate object rather than a bare name because "the analytic model ran"
+    and "the analytic model ran because the solver this board would have
+    preferred is not installed" are different facts, and a report that cannot
+    tell them apart is a report that hides a downgrade.
+    """
+
+    __slots__ = ("requested", "used", "detail", "fell_back")
+
+    def __init__(self, requested, used, detail, fell_back=False):
+        self.requested = requested
+        self.used = used
+        self.detail = detail
+        self.fell_back = fell_back
+
+    def to_dict(self):
+        return {"backend_requested": self.requested,
+                "backend_used": self.used,
+                "backend_fell_back": self.fell_back,
+                "backend_detail": self.detail}
+
+    def __repr__(self):
+        return "<Selection {}->{}{}>".format(
+            self.requested, self.used, " (fallback)" if self.fell_back else "")
+
+
+def select(name, spec=None):
+    """Choose the backend to run, honouring what the board actually asked for.
+
+    Three cases, and the difference between them is the board's own
+    declaration rather than what happens to be installed:
+
+      * the requested backend is available - it is used;
+      * it is unavailable and the board requires it - this raises, because a
+        board that asked for a field solver did not ask for first-order
+        arithmetic wearing its name;
+      * it is unavailable and the board declared `"required": false` - the
+        fallback runs, and the result records that it did.
+
+    A board that declares nothing gets `required: true`. Silence is not
+    permission to substitute something cheaper.
     """
     spec = spec or {}
     if name not in KNOWN:
@@ -67,14 +106,47 @@ def require(name, spec=None):
             "{}".format(name, ", ".join(KNOWN)))
     ok, detail = available(name, spec)
     if ok:
-        return name
+        return Selection(name, name, detail)
+
     if spec.get("required", True):
         raise BackendUnavailable(
             "this board selects the {!r} propagation backend and it is not "
-            "usable here: {}. Refusing to substitute the analytic model, "
-            "because a board that asked for a field solver did not ask for "
-            "first-order arithmetic wearing its name".format(name, detail))
-    raise BackendUnavailable(detail)
+            "usable here: {}. Refusing to substitute another, because a board "
+            "that asked for a field solver did not ask for first-order "
+            "arithmetic wearing its name. Declare "
+            "`\"required\": false` with a fallback if an estimate is "
+            "acceptable".format(name, detail))
+
+    fallback = spec.get("fallback", ANALYTIC)
+    if fallback not in KNOWN:
+        raise BackendError(
+            "the fallback backend {!r} is not implemented; this release has "
+            "{}".format(fallback, ", ".join(KNOWN)))
+    if fallback == name:
+        raise BackendError(
+            "backend {!r} names itself as its own fallback, which cannot "
+            "resolve".format(name))
+    ok, fallback_detail = available(fallback, spec)
+    if not ok:
+        raise BackendUnavailable(
+            "this board permits falling back from {!r} to {!r}, and neither is "
+            "usable here: {}; {}".format(name, fallback, detail,
+                                         fallback_detail))
+    return Selection(
+        name, fallback,
+        "{} is unavailable ({}); this board permits a fallback, so {} ran "
+        "instead".format(name, detail, fallback),
+        fell_back=True)
+
+
+def require(name, spec=None):
+    """`select`, for a caller that will not accept a fallback.
+
+    Kept separate so the strict intent is visible at the call site rather than
+    buried in a spec key.
+    """
+    selection = select(name, dict(spec or {}, required=True))
+    return selection.used
 
 
 def describe():

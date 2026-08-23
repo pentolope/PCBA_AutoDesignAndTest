@@ -36,6 +36,16 @@ from __future__ import annotations
 
 import re
 
+from . import component_models
+
+#: How a copper step picks its start when the selector matches several pads.
+#: `unique` is the default and refuses ambiguity: a declaration that quietly
+#: measures from whichever pad happens to be nearest is not a declaration, it
+#: is a coincidence that will change the day someone adds a driver.
+SOURCE_UNIQUE = "unique"
+SOURCE_SHORTEST = "shortest"
+SOURCE_SELECTION = (SOURCE_UNIQUE, SOURCE_SHORTEST)
+
 # Step kinds. Strings rather than an enum because they travel into JSON
 # reports and into manifests, where a stable spelling is the interface.
 COPPER = "copper"
@@ -113,15 +123,28 @@ class CopperSegment:
 
     kind = COPPER
 
-    def __init__(self, net, source, target, index=0):
+    def __init__(self, net, source, target, index=0,
+                 source_selection=SOURCE_UNIQUE):
+        if source_selection not in SOURCE_SELECTION:
+            raise PathError(
+                "copper step {}: source_selection {!r} is not one of "
+                "{}".format(index, source_selection,
+                            ", ".join(SOURCE_SELECTION)))
         self.net = net
         self.source = PadSelector(source)
         self.target = PadSelector(target)
         self.index = index
+        self.source_selection = source_selection
+        if (not self.source.is_pattern and not self.target.is_pattern
+                and self.source.declared == self.target.declared):
+            raise PathError(
+                "copper step {} runs from {} to itself, which measures "
+                "nothing".format(index, self.source.declared))
 
     def describe(self):
         return {"kind": self.kind, "net": self.net,
-                "from": self.source.declared, "to": self.target.declared}
+                "from": self.source.declared, "to": self.target.declared,
+                "source_selection": self.source_selection}
 
     def __repr__(self):
         return "<CopperSegment {} {}->{}>".format(
@@ -140,12 +163,35 @@ class ComponentTraversal:
 
     kind = COMPONENT
 
-    def __init__(self, reference, from_pad, to_pad, delay_model=None, index=0):
+    def __init__(self, reference, from_pad, to_pad, delay_model=None, index=0,
+                 assume_populated=None):
         self.reference = reference
         self.from_pad = str(from_pad)
         self.to_pad = str(to_pad)
         self.delay_model = delay_model
         self.index = index
+        self.assume_populated = assume_populated
+        if self.from_pad == self.to_pad:
+            raise PathError(
+                "component step {}: {} is crossed from pad {} to the same "
+                "pad, which traverses nothing".format(
+                    index, reference, self.from_pad))
+        if assume_populated is not None:
+            if not isinstance(assume_populated, dict) or not \
+                    assume_populated.get("justification"):
+                raise PathError(
+                    "component step {}: assume_populated overrides the board's "
+                    "own do-not-populate marking, so it requires a "
+                    "`justification`".format(index))
+        # Validated at declaration time so a malformed model is caught before
+        # any board is opened, rather than once per resolved path. Re-raised
+        # as a PathError because that is what the declaration layer refuses
+        # with, and what lets one bad route be a finding against itself rather
+        # than an error that blinds every other route in the interface.
+        try:
+            component_models.validate(delay_model, self.entry_label)
+        except component_models.ComponentModelError as exc:
+            raise PathError("component step {}: {}".format(index, exc)) from exc
 
     @property
     def entry_label(self):
@@ -158,7 +204,9 @@ class ComponentTraversal:
     def describe(self):
         return {"kind": self.kind, "reference": self.reference,
                 "from_pad": self.from_pad, "to_pad": self.to_pad,
-                "delay_model": self.delay_model}
+                "delay_model": self.delay_model,
+                **({"assume_populated": self.assume_populated}
+                   if self.assume_populated else {})}
 
     def __repr__(self):
         return "<ComponentTraversal {} {}->{}>".format(
@@ -176,7 +224,8 @@ def step_from_spec(spec, index):
             if field not in spec:
                 raise PathError(
                     "copper step {} declares no {!r}".format(index, field))
-        return CopperSegment(spec["net"], spec["from"], spec["to"], index)
+        return CopperSegment(spec["net"], spec["from"], spec["to"], index,
+                             spec.get("source_selection", SOURCE_UNIQUE))
     if kind == COMPONENT:
         for field in ("reference", "from_pad", "to_pad"):
             if field not in spec:
@@ -184,7 +233,7 @@ def step_from_spec(spec, index):
                     "component step {} declares no {!r}".format(index, field))
         return ComponentTraversal(spec["reference"], spec["from_pad"],
                                   spec["to_pad"], spec.get("delay_model"),
-                                  index)
+                                  index, spec.get("assume_populated"))
     raise PathError(
         "step {} declares kind {!r}; this validator implements {}. A step kind "
         "it does not implement is refused rather than skipped, because a "
@@ -212,11 +261,47 @@ class ElectricalPath:
         self.id = path_id
         self.steps = list(steps)
         self.attributes = dict(attributes or {})
+        self._check_shape()
+
+    def _check_shape(self):
+        """Everything about a declaration that is wrong before a board is opened.
+
+        These are declaration errors, not board findings, so they are raised
+        where the declaration is read. A path that cannot be a path on any
+        board should never get as far as being measured against one.
+        """
+        path_id = self.id
         if self.steps[0].kind != COPPER or self.steps[-1].kind != COPPER:
             raise PathError(
                 "path {!r} starts or ends on a {} step; a path begins and ends "
                 "on copper at a pad, because that is where an arrival time is "
                 "defined".format(path_id, self.steps[0].kind))
+        # Copper and component steps must alternate. Two copper steps in a row
+        # would be a net change with nothing bridging it - which is not an
+        # electrical path, it is two of them - and two component steps in a row
+        # would be a part reached without copper.
+        for position, step in enumerate(self.steps):
+            expected = COPPER if position % 2 == 0 else COMPONENT
+            if step.kind != expected:
+                raise PathError(
+                    "path {!r}: step {} is a {} step where a {} step is "
+                    "required. Copper and component steps alternate: a net "
+                    "changes only where something bridges it, and a part is "
+                    "reached only over copper".format(
+                        path_id, position, step.kind, expected))
+        nets = [s.net for s in self.steps if s.kind == COPPER]
+        repeated = sorted({n for n in nets if nets.count(n) > 1})
+        if repeated:
+            raise PathError(
+                "path {!r} enters net(s) {} more than once. A signal that "
+                "returns to a net it has already left is a loop, and a loop "
+                "has no arrival time".format(path_id, ", ".join(repeated)))
+        parts = [s.reference for s in self.steps if s.kind == COMPONENT]
+        twice = sorted({p for p in parts if parts.count(p) > 1})
+        if twice:
+            raise PathError(
+                "path {!r} crosses {} more than once".format(
+                    path_id, ", ".join(twice)))
 
     @classmethod
     def from_spec(cls, spec):
@@ -283,15 +368,9 @@ def _substitute(node, binding):
     return node
 
 
-def paths_from_spec(spec):
-    """Every `ElectricalPath` a manifest declaration produces.
-
-    A declaration may list `paths` outright, or give one `template` plus the
-    `bindings` that instantiate it, or both.
-    """
-    declared = []
-    for entry in spec.get("paths", []) or []:
-        declared.append(entry)
+def declared_entries(spec):
+    """The raw path declarations a spec produces, templates expanded."""
+    declared = list(spec.get("paths", []) or [])
     template = spec.get("template")
     if template is not None:
         bindings = spec.get("bindings")
@@ -302,15 +381,52 @@ def paths_from_spec(spec):
         declared.extend(expand_template(template, bindings))
     if not declared:
         raise PathError("declaration produces no paths at all")
-    paths = [ElectricalPath.from_spec(entry) for entry in declared]
-    seen = {}
-    for path in paths:
+    return declared
+
+
+def build_paths(spec):
+    """`(paths, problems)` - one malformed route does not blind the rest.
+
+    A declaration error is a fact about one route, and on a board with dozens
+    of them, refusing to report any of the others because one is wrong makes
+    the report less useful exactly when it is most needed. Each entry is built
+    on its own, and the ones that cannot be are returned as problems for the
+    gate to report as findings against their own ids.
+
+    `paths_from_spec` remains the strict form, for a caller that wants a bad
+    declaration to raise.
+    """
+    paths, problems, seen = [], [], {}
+    for index, entry in enumerate(declared_entries(spec)):
+        identity = entry.get("id") if isinstance(entry, dict) else None
+        try:
+            path = ElectricalPath.from_spec(entry)
+        except PathError as exc:
+            problems.append({"path": identity or "<declaration {}>".format(
+                index), "issue": str(exc)})
+            continue
         if path.id in seen:
-            raise PathError(
-                "two declared paths share the id {!r}; a path id is how a "
-                "measurement is identified later, so it has to be "
-                "unique".format(path.id))
+            problems.append({
+                "path": path.id,
+                "issue": "two declared paths share this id; a path id is how a "
+                         "measurement is identified later, so it has to be "
+                         "unique"})
+            continue
         seen[path.id] = path
+        paths.append(path)
+    return paths, problems
+
+
+def paths_from_spec(spec):
+    """Every `ElectricalPath` a manifest declaration produces, or raise.
+
+    A declaration may list `paths` outright, or give one `template` plus the
+    `bindings` that instantiate it, or both.
+    """
+    paths, problems = build_paths(spec)
+    if problems:
+        first = problems[0]
+        raise PathError("{}: {}".format(first["path"], first["issue"]))
     return paths
 
 
@@ -330,7 +446,11 @@ class ResolvedStep:
         return self.record.get("length_mm", 0.0) or 0.0
 
     def to_dict(self):
-        return dict(self.record)
+        record = dict(self.record)
+        contribution = record.pop("contribution", None)
+        if contribution is not None:
+            record["contribution"] = contribution.to_dict()
+        return record
 
 
 class ResolvedPath:
@@ -420,9 +540,19 @@ class PathResolver:
         return self._pads, self._footprints
 
     def graph(self, net):
+        """The net's copper graph, split at every junction.
+
+        Split because these lengths become propagation delays. The unsplit
+        graph charges a walk the whole of any track it enters, which is exact
+        only when copper meets copper end to end; a stub landing part-way along
+        a track makes every measurement through that track wrong by the part
+        the signal never travels. `NetTopologyRule` keeps the unsplit graph, so
+        no existing measurement changes meaning.
+        """
         if net not in self._graphs:
             from .connectivity import NetGraph
-            self._graphs[net] = NetGraph(self.board, net, self.pad_polygon)
+            self._graphs[net] = NetGraph(self.board, net, self.pad_polygon,
+                                         split_at_junctions=True)
         return self._graphs[net]
 
     def pads_on_net(self, net):
@@ -508,6 +638,19 @@ class PathResolver:
             raise PathError(
                 "path {!r}: step {} targets {} which is not a pad on net "
                 "{!r}".format(path.id, step.index, target_label, step.net))
+        if len(sources) > 1 and step.source_selection == SOURCE_UNIQUE:
+            raise PathError(
+                "path {!r}: step {} selects source {!r} on net {!r}, which "
+                "matches {} pads ({}). A path that starts from whichever of "
+                "them happens to be nearest is not a stable declaration - name "
+                "one, or declare source_selection \"shortest\" to say that "
+                "the shortest is what you mean".format(
+                    path.id, step.index, step.source.declared, step.net,
+                    len(sources), ", ".join(sources)))
+        if target_label in sources and len(sources) == 1:
+            raise PathError(
+                "path {!r}: step {} runs from {} to itself".format(
+                    path.id, step.index, target_label))
         length, chain = graph.trace(sources, target_label)
         if length is None:
             raise PathError(
@@ -622,17 +765,41 @@ class PathResolver:
                 "nothing".format(path.id, step.index, step.reference,
                                  step.entry_label, step.exit_label,
                                  entry.GetNetname()))
-        return {
+
+        # A footprint is not a component. Two pads on two nets are connected
+        # by the part between them, and a part the board says is not fitted is
+        # not between them - so the declared path does not exist on a board
+        # built to this data. Refusing is the only safe answer: the alternative
+        # is reporting a propagation delay along copper that ends in air.
+        dnp = bool(footprint.IsDNP())
+        if dnp and step.assume_populated is None:
+            raise PathError(
+                "path {!r}: step {} crosses {}, which the board marks "
+                "do-not-populate. An unfitted part does not join {} to {}, so "
+                "this path does not exist on a board built to this data. If a "
+                "build variant does fit it, say so with `assume_populated` and "
+                "a justification".format(
+                    path.id, step.index, step.reference,
+                    entry.GetNetname(), leave.GetNetname()))
+
+        contribution = component_models.evaluate(step.delay_model,
+                                                 step.entry_label)
+        record = {
             "kind": COMPONENT, "step": step.index,
             "reference": step.reference,
             "from_pad": step.from_pad, "to_pad": step.to_pad,
             "from_net": entry.GetNetname(), "to_net": leave.GetNetname(),
             "value": footprint.GetValue(),
             "footprint": footprint.GetFPIDAsString(),
-            "dnp": bool(footprint.IsDNP()),
+            "dnp": dnp,
+            "excluded_from_bom": bool(footprint.IsExcludedFromBOM()),
             "declared_delay_model": step.delay_model,
+            "contribution": contribution,
             "length_mm": 0.0,
         }
+        if dnp:
+            record["assumed_populated"] = step.assume_populated
+        return record
 
 
 def _neighbour_layer(elements, chain, position, direction, resolver):

@@ -81,22 +81,89 @@ MODELS = (HAMMERSTAD, HAMMERSTAD_T, DECLARED_EFFECTIVE)
 
 # How much a result is worth. A PASS from first-order microstrip arithmetic
 # must not read the same as a PASS from a validated broadband model, so every
-# result carries one of these and reports print it.
+# portion of every result carries one of these and a path takes the weakest of
+# them. The ladder applies to any portion - a conductor run, a via transit, a
+# component traversal - not just to copper.
 GEOMETRY_ONLY = "geometry-only"
+#: A portion whose contribution is real, positive and not modelled at all.
+#: Ranks below every model, because a total containing one is a lower bound
+#: rather than a value, and nothing derived from it may be read as a value.
+UNKNOWN_CONTRIBUTION = "unmodelled-contribution"
 ANALYTIC_TRANSMISSION_LINE = "analytic-transmission-line-estimate"
 DECLARED_PROPAGATION = "declared-propagation-constant"
+DECLARED_MODEL = "declared-model"
 QUASI_STATIC_EXTRACTED = "quasi-static-extracted"      # reserved for a solver
 FULL_WAVE_EXTRACTED = "full-wave-extracted"            # reserved for a solver
 DEVICE_AWARE = "device-aware-timing"                   # reserved, needs models
 
-FIDELITY_ORDER = (GEOMETRY_ONLY, ANALYTIC_TRANSMISSION_LINE,
-                  DECLARED_PROPAGATION, QUASI_STATIC_EXTRACTED,
-                  FULL_WAVE_EXTRACTED, DEVICE_AWARE)
+#: Rank, not order: two kinds of declared value are equally good and neither is
+#: below the other. A rank comparison also means an unrecognised fidelity - one
+#: from a backend this release does not know - sorts below everything rather
+#: than raising or, worse, ranking high.
+FIDELITY_RANK = {
+    GEOMETRY_ONLY: 0,
+    UNKNOWN_CONTRIBUTION: 1,
+    ANALYTIC_TRANSMISSION_LINE: 2,
+    DECLARED_PROPAGATION: 3,
+    DECLARED_MODEL: 3,
+    QUASI_STATIC_EXTRACTED: 4,
+    FULL_WAVE_EXTRACTED: 5,
+    DEVICE_AWARE: 6,
+}
+
+FIDELITY_ORDER = tuple(sorted(FIDELITY_RANK, key=lambda f: (FIDELITY_RANK[f],
+                                                            f)))
+
+
+def fidelity_rank(name):
+    """Where a fidelity sits. Anything unrecognised sits below everything."""
+    return FIDELITY_RANK.get(name, -1)
+
+
+def weakest(fidelities):
+    """The weakest fidelity in a set.
+
+    A result is worth exactly what its worst modelled portion is worth. Ties
+    break on the name so the answer is deterministic across runs.
+    """
+    if not fidelities:
+        return GEOMETRY_ONLY
+    return min(sorted(fidelities), key=fidelity_rank)
 
 # Via vertical-transit treatments.
 VIA_NONE = "none"
 VIA_GEOMETRIC = "geometric"
 VIA_MODELS = (VIA_NONE, VIA_GEOMETRIC)
+
+
+#: The result contract every backend produces, whatever it is inside.
+#:
+#: This exists so the gates can stay backend-agnostic and a board's manifest
+#: never has to know which one ran. A full-wave extraction and a closed-form
+#: estimate answer the same question at different quality, so they return the
+#: same shape and differ in `fidelity` - which is the field the gates already
+#: use to refuse to overstate a result.
+#:
+#: Per conductor run: `layer`, `width_mm`, `length_mm`, `ps_per_mm`,
+#: `delay_ps`, `fidelity`, and either `mode` plus `geometry` (derived from a
+#: stackup) or `provenance` (declared or measured).
+CONDUCTOR_RESULT_FIELDS = ("layer", "width_mm", "ps_per_mm", "fidelity",
+                           "delay_ps")
+
+#: Per via transition: where it went and what, if anything, that cost.
+VIA_RESULT_FIELDS = ("from_layer", "to_layer", "model", "vertical_length_mm",
+                     "delay_ps", "fidelity")
+
+#: Per path: the totals, how good they are, and what stopped them.
+#: `delay_ps` is None when some portion could not be evaluated at all;
+#: `delay_is_lower_bound` is True when every portion was evaluable but at
+#: least one contributes an unknown positive amount. A backend that cannot
+#: honour that distinction cannot be plugged in here, which is deliberate:
+#: it is the distinction the gates make their decisions on.
+PATH_RESULT_FIELDS = ("path", "source", "destination", "delay_ps",
+                      "delay_is_lower_bound", "fidelity", "insufficient",
+                      "backend", "conductors", "vias",
+                      "component_traversals")
 
 
 class PropagationError(Exception):
@@ -208,6 +275,49 @@ class DeclaredLayerModel:
         return delay_ps_per_mm(self.epsilon_effective), self.epsilon_effective
 
 
+def required_stackup_fields(model, via_model, declared_layers=None,
+                            layers=None):
+    """Exactly the stackup fields a set of model choices will read.
+
+    The point of asking is that different analyses need different subsets, and
+    a stackup that is incomplete for one may be perfectly sufficient for
+    another. A first-order delay needs a dielectric height and a permittivity.
+    The thickness-corrected form additionally needs a copper thickness. A loss
+    figure would need a loss tangent, which no model here computes, so nothing
+    here asks for one - and refusing an answer for want of a figure the
+    calculation never reads would be refusing it for no reason.
+
+    `layers` narrows the question to the copper layers the paths under analysis
+    actually run on. A layer nobody routes on cannot make an analysis
+    impossible, and a stackup silent about it is not incomplete for any purpose
+    this board has.
+
+    A free function rather than only a method because the gate needs the answer
+    to report what a stackup is missing *for this board*, and it needs it even
+    when the model itself could not be constructed.
+    """
+    from .stackup_physical import (NEEDS_COPPER_THICKNESS,
+                                   NEEDS_DIELECTRIC_THICKNESS,
+                                   NEEDS_EPSILON_R)
+    declared = set(declared_layers or ())
+    wanted = set()
+    for layer in (layers or ()):
+        if layer in declared:
+            # A declared propagation constant replaces the geometry it would
+            # otherwise have been derived from, so that layer's dielectric is
+            # not read at all.
+            continue
+        wanted.add(NEEDS_DIELECTRIC_THICKNESS)
+        wanted.add(NEEDS_EPSILON_R)
+        if model == HAMMERSTAD_T:
+            wanted.add(NEEDS_COPPER_THICKNESS)
+    if via_model == VIA_GEOMETRIC:
+        wanted.add(NEEDS_DIELECTRIC_THICKNESS)
+        wanted.add(NEEDS_EPSILON_R)
+        wanted.add(NEEDS_COPPER_THICKNESS)
+    return wanted
+
+
 class PropagationModel:
     """Turns a resolved path plus a physical stackup into a delay.
 
@@ -219,7 +329,8 @@ class PropagationModel:
     """
 
     def __init__(self, stackup, reference_layers, model=HAMMERSTAD,
-                 via_model=VIA_NONE, declared_layers=None):
+                 via_model=VIA_NONE, declared_layers=None, backend="analytic",
+                 via_model_declared=True):
         if model not in MODELS:
             raise PropagationError(
                 "propagation model {!r} is not implemented; this validator has "
@@ -232,6 +343,14 @@ class PropagationModel:
         self.reference_layers = set(reference_layers or ())
         self.model = model
         self.via_model = via_model
+        #: Whether the board chose this via treatment or merely inherited it.
+        #: `none` chosen is a decision and its zero is exact; `none` inherited
+        #: is nobody having considered the question, and a via's vertical
+        #: transit is real, positive and then unmodelled - which makes a total
+        #: containing it a lower bound, exactly as an unmodelled component
+        #: does.
+        self.via_model_declared = via_model_declared
+        self.backend = backend
         self.declared = {
             layer: DeclaredLayerModel(layer, spec)
             for layer, spec in (declared_layers or {}).items()}
@@ -240,6 +359,14 @@ class PropagationModel:
                 "the declared-effective model was selected but no layer "
                 "declares a propagation constant")
         self._cache = {}
+
+    # -- what this configuration needs from a stackup ----------------------
+    def required_stackup_fields(self, layers=None):
+        """Exactly the stackup fields these model choices will read."""
+        return required_stackup_fields(
+            self.model, self.via_model,
+            {name: True for name in self.declared},
+            layers if layers is not None else self.stackup.copper_layer_names)
 
     # -- per-conductor -----------------------------------------------------
     def conductor(self, layer, width_mm):
@@ -361,8 +488,20 @@ class PropagationModel:
         record["layers_crossed"] = None if span is None else span["crossed"]
         if self.via_model == VIA_NONE:
             record["delay_ps"] = 0.0
-            record["note"] = ("vertical extent measured, no delay attributed: "
-                              "this board declares no via delay model")
+            if self.via_model_declared:
+                record["fidelity"] = DECLARED_MODEL
+                record["exact"] = True
+                record["note"] = (
+                    "vertical extent measured, no delay attributed: this "
+                    "board declares the 'none' via delay model")
+            else:
+                record["fidelity"] = UNKNOWN_CONTRIBUTION
+                record["exact"] = False
+                record["note"] = (
+                    "vertical extent measured, no delay attributed, and this "
+                    "board declared no via delay model at all. The transit is "
+                    "real and positive, so any total containing it is a lower "
+                    "bound")
             return record
         if span is None:
             raise Unsupported(
@@ -383,6 +522,7 @@ class PropagationModel:
         # line in the surrounding dielectric. It attributes no inductance and
         # models no stub, which is why it is named `geometric` in the report.
         record["epsilon_r"] = span["epsilon_r"]
+        record["fidelity"] = ANALYTIC_TRANSMISSION_LINE
         record["delay_ps"] = round(
             span["length_mm"] * math.sqrt(span["epsilon_r"]) / C_MM_PER_PS, 6)
         record["note"] = ("first-order: barrel treated as a length of line in "
@@ -416,10 +556,20 @@ class PropagationModel:
     def evaluate(self, resolved_path):
         """Total passive interconnect delay for one resolved path.
 
-        Returns a record whose `delay_ps` is None when the delay could not be
-        derived, with `insufficient` saying exactly what was missing. It never
-        substitutes a value; a caller that needs a number and has none has a
-        finding, not a default.
+        The result is one of three things, and which one it is has to survive
+        into the report intact:
+
+          * a value - every portion was modelled and evaluated;
+          * a lower bound - every portion was evaluable but at least one
+            contributes an unknown positive amount, so the total is less than
+            the truth by an unknown margin;
+          * nothing - some portion could not be evaluated at all, either
+            because the stackup does not support it or because the board asked
+            for a model this release does not implement.
+
+        `delay_ps` is None in the third case. In the second it is a number and
+        `delay_is_lower_bound` is True, which the gates honour: a lower bound
+        can prove a maximum is exceeded and can never prove one is met.
         """
         record = {
             "path": resolved_path.id,
@@ -427,26 +577,25 @@ class PropagationModel:
             "destination": resolved_path.destination.to_dict(),
             "copper_length_mm": round(resolved_path.copper_length_mm, 6),
             "length_by_layer_mm": resolved_path.length_by_layer_mm(),
-            "component_traversals": [
-                {"reference": t["reference"], "from_net": t["from_net"],
-                 "to_net": t["to_net"],
-                 "delay_model": t.get("declared_delay_model"),
-                 "delay_ps": 0.0}
-                for t in resolved_path.component_traversals()],
+            "component_traversals": [],
             "conductors": [], "vias": [],
             "insufficient": [],
             "physical_stackup_source": self.stackup.source,
             "propagation_model": self.model,
             "via_delay_model": self.via_model,
+            "backend": self.backend,
         }
         total = 0.0
         fidelities = set()
+        exact = True
+
         for conductor in resolved_path.conductors():
             try:
                 model = self.conductor(conductor["layer"],
                                        conductor["width_mm"])
             except PropagationError as exc:
                 record["insufficient"].append({
+                    "portion": "conductor",
                     "layer": conductor["layer"],
                     "width_mm": conductor["width_mm"],
                     "length_mm": conductor["length_mm"],
@@ -457,39 +606,75 @@ class PropagationModel:
             fidelities.add(model["fidelity"])
             record["conductors"].append({**conductor, **model,
                                          "delay_ps": round(delay, 6)})
+
         for transition in resolved_path.via_transitions():
             try:
                 via = self.via(transition)
             except PropagationError as exc:
                 record["insufficient"].append({
+                    "portion": "via",
                     "via_between": [transition.get("from_layer"),
                                     transition.get("to_layer")],
                     "issue": str(exc)})
                 continue
             total += via.get("delay_ps") or 0.0
+            if via.get("fidelity"):
+                fidelities.add(via["fidelity"])
+            if via.get("exact") is False:
+                exact = False
             record["vias"].append(via)
 
-        # A component contributes nothing unless a model says otherwise, and
-        # no model is implemented yet. Recorded rather than assumed away: the
-        # zero is a statement that nothing was modelled, and a reader can see
-        # which parts it applies to.
+        # Components. A traversal is never silently worth zero: an unmodelled
+        # one makes the total a lower bound, and one whose declared model this
+        # release cannot evaluate makes the total impossible.
+        for traversal in resolved_path.component_traversals():
+            contribution = traversal.get("contribution")
+            if contribution is None:                      # pragma: no cover
+                raise PropagationError(
+                    "component traversal of {} carries no evaluated "
+                    "contribution".format(traversal.get("reference")))
+            entry = {"reference": traversal["reference"],
+                     "from_net": traversal["from_net"],
+                     "to_net": traversal["to_net"],
+                     **contribution.to_dict()}
+            record["component_traversals"].append(entry)
+            if not contribution.evaluable:
+                record["insufficient"].append({
+                    "portion": "component",
+                    "reference": traversal["reference"],
+                    "issue": contribution.reason})
+                continue
+            total += contribution.delay_ps or 0.0
+            fidelities.add(contribution.fidelity)
+            if not contribution.exact:
+                exact = False
+
         unmodelled = [t["reference"] for t in record["component_traversals"]
-                      if not t["delay_model"]]
+                      if t["model_status"] == "unmodelled"]
         if unmodelled:
             record["unmodelled_component_delay"] = unmodelled
 
         if record["insufficient"]:
             record["delay_ps"] = None
+            record["delay_is_lower_bound"] = False
             record["fidelity"] = GEOMETRY_ONLY
-        else:
-            record["delay_ps"] = round(total, 6)
-            record["fidelity"] = _lowest(fidelities)
+            return record
+
+        if not record["conductors"] and not record["vias"]:
+            # No copper was modelled, so a total of zero would be a number
+            # standing where a measurement never happened.
+            record["delay_ps"] = None
+            record["delay_is_lower_bound"] = False
+            record["fidelity"] = GEOMETRY_ONLY
+            record["insufficient"].append({
+                "portion": "path",
+                "issue": "no conductor or via contributed a delay, so there is "
+                         "no propagation result to report"})
+            return record
+
+        record["delay_ps"] = round(total, 6)
+        record["delay_is_lower_bound"] = not exact
+        record["fidelity"] = weakest(fidelities)
         return record
 
 
-def _lowest(fidelities):
-    """The weakest fidelity in a set: a result is only as good as its worst part."""
-    if not fidelities:
-        return GEOMETRY_ONLY
-    return min(fidelities, key=lambda f: FIDELITY_ORDER.index(f)
-               if f in FIDELITY_ORDER else 0)
