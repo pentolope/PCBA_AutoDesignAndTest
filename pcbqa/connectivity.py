@@ -159,27 +159,58 @@ class NetGraph:
 
     def path_length(self, source_refs, target_ref):
         """Shortest electrical path length, or None if not connected."""
+        distance, _elements = self.trace(source_refs, target_ref)
+        return distance
+
+    def trace(self, source_refs, target_ref):
+        """The shortest path itself: (length_mm, [element index, ...]).
+
+        The same search `path_length` has always performed - identical start
+        set, identical relaxation, identical early exit the moment a target is
+        popped - with the predecessor of each settled element remembered, so
+        the elements the signal actually traverses can be reported rather than
+        only how long they add up to. `path_length` is this function's total,
+        so the two can never disagree about a length.
+
+        Returned in traversal order, source element first. Consistent with the
+        cost model above, the source element's own length is not part of the
+        total: the walk starts at it, it is not entered.
+
+        (None, []) when there is no connected path, exactly as before.
+        """
         starts = [i for ref in source_refs for i in self.index_of(ref)]
         targets = set(self.index_of(target_ref))
         if not starts or not targets:
-            return None
+            return None, []
         dist = {}
+        prev = {}
         pq = []
         for s in starts:
             dist[s] = 0.0
+            prev[s] = None
             heapq.heappush(pq, (0.0, s))
         while pq:
             d, u = heapq.heappop(pq)
             if d > dist.get(u, math.inf):
                 continue
             if u in targets:
-                return d
+                return d, self._walk_back(prev, u)
             for v, w in self.adj[u]:
                 nd = d + w
                 if nd < dist.get(v, math.inf):
                     dist[v] = nd
+                    prev[v] = u
                     heapq.heappush(pq, (nd, v))
-        return None
+        return None, []
+
+    @staticmethod
+    def _walk_back(prev, node):
+        chain = []
+        while node is not None:
+            chain.append(node)
+            node = prev[node]
+        chain.reverse()
+        return chain
 
     def branch_points(self):
         return sum(1 for i, e in enumerate(self.elements)
