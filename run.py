@@ -37,10 +37,48 @@ if HERE not in sys.path:
 # importing this file is what fails.
 
 
-def _output_base():
-    """Where run artifacts go. Workers override this so they never collide."""
+ENV_OUTPUT = "PCBQA_OUTPUT_ROOT"
+
+
+def _inside(root, path):
+    """Is `path` within `root`? False across drives, as Windows requires."""
+    root = os.path.realpath(root)
+    try:
+        return os.path.commonpath([root, os.path.realpath(path)]) == root
+    except ValueError:                       # different drives on Windows
+        return False
+
+
+def _output_base(manifest=None):
+    """Where run artifacts go, in order of precedence.
+
+    1. The parallel runner isolating a worker. This has to win: two workers
+       sharing an output root is the failure `tests/test_runner.py` exists to
+       prevent, and nothing else may reintroduce it.
+    2. `PCBQA_OUTPUT_ROOT`, an explicit override for one invocation.
+    3. A consumer board's own project. When the manifest lives outside this
+       repository, its attempts and published candidates belong to it - not
+       inside a toolkit that is very likely a submodule, and a submodule
+       directory is one `git submodule update` away from being replaced.
+    4. This repository, for a manifest that lives here. Fixtures depend on
+       this: a fixture's runs must not land inside the fixture, because
+       PROV.FIXTURE_INTEGRITY holds fixtures to an exact inventory.
+
+    Deliberately decided here rather than by a manifest key. `output_root` in
+    a manifest would be hashed into `configuration_identity`, so merely
+    relocating output would unbind every report a board had already committed
+    - a provenance break in exchange for a directory choice.
+    """
     from pcbqa.parallel import ENV_OUTPUT_ROOT
-    return os.environ.get(ENV_OUTPUT_ROOT, HERE)
+    worker_root = os.environ.get(ENV_OUTPUT_ROOT)
+    if worker_root:
+        return worker_root
+    override = os.environ.get(ENV_OUTPUT)
+    if override:
+        return os.path.abspath(override)
+    if manifest is not None and not _inside(HERE, manifest.path):
+        return manifest.resolve(".")
+    return HERE
 
 
 def _load_gates():
@@ -60,7 +98,8 @@ def open_board(manifest_path):
     from pcbqa.core import load_manifest
     from pcbqa.layout import OutputLayout
     manifest = load_manifest(manifest_path)
-    return manifest, OutputLayout.for_manifest(manifest, _output_base())
+    return manifest, OutputLayout.for_manifest(manifest,
+                                               _output_base(manifest))
 
 
 def _refuse(exc):

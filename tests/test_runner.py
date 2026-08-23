@@ -74,17 +74,40 @@ RECORDING = '''
     import os, time, unittest
     class Recording(unittest.TestCase):
         def _record(self):
-            time.sleep(0.3)
             root = os.environ["PCBQA_TEST_OUTPUT_ROOT"]
             worker = os.environ.get("PCBQA_WORKER_ID")
+            shared = os.environ["PCBQA_RUNNER_TEST_SHARED"]
             os.makedirs(root, exist_ok=True)
             # A fixed name every test writes: if two tests ever shared an
             # output root concurrently, this is where they would collide.
             with open(os.path.join(root, "project.lck"), "w") as fh:
                 fh.write(self.id())
-            with open(os.path.join(os.environ["PCBQA_RUNNER_TEST_SHARED"],
+            with open(os.path.join(shared,
                                    self.id() + ".txt"), "w") as fh:
                 fh.write(root + "\\n" + str(worker))
+            # Then hold until all four are in flight. This used to be a
+            # 0.3s sleep, which only made concurrency LIKELY: on a loaded
+            # machine one worker could finish a test and claim the next
+            # before its siblings were scheduled, and the run collapsed
+            # onto a single output root. The test then failed for want of
+            # CPU rather than for want of isolation.
+            #
+            # A barrier makes concurrency REQUIRED. Every worker that
+            # claims one of these tests must still be holding it when the
+            # last one starts, so four can only complete if four workers
+            # really ran them at once - which is the condition the
+            # assertions are about.
+            def arrived():
+                return len([n for n in os.listdir(shared)
+                            if n.endswith('.txt')])
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                if arrived() >= 4:
+                    return
+                time.sleep(0.01)
+            raise AssertionError(
+                'only {} of 4 tests were ever in flight together; the '
+                'pool did not run them concurrently'.format(arrived()))
         def test_a(self): self._record()
         def test_b(self): self._record()
         def test_c(self): self._record()
@@ -235,9 +258,12 @@ class RunnerContract(unittest.TestCase):
         roots = {root for root, _ in records.values()}
         self.assertEqual(len(roots), len(by_worker),
                          "two workers must never resolve to the same directory")
+        # Guaranteed by the barrier in RECORDING rather than hoped for: the
+        # four tests cannot all have completed unless four workers held them
+        # at the same moment. Kept as an explicit statement so the assertions
+        # above can never pass vacuously on a run that quietly serialised.
         self.assertGreater(len(roots), 1,
-                           "with four staggered tests and four workers the load "
-                           "must actually be spread")
+                           "four concurrent tests resolved to one output root")
 
     def test_repeated_runs_are_stable(self):
         box = self._sandbox(MODULES)
