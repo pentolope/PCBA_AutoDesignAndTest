@@ -16,6 +16,18 @@ here. `TIMING.INTERCONNECT_DELAY` and `TIMING.INTERCONNECT_SKEW` say
 gate that would answer the whole question - stays non-applicable until a board
 supplies the device timing it needs.
 
+Three separately cached layers, because they fail for separate reasons
+---------------------------------------------------------------------
+``geometry``     the declared paths, resolved against the copper. Needs no
+                 material data, no model and no solver, so it answers "does
+                 this path exist" whether or not anything else is available.
+``stackup``      the physical stack, and which of its layers are planes.
+``propagation``  the backend, the model, and a delay per path.
+
+They were one cache, which made a question about connectivity unanswerable
+whenever a field solver was missing - precisely backwards, since connectivity
+is the question that never needed the solver.
+
 Every threshold, path, endpoint group, model choice and material figure comes
 from the board's manifest. Nothing in this module names a net, a designator, an
 interface or a number.
@@ -31,22 +43,25 @@ from .. import electrical_path, geom, propagation, stackup_physical
 from ..electrical_path import PathError
 from ..stackup_physical import StackupError
 
+#: The modules that compute what these gates report. Declared on each gate so
+#: `PROV.DERIVATION_CLOSURE` can check a board's provenance against the
+#: toolkit's own statement of its implementation rather than against the
+#: board's copy of that statement.
+_GEOMETRY_DERIVATION = ("pcbqa.connectivity", "pcbqa.electrical_path",
+                        "pcbqa.gates.g_timing")
+_PROPAGATION_DERIVATION = _GEOMETRY_DERIVATION + (
+    "pcbqa.propagation", "pcbqa.stackup_physical", "pcbqa.component_models")
+
 
 # ---------------------------------------------------------------------------
-# shared analysis
+# layer 1: geometry
 # ---------------------------------------------------------------------------
 
-class TimingAnalysis:
-    """Everything the timing gates look at, built once per validation run."""
+class GeometryAnalysis:
+    """Declared paths resolved against copper. No materials, no model."""
 
-    def __init__(self, stackup, reference_layers, model, interfaces,
-                 stackup_problems, backend):
-        self.stackup = stackup
-        self.reference_layers = reference_layers
-        self.model = model
+    def __init__(self, interfaces):
         self.interfaces = interfaces
-        self.stackup_problems = stackup_problems
-        self.backend = backend
 
     def all_paths(self):
         for name, interface in sorted(self.interfaces.items()):
@@ -59,6 +74,19 @@ class TimingAnalysis:
             for problem in interface["problems"]:
                 out.append({**problem, "interface": name})
         return out
+
+    def layers_used(self):
+        """Every copper layer a resolved path actually runs on."""
+        used = set()
+        for _name, record in self.all_paths():
+            for conductor in record["resolved"].conductors():
+                used.add(conductor["layer"])
+        return used
+
+    @staticmethod
+    def key(record):
+        """What identifies one resolved path: its route and its destination."""
+        return (record["resolved"].id, record["resolved"].destination.label)
 
 
 def _identifier(kind, name):
@@ -76,51 +104,32 @@ def _identifier(kind, name):
     return name
 
 
-def analysis(ctx):
-    """Resolve and measure every declared path. Cached across the gates."""
+def geometry(ctx):
+    """Resolve every declared path. Cached; depends on nothing but the board."""
     def build():
         manifest = ctx.manifest
         board = ctx.board()
         geom.configure(manifest.geometry_profile()
                        .tolerance("polygon_chord_error_mm").value)
-
-        stack, stack_problems = _physical_stackup(ctx)
-        reference_layers = _reference_layers(ctx, board)
-        spec = manifest.get("timing.propagation", {}) or {}
-        backend = spec.get("backend", "analytic")
-        if backend != "analytic":
-            # Another backend is a deliberate choice a board makes, and this
-            # gate does not silently fall back to the cheap one when the
-            # expensive one is unavailable. `pcbqa.backends` decides.
-            from .. import backends
-            backends.require(backend, spec)
-        model = propagation.PropagationModel(
-            stack, reference_layers,
-            model=spec.get("model", propagation.HAMMERSTAD),
-            via_model=spec.get("via_delay_model", propagation.VIA_NONE),
-            declared_layers=spec.get("declared_layers"))
-
         resolver = electrical_path.PathResolver(board, geom.pad_copper_polygon)
         interfaces = {}
         for name, declared in sorted(
                 (manifest.get("timing.interfaces") or {}).items()):
             _identifier("interface", name)
-            interfaces[name] = _interface(name, declared, resolver, model)
-        return TimingAnalysis(stack, reference_layers, model, interfaces,
-                              stack_problems, backend)
-    return ctx.cache("timing_analysis", build)
+            interfaces[name] = _interface(name, declared, resolver)
+        return GeometryAnalysis(interfaces)
+    return ctx.cache("timing_geometry", build)
 
 
-def _interface(name, declared, resolver, model):
-    """One interface: its declared paths, resolved and measured."""
-    problems = []
+def _interface(name, declared, resolver):
+    """One interface: its declared paths, resolved against the board."""
     records = []
     routes = declared.get("routes")
     if not routes:
         raise PathError(
             "timing interface {!r} declares no routes, so it describes no "
             "path to measure".format(name))
-    paths = electrical_path.paths_from_spec(routes)
+    paths, problems = electrical_path.build_paths(routes)
     for path in paths:
         try:
             resolved = resolver.resolve(path)
@@ -128,47 +137,116 @@ def _interface(name, declared, resolver, model):
             problems.append({"path": path.id, "issue": str(exc)})
             continue
         for concrete in resolved:
-            records.append({
-                "declared": path,
-                "resolved": concrete,
-                "delay": model.evaluate(concrete),
-            })
+            records.append({"declared": path, "resolved": concrete})
     return {"spec": declared, "declared_paths": paths, "paths": records,
             "problems": problems}
 
 
-def _physical_stackup(ctx):
-    """Native KiCad stackup, then a board's supplement, then what is missing."""
-    spec = ctx.manifest.get("timing.physical_stackup", {}) or {}
-    native = stackup_physical.from_board_file(ctx.board_path())
-    supplement_path = spec.get("supplement")
-    if supplement_path:
-        import json
-        full = ctx.manifest.resolve(supplement_path)
-        if not os.path.isfile(full):
-            raise StackupError(
-                "timing.physical_stackup.supplement names {}, which does not "
-                "exist; a declared model file that is not there is a missing "
-                "input, not an empty one".format(supplement_path))
-        with open(full, encoding="utf-8") as handle:
-            declared = stackup_physical.from_declaration(json.load(handle))
-        stack = stackup_physical.merge(native, declared)
-    else:
-        stack = native
-    return stack, stack.completeness()
+# ---------------------------------------------------------------------------
+# layer 2: the physical stackup
+# ---------------------------------------------------------------------------
+
+class StackupAnalysis:
+    def __init__(self, stack, reference_layers, contradictions):
+        self.stackup = stack
+        self.reference_layers = reference_layers
+        self.contradictions = contradictions
 
 
-def _reference_layers(ctx, board):
-    """Which copper layers are reference planes, from poured copper.
+def stackup(ctx):
+    """Native stackup, board supplement, plane layers and contradictions."""
+    def build():
+        spec = ctx.manifest.get("timing.physical_stackup", {}) or {}
+        board = ctx.board()
+        native = stackup_physical.from_board_file(ctx.board_path())
+        supplement = spec.get("supplement")
+        if supplement:
+            import json
+            full = ctx.manifest.resolve(supplement)
+            if not os.path.isfile(full):
+                raise StackupError(
+                    "timing.physical_stackup.supplement names {}, which does "
+                    "not exist; a declared model file that is not there is a "
+                    "missing input, not an empty one".format(supplement))
+            with open(full, encoding="utf-8") as handle:
+                declared = stackup_physical.from_declaration(json.load(handle))
+            stack = stackup_physical.merge(native, declared)
+        else:
+            stack = native
+        board_layers = stackup_physical.board_copper_layers(board)
+        stack.board_copper_layers = board_layers
+        nets = spec.get("reference_nets")
+        planes = (set() if nets is None
+                  else stackup_physical.plane_layers(board, nets))
+        return StackupAnalysis(stack, planes,
+                               stack.contradictions(board_layers))
+    return ctx.cache("timing_stackup", build)
 
-    A board says which nets are references; the board file says which layers
-    actually carry them. Neither half is guessed.
+
+# ---------------------------------------------------------------------------
+# layer 3: propagation
+# ---------------------------------------------------------------------------
+
+class PropagationAnalysis:
+    """The backend, the model, and one delay record per resolved path.
+
+    `error` is set instead of raising when the board's declared propagation
+    policy cannot be honoured - an unimplemented model name, a required
+    backend that is not installed. Carrying the failure rather than raising it
+    is what lets the gates that need propagation block while the gate that
+    only needs geometry carries on.
     """
-    spec = ctx.manifest.get("timing.physical_stackup", {}) or {}
-    nets = spec.get("reference_nets")
-    if nets is None:
-        return set()
-    return stackup_physical.plane_layers(board, nets)
+
+    def __init__(self, selection=None, model=None, delays=None, error=None):
+        self.selection = selection
+        self.model = model
+        self.delays = delays or {}
+        self.error = error
+
+    @property
+    def usable(self):
+        return self.error is None
+
+
+def propagation_analysis(ctx):
+    def build():
+        from .. import backends
+        spec = ctx.manifest.get("timing.propagation", {}) or {}
+        shape = stackup(ctx)
+        paths = geometry(ctx)
+        try:
+            selection = backends.select(spec.get("backend", backends.ANALYTIC),
+                                        spec)
+            if selection.used != backends.ANALYTIC:
+                raise backends.BackendError(
+                    "backend {!r} reports itself available, but this release "
+                    "implements evaluation only for the analytic backend. "
+                    "Refusing to report a result attributed to a backend that "
+                    "did not produce it".format(selection.used))
+            model = propagation.PropagationModel(
+                shape.stackup, shape.reference_layers,
+                model=spec.get("model", propagation.HAMMERSTAD),
+                via_model=spec.get("via_delay_model", propagation.VIA_NONE),
+                declared_layers=spec.get("declared_layers"),
+                backend=selection.used,
+                via_model_declared="via_delay_model" in spec)
+        except (backends.BackendError, propagation.PropagationError) as exc:
+            return PropagationAnalysis(
+                error="{}: {}".format(type(exc).__name__, exc))
+        delays = {}
+        for _name, record in paths.all_paths():
+            delays[paths.key(record)] = model.evaluate(record["resolved"])
+        return PropagationAnalysis(selection, model, delays)
+    return ctx.cache("timing_propagation", build)
+
+
+def _requested_fields(ctx, layers):
+    """The stackup fields this board's declared analyses will actually read."""
+    spec = ctx.manifest.get("timing.propagation", {}) or {}
+    return propagation.required_stackup_fields(
+        spec.get("model", propagation.HAMMERSTAD),
+        spec.get("via_delay_model", propagation.VIA_NONE),
+        spec.get("declared_layers"), layers)
 
 
 # ---------------------------------------------------------------------------
@@ -177,25 +255,24 @@ def _reference_layers(ctx, board):
 
 @gate("TIMING.PATH_INTEGRITY",
       "Declared electrical paths exist, end to end, across every component",
-      requires=("timing.interfaces",), order=310)
+      requires=("timing.interfaces",), order=310,
+      derives=_GEOMETRY_DERIVATION)
 def path_integrity(ctx, res):
     """Does the board contain the paths the timing policy describes?
 
-    This is the geometric half of the analysis and it needs no material data at
-    all, so it is the half that can always be answered. It proves each declared
-    route resolves as one connected electrical path from its source pad to its
-    destination pad, that each component crossing really does bridge the two
-    nets either side of it, and that a route which is supposed to start at a
-    driver has not quietly been measured from the far side of its series part.
+    Geometry and connectivity only. It reads no material figure, builds no
+    propagation model and asks no backend whether it is installed, so a board
+    with neither stackup data nor a solver still gets a real answer to a real
+    question: does this declared path physically exist, and does it cross what
+    it says it crosses.
     """
-    state = analysis(ctx)
+    state = geometry(ctx)
     problems = list(state.all_problems())
     summary = {}
     for name, interface in sorted(state.interfaces.items()):
         spec = interface["spec"]
-        records = interface["paths"]
         rows = []
-        for record in records:
+        for record in interface["paths"]:
             resolved = record["resolved"]
             rows.append({
                 "path": resolved.id,
@@ -223,7 +300,7 @@ def path_integrity(ctx, res):
         summary[name] = {
             "description": spec.get("description"),
             "declared_routes": len(interface["declared_paths"]),
-            "resolved_paths": len(records),
+            "resolved_paths": len(interface["paths"]),
             "paths": rows,
         }
 
@@ -233,12 +310,13 @@ def path_integrity(ctx, res):
                 "timing.interfaces.{}.expected_path_count".format(name),
                 units="paths",
                 cid="timing.{}.expected_path_count".format(name)))
-            if len(records) != expected:
+            if len(interface["paths"]) != expected:
                 problems.append({
                     "interface": name,
                     "issue": "the board resolves a different number of paths "
                              "than the interface declares",
-                    "expected": expected, "resolved": len(records)})
+                    "expected": expected,
+                    "resolved": len(interface["paths"])})
 
         required = spec.get("required_component_crossings")
         if required is not None:
@@ -258,6 +336,9 @@ def path_integrity(ctx, res):
     res.measurements["interfaces"] = summary
     res.measurements["paths_resolved"] = sum(
         len(i["paths"]) for i in state.interfaces.values())
+    res.measurements["scope"] = (
+        "geometry and connectivity only; independent of the physical stackup, "
+        "the propagation model and any solver")
     for problem in problems[:60]:
         res.finding(**problem)
     if problems:
@@ -276,51 +357,78 @@ def path_integrity(ctx, res):
 
 @gate("STACK.PHYSICAL",
       "The physical stackup supports the analysis this board asks for",
-      requires=("timing.physical_stackup",), order=305)
+      requires=("timing.physical_stackup",), order=305,
+      derives=("pcbqa.stackup_physical", "pcbqa.gates.g_timing"))
 def physical_stackup(ctx, res):
-    """Is enough known about the materials to model propagation?
+    """Is enough known about the materials to do what this board asked for?
 
     Deliberately separate from STACK.NATIVE_VS_MANIFEST, whose subject is
     copper layer order and plane assignment and whose semantics are unchanged.
-    This one is about thicknesses, materials and permittivities: the physical
-    stackup, which KiCad holds only if somebody filled it in.
+
+    "Complete" is not absolute here. It is complete *for the analyses this
+    board declared*: the fields a first-order delay reads are not the fields a
+    thickness-corrected model reads, and neither reads a loss tangent. A
+    stackup missing something no declared analysis will ever consult does not
+    block one; a stackup missing something a declared analysis needs does.
     """
-    state = analysis(ctx)
-    stack = state.stackup
+    shape = stackup(ctx)
+    stack = shape.stackup
+    layers = (sorted(geometry(ctx).layers_used())
+              if ctx.manifest.has("timing.interfaces") else None)
+    required = _requested_fields(ctx, layers)
+    missing = stack.completeness(required=required, layers=layers)
+
     res.measurements["physical_stackup"] = stack.to_dict()
-    res.measurements["reference_plane_layers"] = sorted(state.reference_layers)
-    res.measurements["insufficient_fields"] = state.stackup_problems
-    required = res.limit(ctx.manifest.constraint(
+    res.measurements["reference_plane_layers"] = sorted(shape.reference_layers)
+    res.measurements["layers_in_use"] = layers
+    res.measurements["fields_required_by_declared_analyses"] = sorted(required)
+    res.measurements["insufficient_fields"] = missing
+    res.measurements["full_inventory_gaps"] = stack.completeness()
+    res.measurements["contradictions"] = shape.contradictions
+    complete = res.limit(ctx.manifest.constraint(
         "timing.physical_stackup.require_complete", units="policy",
         cid="timing.physical_stackup.require_complete")).value
 
-    if not state.reference_layers:
-        nets = ctx.manifest.get("timing.physical_stackup.reference_nets", None)
+    # A contradiction is never tolerable, whatever a board's policy says about
+    # completeness. Absence stops an analysis; a contradiction means the thing
+    # being reasoned about is not a stackup.
+    for problem in shape.contradictions[:40]:
+        res.finding(**problem)
+    if shape.contradictions:
+        return res.failed(
+            "the physical stackup contradicts itself or the board in {} "
+            "respect(s); that is not a question of completeness and no policy "
+            "makes it acceptable".format(len(shape.contradictions)))
+
+    no_planes = bool(layers) and not shape.reference_layers
+    if no_planes:
         res.finding(issue="no copper layer carries a zone on any declared "
                           "reference net, so no trace on this board has an "
                           "identifiable reference plane",
-                    reference_nets=nets)
-    for problem in state.stackup_problems[:40]:
+                    reference_nets=ctx.manifest.get(
+                        "timing.physical_stackup.reference_nets", None))
+    for problem in missing[:40]:
         res.finding(**problem)
 
-    if state.stackup_problems or not state.reference_layers:
-        if required:
+    if missing or no_planes:
+        if complete:
             return res.failed(
-                "the physical stackup is incomplete in {} respect(s) and this "
-                "board requires it to be complete; source={}".format(
-                    len(state.stackup_problems) + (
-                        0 if state.reference_layers else 1), stack.source))
+                "the physical stackup does not state {} field(s) that this "
+                "board's declared analyses read, and this board requires it to "
+                "be complete; source={}".format(
+                    len(missing) + (0 if not no_planes else 1), stack.source))
         return res.not_applicable(
             "this board does not require a complete physical stackup, and the "
-            "one available ({}) is incomplete in {} respect(s); propagation "
-            "delay is therefore not derivable and every gate that needs it "
-            "says so rather than substituting a material".format(
-                stack.source, len(state.stackup_problems)))
+            "one available ({}) does not state {} field(s) that its declared "
+            "analyses read; propagation delay is therefore not derivable and "
+            "every gate that needs it says so rather than substituting a "
+            "material".format(stack.source, len(missing)))
     return res.passed(
-        "the physical stackup ({}) states a thickness for every copper layer "
-        "and a thickness, material and permittivity for every dielectric, and "
-        "{} reference plane layer(s) were found".format(
-            stack.source, len(state.reference_layers)))
+        "the physical stackup ({}) states every field the declared analyses "
+        "read ({}), contradicts neither itself nor the board, and {} reference "
+        "plane layer(s) were found".format(
+            stack.source, ", ".join(sorted(required)) or "none",
+            len(shape.reference_layers)))
 
 
 # ---------------------------------------------------------------------------
@@ -329,24 +437,34 @@ def physical_stackup(ctx, res):
 
 @gate("TIMING.INTERCONNECT_DELAY",
       "Passive PCB propagation delay of each declared path is within its limit",
-      requires=("timing.interfaces",), order=320)
+      requires=("timing.interfaces",), order=320,
+      derives=_PROPAGATION_DERIVATION)
 def interconnect_delay(ctx, res):
     """Board copper only. Not device-aware, and the report says so.
 
-    A path whose limit is declared but whose delay cannot be derived is an
-    ERROR, not a pass: an unevaluated requirement is not a satisfied one.
+    A path whose limit is declared but whose delay cannot be derived is
+    blocking, not a pass: an unevaluated requirement is not a satisfied one.
+    So is a limit compared against a lower bound that does not already exceed
+    it - a bound below a maximum proves nothing about the value above it.
     """
-    state = analysis(ctx)
+    state = propagation_analysis(ctx)
     res.measurements["scope"] = (
         "passive PCB interconnect only: copper propagation and, where a model "
         "is declared, via vertical transit. Excludes driver output delay and "
         "output-to-output skew, package delay, receiver threshold behaviour "
         "and PVT variation.")
+    if not state.usable:
+        return res.errored(
+            "this board's declared propagation policy could not be honoured, "
+            "so no delay was evaluated: {}".format(state.error))
+
+    paths = geometry(ctx)
+    res.measurements.update(state.selection.to_dict())
     rows, problems, unresolved = [], [], []
     limited = 0
     fidelities = set()
-    for name, record in state.all_paths():
-        delay = record["delay"]
+    for name, record in paths.all_paths():
+        delay = state.delays[paths.key(record)]
         rows.append(_delay_row(name, delay))
         fidelities.add(delay["fidelity"])
         if delay["insufficient"]:
@@ -357,25 +475,20 @@ def interconnect_delay(ctx, res):
         if limit is None:
             continue
         limited += 1
-        if delay["delay_ps"] is None:
-            problems.append({
-                "interface": name, "path": delay["path"],
-                "issue": "a delay limit is declared but the delay could not be "
-                         "derived; the requirement is unevaluated, not met",
-                "insufficient": delay["insufficient"][:3]})
-        elif delay["delay_ps"] > limit.value:
-            problems.append({
-                "interface": name, "path": delay["path"],
-                "issue": "passive interconnect delay exceeds the declared "
-                         "limit",
-                "delay_ps": delay["delay_ps"], "limit_ps": limit.value})
+        problem = _compare_maximum(delay["delay_ps"],
+                                   delay.get("delay_is_lower_bound", False),
+                                   limit.value, delay["insufficient"])
+        if problem:
+            problems.append({"interface": name, "path": delay["path"],
+                             **problem})
     res.measurements["paths"] = rows
     res.measurements["fidelity"] = sorted(fidelities)
-    res.measurements["physical_stackup_source"] = state.stackup.source
+    res.measurements["physical_stackup_source"] = state.model.stackup.source
     res.measurements["propagation_model"] = state.model.model
     res.measurements["via_delay_model"] = state.model.via_model
-    res.measurements["backend"] = state.backend
     res.measurements["paths_without_derivable_delay"] = len(unresolved)
+    res.measurements["paths_with_lower_bound_delay"] = sum(
+        1 for r in rows if r["delay_is_lower_bound"])
     for entry in unresolved[:20]:
         res.finding(**entry)
     for problem in problems[:40]:
@@ -392,8 +505,31 @@ def interconnect_delay(ctx, res):
             "measurements are recorded".format(len(rows)))
     return res.passed(
         "all {} path(s) with a declared delay limit are within it, from {} at "
-        "fidelity {}".format(limited, state.stackup.source,
-                             ", ".join(sorted(fidelities))))
+        "fidelity {}, backend {}".format(
+            limited, state.model.stackup.source, ", ".join(sorted(fidelities)),
+            state.selection.used))
+
+
+def _compare_maximum(value, is_lower_bound, limit, insufficient):
+    """Compare a measurement against a maximum, honouring what it actually is."""
+    if value is None:
+        return {"issue": "a limit is declared but the value could not be "
+                         "derived; the requirement is unevaluated, not met",
+                "insufficient": list(insufficient)[:3]}
+    if value > limit:
+        # A lower bound already over the limit is proof, because the true
+        # value is larger still.
+        return {"issue": "the measured value exceeds the declared limit",
+                "measured": value, "limit": limit,
+                "measured_is_lower_bound": is_lower_bound}
+    if is_lower_bound:
+        return {"issue": "the value is a lower bound, because some portion of "
+                         "the path contributes an unmodelled amount, and a "
+                         "lower bound below a maximum proves nothing about the "
+                         "value above it. Declare a delay model for the "
+                         "unmodelled portion, or drop the limit",
+                "lower_bound": value, "limit": limit}
+    return None
 
 
 def _delay_row(interface, delay):
@@ -405,8 +541,10 @@ def _delay_row(interface, delay):
         "copper_length_mm": delay["copper_length_mm"],
         "length_by_layer_mm": delay["length_by_layer_mm"],
         "delay_ps": delay["delay_ps"],
+        "delay_is_lower_bound": delay.get("delay_is_lower_bound", False),
         "fidelity": delay["fidelity"],
         "crosses": [t["reference"] for t in delay["component_traversals"]],
+        "component_traversals": delay["component_traversals"],
         "vias": len(delay["vias"]),
         "insufficient": delay["insufficient"],
     }
@@ -418,7 +556,8 @@ def _delay_row(interface, delay):
 
 @gate("TIMING.INTERCONNECT_SKEW",
       "Passive PCB arrival spread within each declared endpoint group",
-      requires=("timing.interfaces",), order=330)
+      requires=("timing.interfaces",), order=330,
+      derives=_PROPAGATION_DERIVATION)
 def interconnect_skew(ctx, res):
     """The spread of passive interconnect delay across a group of endpoints.
 
@@ -427,19 +566,27 @@ def interconnect_skew(ctx, res):
     behaviour and PVT. On a fan-out buffer those terms are commonly larger than
     the copper term this gate measures.
     """
-    state = analysis(ctx)
+    state = propagation_analysis(ctx)
+    paths = geometry(ctx)
     res.measurements["scope"] = (
         "passive PCB interconnect only. This is NOT total clock arrival skew: "
         "it excludes driver output-to-output skew, driver and receiver package "
         "delay, receiver threshold behaviour and PVT variation.")
+    if not state.usable:
+        return res.errored(
+            "this board's declared propagation policy could not be honoured, "
+            "so no spread was evaluated: {}".format(state.error))
+    res.measurements.update(state.selection.to_dict())
+
     groups, problems = [], []
     limited = 0
-    for name, interface in sorted(state.interfaces.items()):
+    for name, interface in sorted(paths.interfaces.items()):
         declared = interface["spec"].get("groups") or {}
         for group_name, group in sorted(declared.items()):
             _identifier("endpoint group", group_name)
             members = _members(interface, group)
-            record = _group_record(name, group_name, group, members)
+            record = _group_record(name, group_name, group, members,
+                                   state.delays, paths)
             groups.append(record)
             if not members:
                 problems.append({
@@ -458,24 +605,20 @@ def interconnect_skew(ctx, res):
                         name, group_name, key), units=units,
                     cid="timing.{}.{}.{}".format(name, group_name, key)))
                 limited += 1
-                measured = record[field]
-                if measured is None:
-                    problems.append({
-                        "interface": name, "group": group_name,
-                        "issue": "a {} limit is declared but the spread could "
-                                 "not be derived; the requirement is "
-                                 "unevaluated, not met".format(units),
-                        "insufficient": record["insufficient"][:3]})
-                elif measured > limit.value:
-                    problems.append({
-                        "interface": name, "group": group_name,
-                        "issue": "arrival spread exceeds the declared limit",
-                        "measured": measured, "limit": limit.value,
-                        "units": units,
-                        "earliest": record["earliest"],
-                        "latest": record["latest"]})
+                # A spread built from lower bounds is not itself a lower
+                # bound - the unknown amounts may differ per path in either
+                # direction - so it cannot be compared at all.
+                bound = (record["any_lower_bound"] if field == "skew_ps"
+                         else False)
+                problem = _compare_maximum(record[field], bound, limit.value,
+                                           record["insufficient"])
+                if problem:
+                    problems.append({"interface": name, "group": group_name,
+                                     "units": units,
+                                     "earliest": record["earliest"],
+                                     "latest": record["latest"], **problem})
     res.measurements["groups"] = groups
-    res.measurements["physical_stackup_source"] = state.stackup.source
+    res.measurements["physical_stackup_source"] = state.model.stackup.source
     res.measurements["propagation_model"] = state.model.model
     for problem in problems[:40]:
         res.finding(**problem)
@@ -502,42 +645,46 @@ def _members(interface, group):
             if pattern.match(r["resolved"].id)]
 
 
-def _group_record(interface, name, group, members):
+def _group_record(interface, name, group, members, delays, paths):
     """One endpoint group's arrival spread, in time and in length."""
-    endpoints = []
-    delays, lengths, insufficient = [], [], []
+    endpoints, times, lengths, insufficient = [], [], [], []
+    any_bound = False
     for record in members:
-        delay = record["delay"]
-        endpoints.append({
-            "path": delay["path"],
-            "destination": delay["destination"]["pad"],
-            "source": delay["source"]["pad"],
-            "copper_length_mm": delay["copper_length_mm"],
-            "delay_ps": delay["delay_ps"],
-        })
-        lengths.append((delay["copper_length_mm"], delay["destination"]["pad"]))
-        if delay["delay_ps"] is None:
-            insufficient.extend(delay["insufficient"][:2])
-        else:
-            delays.append((delay["delay_ps"], delay["destination"]["pad"]))
+        delay = delays.get(paths.key(record))
+        resolved = record["resolved"]
+        length = round(resolved.copper_length_mm, 6)
+        entry = {"path": resolved.id,
+                 "destination": resolved.destination.label,
+                 "source": resolved.source.label,
+                 "copper_length_mm": length,
+                 "delay_ps": None if delay is None else delay["delay_ps"]}
+        if delay is not None:
+            entry["delay_is_lower_bound"] = delay.get("delay_is_lower_bound",
+                                                      False)
+            any_bound = any_bound or entry["delay_is_lower_bound"]
+            if delay["delay_ps"] is None:
+                insufficient.extend(delay["insufficient"][:2])
+            else:
+                times.append((delay["delay_ps"], resolved.destination.label))
+        endpoints.append(entry)
+        lengths.append((length, resolved.destination.label))
 
-    have_all_delays = bool(delays) and len(delays) == len(members)
-    skew = (round(max(delays)[0] - min(delays)[0], 6)
-            if have_all_delays else None)
-    spread = (round(max(lengths)[0] - min(lengths)[0], 6)
-              if lengths else None)
-    ordered = delays if have_all_delays else lengths
+    have_all = bool(times) and len(times) == len(members)
+    ordered = times if have_all else lengths
     return {
         "interface": interface, "group": name,
         "description": group.get("description"),
         "members": len(members),
         "endpoints": endpoints,
-        "skew_ps": skew,
-        "length_spread_mm": spread,
+        "skew_ps": (round(max(times)[0] - min(times)[0], 6)
+                    if have_all else None),
+        "length_spread_mm": (round(max(lengths)[0] - min(lengths)[0], 6)
+                             if lengths else None),
         "earliest": min(ordered)[1] if ordered else None,
         "latest": max(ordered)[1] if ordered else None,
         "insufficient": insufficient,
-        "measured_in": "ps" if have_all_delays else "mm",
+        "any_lower_bound": any_bound,
+        "measured_in": "ps" if have_all else "mm",
     }
 
 
@@ -572,9 +719,12 @@ def setup_hold(ctx, res):
     spec = ctx.manifest.get("timing.device_timing")
     required = ("source_clock_relationship", "source_tco_ps",
                 "receiver_setup_ps", "receiver_hold_ps")
-    state = analysis(ctx)
     res.measurements["declared_receivers"] = sorted(
         (spec.get("receivers") or {}).keys())
+    if not spec.get("receivers"):
+        return res.not_applicable(
+            "timing.device_timing declares no receivers, so there is no "
+            "endpoint whose setup and hold could be evaluated")
     missing = []
     for receiver, entry in sorted((spec.get("receivers") or {}).items()):
         absent = [f for f in required if entry.get(f) is None]
@@ -583,10 +733,6 @@ def setup_hold(ctx, res):
                             "issue": "the receiver's timing model is "
                                      "incomplete, so no margin can be "
                                      "computed for it"})
-    if not spec.get("receivers"):
-        return res.not_applicable(
-            "timing.device_timing declares no receivers, so there is no "
-            "endpoint whose setup and hold could be evaluated")
     for entry in missing:
         res.finding(**entry)
     if missing:
@@ -664,3 +810,66 @@ def timing_models(ctx, res):
         "all {} declared timing model file(s) exist and are inside the "
         "{}-file source closure, alongside the manifest's configuration "
         "identity".format(len(stated), len(closure)))
+
+
+# ---------------------------------------------------------------------------
+# derivation provenance
+# ---------------------------------------------------------------------------
+
+@gate("PROV.DERIVATION_CLOSURE",
+      "Code that computes a reported result is inside the source closure",
+      requires=("reports.source_closure", "reports.implementation_closure"),
+      order=355)
+def derivation_closure(ctx, res):
+    """On whose word does a board's provenance cover its implementation?
+
+    Not the board's. `reports.implementation_closure` is a declaration, and
+    checking it against a closure built from that same declaration proves only
+    that a list equals itself. It cannot notice a module that should have been
+    on the list and is not - which is the only failure worth catching.
+
+    So the requirement comes from the other side. Each gate declares, in the
+    toolkit, which modules compute what it reports; this gate takes the gates
+    applicable to this board and insists those modules are covered. Delete an
+    entry from a board's manifest and this fails, because the toolkit still
+    says the code is load-bearing.
+    """
+    from .. import canonical, cleanroom, core
+
+    policy = canonical.AttributePolicy.load(
+        ctx.manifest.resolve(ctx.manifest.get("fixture.attributes_file")))
+    closure = cleanroom.source_closure(ctx.manifest, policy)
+
+    # A gate is applicable exactly when the manifest declares everything it
+    # requires - the same test the registry applies before running it. A gate
+    # that never runs derives nothing that needs covering.
+    applicable = [entry["id"] for entry in core.registered()
+                  if all(ctx.manifest.has(key) for key in entry["requires"])]
+    needed = core.derivation_modules(applicable)
+
+    res.measurements["applicable_gates"] = sorted(applicable)
+    res.measurements["derivation_modules_required"] = needed
+    res.measurements["source_closure_files"] = len(closure)
+
+    problems = []
+    for module, gates in sorted(needed.items()):
+        if "<executed>" + module not in closure:
+            problems.append({
+                "module": module, "required_by": gates,
+                "issue": "computes what these gates report but is not in the "
+                         "source closure, so the code behind those results is "
+                         "untracked; add it to reports.implementation_closure"})
+    for problem in problems[:40]:
+        res.finding(**problem)
+    if problems:
+        return res.failed(
+            "{} module(s) that derive a reported result are outside the "
+            "source closure".format(len(problems)))
+    if not needed:
+        return res.passed(
+            "no gate applicable to this board derives a value in code, so "
+            "there is no implementation to cover beyond the design itself")
+    return res.passed(
+        "all {} module(s) that derive a result for the {} gate(s) applicable "
+        "to this board are inside the source closure".format(
+            len(needed), len(applicable)))
