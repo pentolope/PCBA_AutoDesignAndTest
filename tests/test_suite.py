@@ -277,13 +277,68 @@ class GenericSourceHygiene(unittest.TestCase):
     """Board identity must live in configuration, never in the framework."""
 
     PACKAGE = paths.PACKAGE
+    # Everything a consumer of this repository executes or reads as policy.
+    # Not just pcbqa/: a board name in a shipped schema or manufacturer profile
+    # is exactly as wrong as one in a gate, and for the same reason.
+    PRODUCTION = (paths.PACKAGE,
+                  os.path.join(paths.ROOT, "schemas"),
+                  os.path.join(paths.ROOT, "profiles"))
+    PRODUCTION_SUFFIXES = (".py", ".json")
 
     def _sources(self):
-        for base, _dirs, files in os.walk(self.PACKAGE):
-            for name in files:
-                if name.endswith(".py"):
+        seen = set()
+        for root in self.PRODUCTION:
+            for base, dirs, files in os.walk(root):
+                dirs[:] = [d for d in dirs if d != "__pycache__"]
+                for name in files:
+                    if not name.endswith(self.PRODUCTION_SUFFIXES):
+                        continue
                     path = os.path.join(base, name)
+                    if path in seen:
+                        continue
+                    seen.add(path)
                     yield path, open(path, encoding="utf-8").read()
+        run_py = os.path.join(paths.ROOT, "run.py")
+        if run_py not in seen:
+            yield run_py, open(run_py, encoding="utf-8").read()
+
+    def _board_identity(self):
+        """The names that identify a specific board, from every manifest.
+
+        Distinct from `_identifiers_from_configs`, which pulls every token out
+        of a manifest and then filters to things that LOOK like designators -
+        an uppercase-only filter that a lowercase project name walks straight
+        past. `microphone_array_v2` sat in pcbqa/render.py through exactly that
+        gap: it was on no allowlist, it was simply never looked at.
+
+        These are long, distinctive and unambiguous, so they are matched as
+        plain substrings rather than filtered by shape.
+        """
+        names = set()
+        for path in self._manifest_paths():
+            doc = json.load(open(path, encoding="utf-8"))
+            if "schema_version" not in doc:
+                continue
+            if doc.get("board_id"):
+                names.add(doc["board_id"])
+            for declared in (doc.get("sources") or {}).values():
+                stem = os.path.splitext(os.path.basename(declared))[0]
+                if len(stem) > 6:
+                    names.add(stem)
+        return {n for n in names if len(n) > 6}
+
+    def test_no_board_name_appears_in_production_source(self):
+        """A board's own name, in any file a consumer executes or reads."""
+        offenders = []
+        for name in sorted(self._board_identity()):
+            for path, text in self._sources():
+                if name.lower() in text.lower():
+                    offenders.append("{}: {}".format(
+                        os.path.relpath(path, paths.ROOT), name))
+        self.assertFalse(offenders,
+                         "board names found in production source; they belong "
+                         "in a manifest, a fixture or an example:" +
+                         chr(10) + chr(10).join(sorted(offenders)))
 
     def _framework_vocabulary(self):
         """Words the framework itself owns: statuses and gate-ID components."""
@@ -349,6 +404,10 @@ class GenericSourceHygiene(unittest.TestCase):
             "KiCad", "bin", "exe", "https", "jlcpcb", "com", "capabilities",
             "pcb", "sha256", "kicad", "command", "constraint", "native_kicad",
             "Copper", "Top", "Bot", "Inr", "Soldermask", "Legend", "Paste",
+            # The manufacturer this toolkit is scoped to. JLCPCB-wide
+            # capability and process knowledge belongs here by design, so its
+            # name is framework vocabulary, not board identity.
+            "JLCPCB", "jlcpcb",
             # KiCad API and CLI vocabulary. These appear in manifests because
             # the manifest documents which KiCad behaviour a tolerance depends
             # on; they name the tool, not this board.

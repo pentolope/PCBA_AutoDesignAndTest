@@ -1,52 +1,55 @@
-"""Draw the four shipped copper layers from the archive, by filename alone.
+"""Draw the shipped copper layers from a fabrication archive, by filename alone.
 
-The point of the fabrication naming is that a reader who knows nothing about
-KiCad, and who cannot see a Gerber X2 attribute because there are none, can
-still tell this is a four-layer board and see copper on every layer. This does
-exactly that: it opens the archive, picks the four files out by extension, and
-renders what it parses out of them into one SVG.
+The point of fabrication naming is that a reader who knows nothing about KiCad,
+and who cannot see a Gerber X2 attribute because there are none, can still tell
+how many copper layers a board has and see copper on every one. This does
+exactly that: it opens the archive, picks the copper files out by extension,
+and renders what it parses out of them into one SVG.
 
-It shares no code path with the exporter - it goes through the validator's own
+It shares no code path with the exporter - it goes through this package's own
 RS-274X parser - so agreement between the picture and the board is evidence
 rather than a restatement.
 
-    "C:/Program Files/KiCad/10.0/bin/python.exe" tools/render_copper_layers.py [OUT.svg]
+The archive is an argument. Nothing here knows which board it is looking at,
+and the layer extensions come from the caller so a two-layer or six-layer
+board renders as readily as a four-layer one.
+
+    python -m pcbqa.render <archive.zip> [out.svg]
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import sys
 import tempfile
 import zipfile
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(HERE, "verification"))
+from pcbqa import gerber
 
-from pcbqa import gerber                                # noqa: E402
-
-ARCHIVE = os.path.join(HERE, "generated", "release",
-                       "microphone_array_v2-revA-fabrication.zip")
-# Protel copper extensions, in stack order. Nothing else identifies them.
-STACK = [(".GTL", "L1 - F.Cu", "#c62828"),
-         (".G2L", "L2 - inner 1", "#1565c0"),
-         (".G3L", "L3 - inner 2", "#2e7d32"),
-         (".GBL", "L4 - B.Cu", "#6a1b9a")]
+# Protel copper extensions in stack order, for the common four-layer case.
+# Nothing else in a Protel-named archive identifies a copper layer.
+FOUR_LAYER = [(".GTL", "L1 - F.Cu", "#c62828"),
+              (".G2L", "L2 - inner 1", "#1565c0"),
+              (".G3L", "L3 - inner 2", "#2e7d32"),
+              (".GBL", "L4 - B.Cu", "#6a1b9a")]
 SCALE = 1.6
 PANEL = 130.0
 
 
-def render(archive=ARCHIVE, out_path=None):
-    out_path = out_path or os.path.join(HERE, "generated", "release",
-                                        "renders", "copper_layers.svg")
+def render(archive, out_path=None, stack=None):
+    """Render `archive`'s copper layers to an SVG beside it, or to `out_path`."""
+    stack = stack or FOUR_LAYER
+    out_path = out_path or os.path.join(
+        os.path.dirname(os.path.abspath(archive)), "copper_layers.svg")
     work = tempfile.mkdtemp(prefix="copper_render_")
     try:
         with zipfile.ZipFile(archive) as zf:
             zf.extractall(work)
         layers, _drills, _extra = gerber.load_layers(work)
         picked = []
-        for ext, label, colour in STACK:
+        for ext, label, colour in stack:
             name = next((n for n in sorted(layers)
                          if n.upper().endswith(ext)), None)
             picked.append((ext, label, colour, name,
@@ -97,7 +100,11 @@ def render(archive=ARCHIVE, out_path=None):
 
 
 def main(argv):
-    out, summary = render(out_path=argv[1] if len(argv) > 1 else None)
+    parser = argparse.ArgumentParser(prog="pcbqa.render", description=__doc__)
+    parser.add_argument("archive", help="fabrication archive (.zip)")
+    parser.add_argument("out", nargs="?", default=None, help="output .svg")
+    args = parser.parse_args(argv[1:])
+    out, summary = render(args.archive, out_path=args.out)
     for label, name, area in summary:
         print("  {:<14} {:<34} {:9.1f} mm2".format(label, name or "MISSING",
                                                    area))

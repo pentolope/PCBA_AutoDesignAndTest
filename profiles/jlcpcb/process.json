@@ -30,34 +30,5 @@
       "exceptions": "Does not apply to a filled-and-capped or resin-plugged process, which a board must order explicitly."
     }
   },
-  "unsubstantiated": {
-    "description": [
-      "Figures inherited from a board's own tooling that are PLAUSIBLY",
-      "manufacturer-wide but for which no authoritative source has been",
-      "recorded. They are kept here, unused by any gate, so the work of",
-      "substantiating them is visible rather than forgotten.",
-      "",
-      "Until each carries a source, a URL or document id, and a retrieval date,",
-      "it must be supplied by a board as its own constraint - not read from",
-      "here. Do not promote one to `limits` without that evidence."
-    ],
-    "component_body_spacing_by_package_pair_mm": {
-      "status": "UNSUBSTANTIATED - do not use as a JLCPCB-wide requirement",
-      "origin": "PCB_MicrophoneArrayV2 tools/check_placement.py, commit 9ba07cf, where it is described only as 'JLCPCB recommended minimum body-to-body spacing, by package pair' with no citation",
-      "units": "mm",
-      "pairs": {
-        "chip|chip": 0.18,
-        "chip|1206": 0.25,
-        "1206|1206": 0.35,
-        "chip|QFN": 1.0,
-        "chip|SOIC": 0.4,
-        "chip|SOT": 0.2,
-        "SOT|SOT": 0.4,
-        "SOIC|SOIC": 0.5,
-        "QFN|QFN": 1.0
-      },
-      "default": 0.2,
-      "what_would_substantiate_it": "A JLCPCB assembly capability page or DFM document stating minimum component-to-component spacing, with a retrieval date. Until then a board that wants this check supplies the matrix in its own manifest."
-    }
-  }
+  "note_on_unsubstantiated_values": "A figure that cannot be substantiated as a manufacturer-wide requirement does not live here at all - not even parked in a side block, because a side block in a shared profile is still a shared file naming one consumer's design. It stays with the board that uses it, as its own constraint, until someone can cite a source and a retrieval date for it."
 }

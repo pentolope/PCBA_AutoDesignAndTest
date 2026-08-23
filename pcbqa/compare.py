@@ -5,7 +5,7 @@ timestamp and are identical as copper. This reads both boards through pcbnew
 and compares what a fabricator would see: where the footprints sit, what the
 outline is, and every track and via rounded to a micron.
 
-    "C:/Program Files/KiCad/10.0/bin/python.exe" tools/compare_boards.py A B
+    python -m pcbqa.compare A.kicad_pcb B.kicad_pcb
 """
 
 from __future__ import annotations

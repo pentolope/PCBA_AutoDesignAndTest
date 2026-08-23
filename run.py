@@ -365,7 +365,7 @@ def _find_manifest(name):
 
     A consumer board always passes a real path. The short forms exist only for
     the toolkit's own fixtures, so `validate portability` and
-    `validate microphone_array_reva` work from a checkout without spelling out
+    `validate <fixture-name>` work from a checkout without spelling out
     where the tests keep things.
     """
     if os.path.isfile(name):
