@@ -60,7 +60,8 @@
         "why": "absolute attempt-directory paths"
       }
     ],
-    "unexplained_changes": 0
+    "unexplained_changes": 0,
+    "timing_gates": "Rev A predates the interconnect timing layer and declares no `timing` block, so every timing gate is non-applicable here. That is the property being frozen: adding a gate must not change what an existing board is rejected for."
   },
   "verdict": "REJECTED",
   "gates": {
@@ -83,11 +84,17 @@
     "PROV.REPORT_FRESHNESS": "FAIL",
     "PROV.SOURCE_AUTHORITY": "FAIL",
     "PROV.SOURCE_CLOSURE": "NOT_APPLICABLE",
+    "PROV.TIMING_MODELS": "NOT_APPLICABLE",
     "ROUTE.ANGLE_STYLE": "FAIL",
     "ROUTE.GEOMETRY_HYGIENE": "PASS",
     "ROUTE.TINY_SEGMENTS": "FAIL",
     "STACK.GERBER_PARITY": "PASS",
     "STACK.NATIVE_VS_MANIFEST": "FAIL",
+    "STACK.PHYSICAL": "NOT_APPLICABLE",
+    "TIMING.INTERCONNECT_DELAY": "NOT_APPLICABLE",
+    "TIMING.INTERCONNECT_SKEW": "NOT_APPLICABLE",
+    "TIMING.PATH_INTEGRITY": "NOT_APPLICABLE",
+    "TIMING.SETUP_HOLD": "NOT_APPLICABLE",
     "VIA.ANNULUS_MASK_OVERLAP": "FAIL",
     "VIA.IN_PAD_CONTACT": "FAIL",
     "VIA.MASK_CLEARANCE_PROCESS": "FAIL",
