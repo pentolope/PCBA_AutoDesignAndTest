@@ -95,6 +95,100 @@ def add_track(board, a_mm, b_mm, net=None, layer=None, width_mm=0.2):
     return t
 
 
+def add_two_pad_footprint(board, ref, x_mm, y_mm, pitch_mm, nets,
+                          size_mm=(0.5, 0.5), value=""):
+    """A two-pad SMD part straddling two nets, for a series-component crossing.
+
+    `nets` is (net for pad 1, net for pad 2). Pads sit at x_mm -/+ pitch/2, so
+    the part's own footprint occupies a known width and the copper either side
+    of it is measurable independently.
+    """
+    fp = pcbnew.FOOTPRINT(board)
+    fp.SetReference(ref)
+    fp.SetValue(value or ref)
+    board.Add(fp)
+    fp.SetPosition(pcbnew.VECTOR2I(MM(x_mm), MM(y_mm)))
+    pads = []
+    for index, (number, net) in enumerate(zip(("1", "2"), nets)):
+        pad = pcbnew.PAD(fp)
+        pad.SetNumber(number)
+        pad.SetAttribute(pcbnew.PAD_ATTRIB_SMD)
+        pad.SetShape(pcbnew.PAD_SHAPE_RECT)
+        pad.SetSize(pcbnew.VECTOR2I(MM(size_mm[0]), MM(size_mm[1])))
+        pad.SetLayerSet(pad.SMDMask())
+        offset = (-pitch_mm / 2.0) if index == 0 else (pitch_mm / 2.0)
+        pad.SetPosition(pcbnew.VECTOR2I(MM(x_mm + offset), MM(y_mm)))
+        if net is not None:
+            pad.SetNet(net)
+        fp.Add(pad)
+        pads.append(pad)
+    return fp, pads
+
+
+def add_zone(board, net, layers, rect_mm):
+    """A filled-copper zone on one or more layers, so a plane is a real pour."""
+    zone = pcbnew.ZONE(board)
+    layer_set = pcbnew.LSET()
+    for layer in layers:
+        layer_set.addLayer(layer)
+    zone.SetLayerSet(layer_set)
+    if net is not None:
+        zone.SetNet(net)
+    outline = pcbnew.SHAPE_POLY_SET()
+    outline.NewOutline()
+    x0, y0, x1, y1 = rect_mm
+    for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
+        outline.Append(MM(x), MM(y))
+    # SetOutline takes ownership of the polygon. Without disowning it here,
+    # Python frees it when this function returns and the zone is left holding
+    # a dangling pointer - which segfaults the interpreter a few boards later,
+    # nowhere near the code that caused it.
+    outline.thisown = 0
+    zone.SetOutline(outline)
+    board.Add(zone)
+    return zone
+
+
+def write_physical_stackup(path, layers, copper_finish="None"):
+    """Insert a `(stackup ...)` block into a saved board's `(setup ...)`.
+
+    KiCad 10's Python bindings expose the stackup descriptor as an opaque SWIG
+    pointer with no accessors, so a fixture cannot build one through pcbnew.
+    It is written into the board file directly instead, in exactly the form
+    KiCad itself writes, which is also the form `pcbqa.stackup_physical` reads.
+
+    `layers` is a list of dicts: name, type, and optionally thickness_mm,
+    material, epsilon_r, loss_tangent.
+    """
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    marker = text.find("(setup")
+    if marker < 0:
+        raise ValueError("{}: no (setup ...) block to insert a stackup "
+                         "into".format(path))
+    insert = text.index("\n", marker) + 1
+    lines = ["\t\t(stackup"]
+    for entry in layers:
+        lines.append('\t\t\t(layer "{}"'.format(entry["name"]))
+        lines.append('\t\t\t\t(type "{}")'.format(entry["type"]))
+        if entry.get("thickness_mm") is not None:
+            lines.append("\t\t\t\t(thickness {})".format(entry["thickness_mm"]))
+        if entry.get("material") is not None:
+            lines.append('\t\t\t\t(material "{}")'.format(entry["material"]))
+        if entry.get("epsilon_r") is not None:
+            lines.append("\t\t\t\t(epsilon_r {})".format(entry["epsilon_r"]))
+        if entry.get("loss_tangent") is not None:
+            lines.append("\t\t\t\t(loss_tangent {})".format(
+                entry["loss_tangent"]))
+        lines.append("\t\t\t)")
+    lines.append('\t\t\t(copper_finish "{}")'.format(copper_finish))
+    lines.append("\t\t\t(dielectric_constraints no)")
+    lines.append("\t\t)")
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text[:insert] + "\n".join(lines) + "\n" + text[insert:])
+    return path
+
+
 def save(board, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     board.Save(path)
