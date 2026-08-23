@@ -34,7 +34,7 @@ from pcbqa import (canonical, cleanroom, core, electrical_path,     # noqa: E402
 from pcbqa.core import Context, Manifest, Status                    # noqa: E402
 from pcbqa.electrical_path import PathError                         # noqa: E402
 from pcbqa.gates import g_timing, g_geometry                        # noqa: E402,F401
-from tests import paths, synth                                      # noqa: E402
+from tests import consumer, paths, synth                            # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1130,143 @@ class ExistingBehaviourIsUnchanged(unittest.TestCase):
             for token in forbidden:
                 self.assertNotIn(token.lower(), text.lower(),
                                  "{} names {}".format(name, token))
+
+
+# ---------------------------------------------------------------------------
+# a registered consumer board, if one declares a timing policy
+# ---------------------------------------------------------------------------
+
+@consumer.needed
+class ARegisteredConsumersTimingPolicy(unittest.TestCase):
+    """The integration half: a real board, checked against its own declaration.
+
+    Nothing here knows anything about the board. Every expectation is read out
+    of whatever that board's manifest declares, so this passes for any consumer
+    with a timing policy and skips for any consumer without one. What it proves
+    is the property a fixture cannot: that the declaration mechanism survives
+    contact with a real netlist, real copper and a real stackup.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.document = consumer.document()
+        if not cls.document.get("timing", {}).get("interfaces"):
+            raise unittest.SkipTest(
+                "the registered consumer board declares no timing.interfaces")
+        cls.manifest = Manifest(consumer.require())
+        cls.workdir = tempfile.mkdtemp(prefix="pcbqa_consumer_timing_")
+        cls.ctx = Context(cls.manifest, cls.workdir)
+        cls.results = {r.gate_id: r
+                       for r in core.run_all(cls.ctx, only=TIMING_GATES)}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.workdir, ignore_errors=True)
+
+    def _rows(self):
+        rows = []
+        interfaces = self.results["TIMING.PATH_INTEGRITY"].measurements.get(
+            "interfaces", {})
+        for name, interface in sorted(interfaces.items()):
+            for row in interface["paths"]:
+                rows.append((name, row))
+        return rows
+
+    def test_no_timing_gate_errors_on_a_real_board(self):
+        """An ERROR here means the gate could not be evaluated at all."""
+        errored = {gate_id: result.reason
+                   for gate_id, result in self.results.items()
+                   if result.status == Status.ERROR}
+        self.assertEqual(errored, {})
+
+    def test_every_declared_route_resolves(self):
+        result = self.results["TIMING.PATH_INTEGRITY"]
+        self.assertEqual(result.status, Status.PASS,
+                         "{}\n{}".format(result.reason, result.findings[:4]))
+
+    def test_the_resolved_count_matches_what_the_board_declared(self):
+        interfaces = self.document["timing"]["interfaces"]
+        measured = self.results["TIMING.PATH_INTEGRITY"].measurements[
+            "interfaces"]
+        checked = 0
+        for name, declared in sorted(interfaces.items()):
+            expected = declared.get("expected_path_count")
+            if expected is None:
+                continue
+            checked += 1
+            self.assertEqual(measured[name]["resolved_paths"], expected, name)
+        if not checked:
+            self.skipTest("the consumer declares no expected_path_count")
+
+    def test_every_path_crosses_the_components_its_route_declares(self):
+        """The defect this layer exists to prevent, checked on real copper."""
+        declared_crossings = {}
+        for _name, interface in sorted(
+                self.document["timing"]["interfaces"].items()):
+            for route in _declared_routes(interface):
+                declared_crossings[route["id"]] = [
+                    step["reference"] for step in route["steps"]
+                    if step.get("kind") == "component"]
+        self.assertTrue(declared_crossings,
+                        "the consumer declares no routes at all")
+        for _interface, row in self._rows():
+            expected = declared_crossings.get(row["path"])
+            self.assertIsNotNone(expected, row["path"])
+            self.assertEqual(row["crosses"], expected, row["path"])
+
+    def test_a_path_that_crosses_a_component_is_longer_than_its_last_step(self):
+        """A crossing means copper before it, and that copper is in the total."""
+        checked = 0
+        for _interface, row in self._rows():
+            if not row["crosses"]:
+                continue
+            checked += 1
+            copper = [s for s in row["steps"] if s["kind"] == "copper"]
+            self.assertGreater(len(copper), 1, row["path"])
+            self.assertGreater(row["copper_length_mm"],
+                               copper[-1]["length_mm"], row["path"])
+        if not checked:
+            self.skipTest("no consumer path crosses a component")
+
+    def test_results_identify_the_stackup_source_and_the_model(self):
+        measurements = self.results["TIMING.INTERCONNECT_DELAY"].measurements
+        self.assertIn(measurements["physical_stackup_source"],
+                      (stackup_physical.NATIVE, stackup_physical.DECLARED,
+                       stackup_physical.MERGED))
+        self.assertIn(measurements["propagation_model"], propagation.MODELS)
+        self.assertIn(measurements["via_delay_model"], propagation.VIA_MODELS)
+        self.assertTrue(measurements["backend"])
+
+    def test_no_delay_is_reported_where_the_stackup_cannot_support_one(self):
+        """The whole point: absent material data produce absence, not numbers."""
+        for row in self.results["TIMING.INTERCONNECT_DELAY"].measurements[
+                "paths"]:
+            if row["insufficient"]:
+                self.assertIsNone(row["delay_ps"], row["path"])
+                self.assertEqual(row["fidelity"], propagation.GEOMETRY_ONLY,
+                                 row["path"])
+            else:
+                self.assertIsNotNone(row["delay_ps"], row["path"])
+
+    def test_a_declared_model_file_is_covered_by_provenance(self):
+        if not self.document.get("timing", {}).get("models"):
+            self.skipTest("the consumer declares no timing model files")
+        result = self.results["PROV.TIMING_MODELS"]
+        self.assertEqual(result.status, Status.PASS, result.reason)
+
+    def test_the_skew_report_says_it_is_interconnect_only(self):
+        scope = self.results["TIMING.INTERCONNECT_SKEW"].measurements["scope"]
+        self.assertIn("NOT total clock arrival skew", scope)
+
+
+def _declared_routes(interface):
+    """The routes an interface declares, template expanded, as plain dicts."""
+    spec = interface.get("routes") or {}
+    routes = list(spec.get("paths") or [])
+    if spec.get("template") is not None:
+        routes.extend(electrical_path.expand_template(spec["template"],
+                                                      spec["bindings"]))
+    return routes
 
 
 if __name__ == "__main__":                                  # pragma: no cover

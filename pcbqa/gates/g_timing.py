@@ -209,6 +209,17 @@ def path_integrity(ctx, res):
                 "copper_length_mm": round(resolved.copper_length_mm, 4),
                 "length_by_layer_mm": resolved.length_by_layer_mm(),
                 "via_transitions": len(resolved.via_transitions()),
+                # How the path decomposes. Without this a reader can see the
+                # total but not which part of it a net-scoped measurement
+                # would have missed, which is most of the point.
+                "steps": [
+                    {"kind": s.kind,
+                     "net": s.record.get("net"),
+                     "reference": s.record.get("reference"),
+                     "from": s.record.get("from") or s.record.get("from_pad"),
+                     "to": s.record.get("to") or s.record.get("to_pad"),
+                     "length_mm": round(s.length_mm, 4)}
+                    for s in resolved.steps],
             })
         summary[name] = {
             "description": spec.get("description"),
