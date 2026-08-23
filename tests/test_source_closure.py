@@ -127,12 +127,34 @@ class TheClosureCoversTheDesignAndNothingElse(unittest.TestCase):
                                   key, entry.get("part_number")))
 
     def test_it_covers_the_configuration_and_the_executed_code(self):
+        """Exactly the modules the board pinned - no more, and no fewer.
+
+        Read from the consumer's own manifest rather than written down here.
+        Which code a board has to pin is a property of that board: it pins
+        whatever DERIVES a value rather than reading one off the design, and a
+        board that grows a second derivation has to be able to pin it without
+        a test in the toolkit saying otherwise.
+
+        Comparing against the declaration is the stronger check anyway. A fixed
+        list only proves the closure matches that list; this proves the closure
+        is exactly what the board asked for, which is the property that makes
+        `implementation_closure` mean anything.
+        """
         self.assertIn("<configuration>", self.closure)
-        executed = [k for k in self.closure if k.startswith("<executed>")]
-        self.assertEqual(sorted(executed),
-                         ["<executed>pcbqa.cleanroom",
-                          "<executed>pcbqa.gates.g_orientation",
-                          "<executed>pcbqa.orientation"])
+        declared = Manifest(_live()).get("reports.implementation_closure")
+        self.assertTrue(declared,
+                        "the consumer pins no implementation at all, so this "
+                        "gate would pass by covering nothing")
+        executed = sorted(k for k in self.closure
+                          if k.startswith("<executed>"))
+        self.assertEqual(executed,
+                         sorted("<executed>" + name for name in declared))
+        # And every one of them is a module that really loaded, with bytes.
+        import importlib
+        for name in declared:
+            module = importlib.import_module(name)
+            self.assertTrue(os.path.isfile(getattr(module, "__file__", "")),
+                            "{} has no importable file".format(name))
 
     def test_no_validator_fixture_or_output_leaks_in(self):
         """These exist on some machines and not others."""
