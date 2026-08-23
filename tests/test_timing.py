@@ -586,6 +586,85 @@ class ViaTreatment(unittest.TestCase):
             places=4)
 
 
+class WhatADelayActuallyNeeds(unittest.TestCase):
+    """Insufficiency has to be exact, or it blocks results it did not need to.
+
+    "The stackup is incomplete" and "the delay cannot be derived" are different
+    questions with different answers, and conflating them means a board that
+    obtained everything a delay needs is still told it has nothing.
+    """
+
+    def _stack(self, drop=()):
+        layers = []
+        for entry in FIXTURE_STACKUP:
+            entry = dict(entry, kind=_kind(entry))
+            for field in drop:
+                if field in entry:
+                    entry[field] = None
+            layers.append(entry)
+        return stackup_physical.from_declaration({"layers": layers})
+
+    def test_a_missing_loss_tangent_does_not_block_a_delay(self):
+        """Loss tangent sets attenuation, not velocity."""
+        stack = self._stack(drop=("loss_tangent",))
+        model = propagation.PropagationModel(stack, {"In1.Cu"})
+        record = model.conductor("F.Cu", TRACK_WIDTH_MM)
+        self.assertAlmostEqual(record["ps_per_mm"],
+                               expected_microstrip_ps_per_mm(), places=6)
+
+    def test_a_missing_copper_thickness_does_not_block_the_zero_thickness_model(self):
+        stack = self._stack()
+        for layer in stack.layers:
+            if layer.is_copper:
+                layer.thickness_mm = None
+        model = propagation.PropagationModel(stack, {"In1.Cu"})
+        record = model.conductor("F.Cu", TRACK_WIDTH_MM)
+        self.assertAlmostEqual(record["ps_per_mm"],
+                               expected_microstrip_ps_per_mm(), places=6)
+
+    def test_but_it_does_block_the_thickness_corrected_model(self):
+        stack = self._stack()
+        for layer in stack.layers:
+            if layer.is_copper:
+                layer.thickness_mm = None
+        model = propagation.PropagationModel(stack, {"In1.Cu"},
+                                             model=propagation.HAMMERSTAD_T)
+        with self.assertRaises(propagation.PropagationError):
+            model.conductor("F.Cu", TRACK_WIDTH_MM)
+
+    def test_completeness_still_reports_both_and_says_what_each_is_for(self):
+        """STACK.PHYSICAL's subject is the whole stackup, not just delay."""
+        stack = self._stack(drop=("loss_tangent",))
+        issues = stack.completeness()
+        self.assertTrue(issues)
+        self.assertTrue(all("needed_for" in issue for issue in issues), issues)
+        self.assertTrue(any("loss" in issue["needed_for"] for issue in issues))
+
+    def test_a_via_across_an_unknown_stackup_reports_no_length_not_a_crash(self):
+        """The failure that took down the first real-board run."""
+        layers = [dict(entry, kind=_kind(entry), thickness_mm=None,
+                       epsilon_r=None, loss_tangent=None)
+                  for entry in FIXTURE_STACKUP]
+        stack = stackup_physical.from_declaration({"layers": layers})
+        model = propagation.PropagationModel(stack, {"In1.Cu", "In2.Cu"})
+        record = model.via({"from_layer": "F.Cu", "to_layer": "B.Cu",
+                            "via_top_layer": "F.Cu",
+                            "via_bottom_layer": "B.Cu"})
+        self.assertIsNone(record["vertical_length_mm"])
+        self.assertEqual(record["delay_ps"], 0.0)
+
+    def test_the_same_via_refuses_when_a_delay_is_actually_asked_for(self):
+        layers = [dict(entry, kind=_kind(entry), thickness_mm=None,
+                       epsilon_r=None, loss_tangent=None)
+                  for entry in FIXTURE_STACKUP]
+        stack = stackup_physical.from_declaration({"layers": layers})
+        model = propagation.PropagationModel(stack, {"In1.Cu", "In2.Cu"},
+                                             via_model=propagation.VIA_GEOMETRIC)
+        with self.assertRaises(propagation.Unsupported):
+            model.via({"from_layer": "F.Cu", "to_layer": "B.Cu",
+                       "via_top_layer": "F.Cu", "via_bottom_layer": "B.Cu"})
+
+
 def _find(state, path_id):
     for _interface, record in state.all_paths():
         if record["resolved"].id == path_id:

@@ -224,16 +224,22 @@ class PhysicalStackup:
             return problems
         for entry in self.layers:
             if entry.is_copper and entry.thickness_mm is None:
-                problems.append({"layer": entry.name,
-                                 "issue": "copper thickness is not stated"})
+                problems.append({
+                    "layer": entry.name,
+                    "issue": "copper thickness is not stated",
+                    "needed_for": "the thickness-corrected microstrip model "
+                                  "and for via geometry, not for the "
+                                  "zero-thickness model"})
             if not entry.is_dielectric:
                 continue
-            for field, label in (("thickness_mm", "thickness"),
-                                 ("epsilon_r", "relative permittivity"),
-                                 ("loss_tangent", "loss tangent")):
+            for field, label, needed in (
+                    ("thickness_mm", "thickness", "delay"),
+                    ("epsilon_r", "relative permittivity", "delay"),
+                    ("loss_tangent", "loss tangent", "loss, not delay")):
                 if getattr(entry, field) is None:
                     problems.append({"layer": entry.name,
-                                     "issue": "{} is not stated".format(label)})
+                                     "issue": "{} is not stated".format(label),
+                                     "needed_for": needed})
             if not entry.uniform:
                 problems.append({
                     "layer": entry.name,
@@ -287,10 +293,18 @@ class PhysicalStackup:
             mode = "microstrip" if signal_layer in outer else "embedded_microstrip"
             gaps = [above_gap if above is not None else below_gap]
 
+        # `problems` is what stops a PROPAGATION DELAY from being derived, and
+        # is deliberately narrower than "the stackup is incomplete", which is
+        # `completeness()`'s question. Delay needs the dielectric height and
+        # its permittivity. It does not need the loss tangent, which sets
+        # attenuation rather than velocity, and it does not need the copper
+        # thickness unless a thickness-corrected model was selected - and that
+        # model refuses on its own when it is missing. Requiring either here
+        # would block a perfectly derivable delay on a figure it never uses.
         problems = []
         epsilon = _one_value(gaps, "epsilon_r", problems,
                              "relative permittivity")
-        loss = _one_value(gaps, "loss_tangent", problems, "loss tangent")
+        loss = _one_value(gaps, "loss_tangent", [], "loss tangent")
         for gap in gaps:
             if gap["thickness_mm"] is None:
                 problems.append({
@@ -302,8 +316,6 @@ class PhysicalStackup:
                     "issue": "the dielectric between this layer and its "
                              "reference plane is not one uniform material",
                     "dielectrics": gap["layers"]})
-        if entry.thickness_mm is None:
-            problems.append({"issue": "this copper layer states no thickness"})
 
         nearest = gaps[0]
         return ReferenceGeometry(
@@ -577,14 +589,18 @@ def merge(native, declared):
     resolving it by preferring one side would hide it.
     """
     if native is None or native.empty:
+        # The board file holds no layer structure, so the declaration supplies
+        # all of it. The label still has to say whether anything native was
+        # used: overall board thickness is recorded by KiCad whether or not the
+        # stackup was ever filled in, and if it came from there the result is
+        # not purely a declaration.
+        native_thickness = (native.declared_total_thickness_mm
+                            if native is not None else None)
         return PhysicalStackup(
             declared.layers,
-            DECLARED if native is None or not native.notes else MERGED,
+            MERGED if native_thickness is not None else DECLARED,
             declared_total_thickness_mm=(
-                declared.declared_total_thickness_mm
-                if native is None
-                else (native.declared_total_thickness_mm
-                      or declared.declared_total_thickness_mm)),
+                native_thickness or declared.declared_total_thickness_mm),
             notes=(list(native.notes) if native else []) + list(declared.notes))
     by_name = {l.name: l for l in declared.layers}
     conflicts = []

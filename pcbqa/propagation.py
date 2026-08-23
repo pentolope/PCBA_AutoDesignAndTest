@@ -352,8 +352,12 @@ class PropagationModel:
         }
         span = self._vertical_mm(transition.get("from_layer"),
                                  transition.get("to_layer"))
-        record["vertical_length_mm"] = (None if span is None
-                                        else round(span["length_mm"], 6))
+        # A stackup that states no thickness gives no vertical length. That is
+        # a missing measurement, reported as absent - not a zero, and not a
+        # crash on rounding it.
+        length = None if span is None else span["length_mm"]
+        record["vertical_length_mm"] = (None if length is None
+                                        else round(length, 6))
         record["layers_crossed"] = None if span is None else span["crossed"]
         if self.via_model == VIA_NONE:
             record["delay_ps"] = 0.0
