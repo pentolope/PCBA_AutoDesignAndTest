@@ -135,6 +135,103 @@ VIA_NONE = "none"
 VIA_GEOMETRIC = "geometric"
 VIA_MODELS = (VIA_NONE, VIA_GEOMETRIC)
 
+#: Recognised but not implemented, so a board asking for one is refused by name
+#: rather than by "unknown model".
+VIA_RESERVED = ("extracted", "sparameter", "quasi_static", "full_wave")
+
+
+class ViaPolicy:
+    """What a board has decided about the vertical transit through a hole.
+
+    Four states, and the difference between the middle two is the whole point.
+
+    ``absent``      nothing declared. The transit is real and positive and
+                    nothing is attributed to it, so a total containing one is
+                    a lower bound.
+    ``none``        the board named the treatment but justified nothing. It
+                    has chosen to omit the transit, not established that it is
+                    negligible - so this is *also* a lower bound, and saying
+                    otherwise would turn "not modelled yet" into an asserted
+                    exact zero. That was the bug.
+    ``none`` + justification
+                    the board has taken responsibility for the omission on a
+                    stated reason. Exact.
+    ``geometric``   first-order: the barrel as a length of line in the
+                    surrounding dielectric. Exact given the data, and refused
+                    outright when the stackup lacks it.
+    """
+
+    __slots__ = ("model", "justification", "declared")
+
+    def __init__(self, model, justification=None, declared=True):
+        self.model = model
+        self.justification = justification
+        self.declared = declared
+
+    @property
+    def exact(self):
+        """Does this contribute a value rather than an acknowledged omission?"""
+        if self.model == VIA_GEOMETRIC:
+            return True
+        return bool(self.justification)
+
+    @property
+    def fidelity(self):
+        if self.model == VIA_GEOMETRIC:
+            return ANALYTIC_TRANSMISSION_LINE
+        return DECLARED_MODEL if self.justification else UNKNOWN_CONTRIBUTION
+
+    def note(self):
+        if self.model == VIA_GEOMETRIC:
+            return ("first-order: barrel treated as a length of line in the "
+                    "surrounding dielectric; no inductance, no stub, no "
+                    "discontinuity")
+        if self.justification:
+            return ("vertical extent measured, no delay attributed, on a "
+                    "declared justification: {}".format(self.justification))
+        if self.declared:
+            return ("vertical extent measured and no delay attributed. This "
+                    "board named the 'none' treatment but justified nothing, "
+                    "so the transit is omitted rather than shown to be "
+                    "negligible, and any total containing it is a lower bound")
+        return ("vertical extent measured, no delay attributed, and this board "
+                "declared no via treatment at all. The transit is real and "
+                "positive, so any total containing it is a lower bound")
+
+    def to_dict(self):
+        return {"model": self.model, "declared": self.declared,
+                "justified": bool(self.justification),
+                **({"justification": self.justification}
+                   if self.justification else {})}
+
+
+def via_policy(declaration):
+    """Read a board's `via_delay_model` declaration. Absent is a state too."""
+    if declaration is None:
+        return ViaPolicy(VIA_NONE, None, declared=False)
+    if isinstance(declaration, str):
+        model, justification = declaration, None
+    elif isinstance(declaration, dict):
+        model = declaration.get("model")
+        justification = declaration.get("justification")
+        if not model:
+            raise PropagationError(
+                "the via delay model declares no `model`")
+    else:
+        raise PropagationError(
+            "via_delay_model is a {}, not a string or an object".format(
+                type(declaration).__name__))
+    if model in VIA_RESERVED:
+        raise PropagationError(
+            "via delay model {!r} is recognised but this release implements no "
+            "evaluation for it; implemented: {}".format(
+                model, ", ".join(VIA_MODELS)))
+    if model not in VIA_MODELS:
+        raise PropagationError(
+            "via delay model {!r} is not implemented; this validator has "
+            "{}".format(model, ", ".join(VIA_MODELS)))
+    return ViaPolicy(model, justification, declared=True)
+
 
 #: The result contract every backend produces, whatever it is inside.
 #:
@@ -311,11 +408,28 @@ def required_stackup_fields(model, via_model, declared_layers=None,
         wanted.add(NEEDS_EPSILON_R)
         if model == HAMMERSTAD_T:
             wanted.add(NEEDS_COPPER_THICKNESS)
-    if via_model == VIA_GEOMETRIC:
+    if _via_model_name(via_model) == VIA_GEOMETRIC:
+        # Everything inside a barrel's vertical span, not just the layers the
+        # horizontal copper runs on. The caller widens `layers` to the span for
+        # the same reason; this only says which fields get read there.
         wanted.add(NEEDS_DIELECTRIC_THICKNESS)
         wanted.add(NEEDS_EPSILON_R)
         wanted.add(NEEDS_COPPER_THICKNESS)
     return wanted
+
+
+def _via_model_name(via_model):
+    """The model name out of either declaration form."""
+    if isinstance(via_model, dict):
+        return via_model.get("model")
+    if isinstance(via_model, ViaPolicy):
+        return via_model.model
+    return via_model
+
+
+def via_span_needs_stackup(via_model):
+    """Does this via treatment read the stackup inside a barrel's span?"""
+    return _via_model_name(via_model) == VIA_GEOMETRIC
 
 
 class PropagationModel:
@@ -329,27 +443,22 @@ class PropagationModel:
     """
 
     def __init__(self, stackup, reference_layers, model=HAMMERSTAD,
-                 via_model=VIA_NONE, declared_layers=None, backend="analytic",
-                 via_model_declared=True):
+                 via_model=None, declared_layers=None, backend="analytic",
+                 max_unreferenced_mm=0.0):
         if model not in MODELS:
             raise PropagationError(
                 "propagation model {!r} is not implemented; this validator has "
                 "{}".format(model, ", ".join(MODELS)))
-        if via_model not in VIA_MODELS:
-            raise PropagationError(
-                "via delay model {!r} is not implemented; this validator has "
-                "{}".format(via_model, ", ".join(VIA_MODELS)))
+        self.via_treatment = via_policy(via_model)
         self.stackup = stackup
         self.reference_layers = set(reference_layers or ())
         self.model = model
-        self.via_model = via_model
-        #: Whether the board chose this via treatment or merely inherited it.
-        #: `none` chosen is a decision and its zero is exact; `none` inherited
-        #: is nobody having considered the question, and a via's vertical
-        #: transit is real, positive and then unmodelled - which makes a total
-        #: containing it a lower bound, exactly as an unmodelled component
-        #: does.
-        self.via_model_declared = via_model_declared
+        self.via_model = self.via_treatment.model
+        #: How much copper a board accepts having no reference conductor under
+        #: it. Zero unless the board declares otherwise, because a route with
+        #: no return path underneath is not the geometry any of these formulas
+        #: describe.
+        self.max_unreferenced_mm = max_unreferenced_mm
         self.backend = backend
         self.declared = {
             layer: DeclaredLayerModel(layer, spec)
@@ -475,7 +584,8 @@ class PropagationModel:
             "to_layer": transition.get("to_layer"),
             "via_top_layer": transition.get("via_top_layer"),
             "via_bottom_layer": transition.get("via_bottom_layer"),
-            "model": self.via_model,
+            "model": self.via_treatment.model,
+            "through": transition.get("through", "via"),
         }
         span = self._vertical_mm(transition.get("from_layer"),
                                  transition.get("to_layer"))
@@ -486,22 +596,12 @@ class PropagationModel:
         record["vertical_length_mm"] = (None if length is None
                                         else round(length, 6))
         record["layers_crossed"] = None if span is None else span["crossed"]
-        if self.via_model == VIA_NONE:
+        record["policy"] = self.via_treatment.to_dict()
+        if self.via_treatment.model == VIA_NONE:
             record["delay_ps"] = 0.0
-            if self.via_model_declared:
-                record["fidelity"] = DECLARED_MODEL
-                record["exact"] = True
-                record["note"] = (
-                    "vertical extent measured, no delay attributed: this "
-                    "board declares the 'none' via delay model")
-            else:
-                record["fidelity"] = UNKNOWN_CONTRIBUTION
-                record["exact"] = False
-                record["note"] = (
-                    "vertical extent measured, no delay attributed, and this "
-                    "board declared no via delay model at all. The transit is "
-                    "real and positive, so any total containing it is a lower "
-                    "bound")
+            record["fidelity"] = self.via_treatment.fidelity
+            record["exact"] = self.via_treatment.exact
+            record["note"] = self.via_treatment.note()
             return record
         if span is None:
             raise Unsupported(
@@ -522,12 +622,11 @@ class PropagationModel:
         # line in the surrounding dielectric. It attributes no inductance and
         # models no stub, which is why it is named `geometric` in the report.
         record["epsilon_r"] = span["epsilon_r"]
-        record["fidelity"] = ANALYTIC_TRANSMISSION_LINE
+        record["fidelity"] = self.via_treatment.fidelity
+        record["exact"] = True
         record["delay_ps"] = round(
             span["length_mm"] * math.sqrt(span["epsilon_r"]) / C_MM_PER_PS, 6)
-        record["note"] = ("first-order: barrel treated as a length of line in "
-                          "the surrounding dielectric; no inductance, no stub, "
-                          "no discontinuity")
+        record["note"] = self.via_treatment.note()
         return record
 
     def _vertical_mm(self, from_layer, to_layer):
@@ -538,19 +637,29 @@ class PropagationModel:
             return None
         low, high = sorted((names.index(from_layer), names.index(to_layer)))
         crossed, epsilons = [], []
-        total, known = 0.0, True
+        total, known, complete = 0.0, True, True
         for entry in self.stackup.layers[low + 1:high]:
             crossed.append(entry.name)
             if entry.thickness_mm is None:
                 known = False
             else:
                 total += entry.thickness_mm
-            if entry.is_dielectric and entry.epsilon_r is not None:
+            if not entry.is_dielectric:
+                continue
+            if entry.epsilon_r is None:
+                # A dielectric inside the barrel that states no permittivity
+                # makes the whole span unknown. Taking the value from the
+                # dielectrics either side of it would be filling a gap with a
+                # neighbour's number - which is the guess this refuses to make,
+                # and is invisible in the answer once made.
+                complete = False
+            else:
                 epsilons.append(entry.epsilon_r)
         unique = set(epsilons)
         return {"length_mm": total if known else None,
                 "crossed": crossed,
-                "epsilon_r": unique.pop() if len(unique) == 1 else None}
+                "epsilon_r": (unique.pop()
+                              if complete and len(unique) == 1 else None)}
 
     # -- whole paths -------------------------------------------------------
     def evaluate(self, resolved_path):
@@ -583,7 +692,11 @@ class PropagationModel:
             "physical_stackup_source": self.stackup.source,
             "propagation_model": self.model,
             "via_delay_model": self.via_model,
+            "via_policy": self.via_treatment.to_dict(),
             "backend": self.backend,
+            "length_ambiguity_mm": round(
+                sum(s.record.get("length_ambiguity_mm") or 0.0
+                    for s in getattr(resolved_path, "steps", ())), 6),
         }
         total = 0.0
         fidelities = set()
@@ -600,6 +713,23 @@ class PropagationModel:
                     "width_mm": conductor["width_mm"],
                     "length_mm": conductor["length_mm"],
                     "issue": str(exc)})
+                continue
+            unreferenced = conductor.get("unreferenced_mm") or 0.0
+            if unreferenced > self.max_unreferenced_mm:
+                # Every closed form here assumes a reference conductor under
+                # the whole run. Copper crossing a split, a void, or the edge
+                # of the pour has none there, and the formula does not describe
+                # it - so the answer is no answer, not the nearest-looking one.
+                record["insufficient"].append({
+                    "portion": "conductor",
+                    "layer": conductor["layer"],
+                    "width_mm": conductor["width_mm"],
+                    "length_mm": conductor["length_mm"],
+                    "unreferenced_mm": round(unreferenced, 4),
+                    "issue": "{} mm of this run has no poured reference "
+                             "conductor beneath it, so the transmission-line "
+                             "geometry the model assumes does not exist there"
+                             .format(round(unreferenced, 4))})
                 continue
             delay = conductor["length_mm"] * model["ps_per_mm"]
             total += delay

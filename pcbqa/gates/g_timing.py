@@ -60,8 +60,16 @@ _PROPAGATION_DERIVATION = _GEOMETRY_DERIVATION + (
 class GeometryAnalysis:
     """Declared paths resolved against copper. No materials, no model."""
 
-    def __init__(self, interfaces):
+    def __init__(self, interfaces, reference_copper=None, unfilled_layers=(),
+                 resolver=None):
         self.interfaces = interfaces
+        self.resolver = resolver
+        self.reference_copper = reference_copper or {}
+        #: Layers a reference net is assigned to but whose zones carry no
+        #: filled polygons. Not the same as having no copper: it is the board
+        #: never having been refilled, and a coverage answer from it would be
+        #: an answer about nothing.
+        self.unfilled_layers = list(unfilled_layers)
 
     def all_paths(self):
         for name, interface in sorted(self.interfaces.items()):
@@ -82,6 +90,25 @@ class GeometryAnalysis:
             for conductor in record["resolved"].conductors():
                 used.add(conductor["layer"])
         return used
+
+    def via_span_layers(self, stack):
+        """Every copper layer a resolved path's barrels pass through.
+
+        A trace on the outer layers of a four-layer board tells you nothing
+        about the two dielectrics in the middle - until a via joins those
+        outer layers, at which point a model that attributes delay to the
+        transit reads every one of them. Scoping the stackup question to the
+        layers carrying horizontal copper therefore asks for less data than
+        the calculation consumes, and a stackup silent about the middle would
+        have been called complete.
+        """
+        spanned = set()
+        for _name, record in self.all_paths():
+            for transition in record["resolved"].via_transitions():
+                spanned.update(stack.copper_layers_between(
+                    transition.get("via_top_layer"),
+                    transition.get("via_bottom_layer")))
+        return spanned
 
     @staticmethod
     def key(record):
@@ -111,13 +138,22 @@ def geometry(ctx):
         board = ctx.board()
         geom.configure(manifest.geometry_profile()
                        .tolerance("polygon_chord_error_mm").value)
-        resolver = electrical_path.PathResolver(board, geom.pad_copper_polygon)
+        # Reference copper is board geometry - no material figure, no model,
+        # no solver - so it is gathered here and PATH_INTEGRITY stays
+        # answerable without any of those. It is only *used* by propagation.
+        spec = manifest.get("timing.physical_stackup", {}) or {}
+        poured, unfilled = ({}, [])
+        if spec.get("reference_nets"):
+            poured, unfilled = stackup_physical.reference_copper(
+                board, spec["reference_nets"])
+        resolver = electrical_path.PathResolver(board, geom.pad_copper_polygon,
+                                                reference_copper=poured)
         interfaces = {}
         for name, declared in sorted(
                 (manifest.get("timing.interfaces") or {}).items()):
             _identifier("interface", name)
             interfaces[name] = _interface(name, declared, resolver)
-        return GeometryAnalysis(interfaces)
+        return GeometryAnalysis(interfaces, poured, unfilled, resolver)
     return ctx.cache("timing_geometry", build)
 
 
@@ -226,10 +262,11 @@ def propagation_analysis(ctx):
             model = propagation.PropagationModel(
                 shape.stackup, shape.reference_layers,
                 model=spec.get("model", propagation.HAMMERSTAD),
-                via_model=spec.get("via_delay_model", propagation.VIA_NONE),
+                via_model=spec.get("via_delay_model"),
                 declared_layers=spec.get("declared_layers"),
                 backend=selection.used,
-                via_model_declared="via_delay_model" in spec)
+                max_unreferenced_mm=(ctx.manifest.get(
+                    "timing.physical_stackup.max_unreferenced_mm", 0.0) or 0.0))
         except (backends.BackendError, propagation.PropagationError) as exc:
             return PropagationAnalysis(
                 error="{}: {}".format(type(exc).__name__, exc))
@@ -245,7 +282,7 @@ def _requested_fields(ctx, layers):
     spec = ctx.manifest.get("timing.propagation", {}) or {}
     return propagation.required_stackup_fields(
         spec.get("model", propagation.HAMMERSTAD),
-        spec.get("via_delay_model", propagation.VIA_NONE),
+        spec.get("via_delay_model"),
         spec.get("declared_layers"), layers)
 
 
@@ -373,13 +410,30 @@ def physical_stackup(ctx, res):
     """
     shape = stackup(ctx)
     stack = shape.stackup
-    layers = (sorted(geometry(ctx).layers_used())
-              if ctx.manifest.has("timing.interfaces") else None)
+    layers = None
+    if ctx.manifest.has("timing.interfaces"):
+        paths = geometry(ctx)
+        touched = paths.layers_used()
+        if propagation.via_span_needs_stackup(
+                ctx.manifest.get("timing.propagation.via_delay_model", None)):
+            touched |= paths.via_span_layers(stack)
+        layers = sorted(touched)
     required = _requested_fields(ctx, layers)
     missing = stack.completeness(required=required, layers=layers)
 
     res.measurements["physical_stackup"] = stack.to_dict()
     res.measurements["reference_plane_layers"] = sorted(shape.reference_layers)
+    if ctx.manifest.has("timing.interfaces"):
+        paths = geometry(ctx)
+        res.measurements["reference_copper_layers"] = sorted(
+            paths.reference_copper)
+        res.measurements["reference_layers_not_filled"] = paths.unfilled_layers
+        for layer in paths.unfilled_layers:
+            res.finding(layer=layer,
+                        issue="a reference net is assigned to this layer but "
+                              "its zones carry no filled polygons, so whether "
+                              "copper is actually under a route there cannot "
+                              "be established; refill the board and re-run")
     res.measurements["layers_in_use"] = layers
     res.measurements["fields_required_by_declared_analyses"] = sorted(required)
     res.measurements["insufficient_fields"] = missing
