@@ -45,10 +45,10 @@ class Element:
     """
 
     __slots__ = ("kind", "ref", "shape", "layers", "length_mm", "obj",
-                 "part_of")
+                 "part_of", "ambiguity_mm")
 
     def __init__(self, kind, ref, shape, layers, length_mm, obj=None,
-                 part_of=None):
+                 part_of=None, ambiguity_mm=0.0):
         self.kind = kind
         self.ref = ref
         self.shape = shape
@@ -56,6 +56,12 @@ class Element:
         self.length_mm = length_mm
         self.obj = obj
         self.part_of = part_of
+        #: How far this piece's boundary could reasonably have been placed
+        #: elsewhere. Zero for copper that meets end to end; the length of the
+        #: shared region where copper overlaps this piece along its length,
+        #: because a walk entering there entered *somewhere* in that region and
+        #: the graph has to pick one point.
+        self.ambiguity_mm = ambiguity_mm
 
     def touches(self, other):
         if self.layers.isdisjoint(other.layers):
@@ -123,6 +129,43 @@ def _substring(line, start, end):
     return LineString(cleaned)
 
 
+def _projected_span(line, meeting):
+    """Where a shared region starts and ends along a centre line.
+
+    `project` clamps to the line, so copper lying alongside rather than across
+    it still yields points on the centre line instead of raising.
+    """
+    from shapely.geometry import Point as _Point
+    coords = []
+    for geometry in getattr(meeting, "geoms", [meeting]):
+        if geometry.is_empty:
+            continue
+        boundary = getattr(geometry, "exterior", None)
+        source = boundary.coords if boundary is not None else geometry.coords
+        coords.extend(source)
+    if not coords:
+        return None, None
+    projected = [line.project(_Point(x, y)) for x, y in coords]
+    return min(projected), max(projected)
+
+
+def _ambiguity_at(spans, start, end, tolerance_mm):
+    """How wide the shared region was that put a boundary here.
+
+    A piece bounded by a long overlap could have been cut anywhere in that
+    overlap, so this is how far its length could reasonably differ. It is
+    reported rather than corrected: there is no single right cut point, and
+    inventing one and staying quiet about it is what this replaces.
+    """
+    worst = 0.0
+    for low, high, width in spans:
+        middle = (low + high) / 2.0
+        if (abs(middle - start) <= tolerance_mm
+                or abs(middle - end) <= tolerance_mm):
+            worst = max(worst, width)
+    return worst
+
+
 def split_track_elements(elements, tolerance_mm=1e-6):
     """Replace each track with the pieces between the things that touch it.
 
@@ -165,6 +208,7 @@ def split_track_elements(elements, tolerance_mm=1e-6):
             continue
         ends = (Point(line.coords[0]), Point(line.coords[-1]))
         cuts = {0.0, line.length}
+        spans = []
         for other_index in tree.query(element.shape):
             other_index = int(other_index)
             if other_index == index:
@@ -186,10 +230,26 @@ def split_track_elements(elements, tolerance_mm=1e-6):
             # simply wrong.
             if any(meeting.distance(end) <= tolerance_mm for end in ends):
                 continue
-            # `project` clamps to the line, so copper lying alongside this
-            # track rather than across it still yields a point on the centre
-            # line instead of raising.
-            cuts.add(line.project(meeting.centroid))
+            # One cut, at the middle of the shared region, and the width of
+            # that region recorded as the error bar on it.
+            #
+            # Cutting at both ends instead was tried and is wrong: it lets the
+            # walk enter at whichever end is nearer, which shortcuts a plain
+            # perpendicular tee by half a track width and disagrees with the
+            # centre-line-to-centre-line length every EDA tool reports. The
+            # midpoint reproduces that convention exactly where the overlap is
+            # small and symmetric, which is the overwhelmingly common case.
+            #
+            # Where the overlap is long - two wide tracks meeting obliquely, or
+            # copper running alongside for a while - no single cut point is
+            # right, and the honest answer is to keep the best one and say how
+            # far out it could be rather than to pick a different guess.
+            low, high = _projected_span(line, meeting)
+            if low is None:
+                continue
+            cuts.add((low + high) / 2.0)
+            if high - low > tolerance_mm:
+                spans.append((low, high, high - low))
         ordered = sorted(cuts)
         merged = [ordered[0]]
         for value in ordered[1:]:
@@ -207,7 +267,8 @@ def split_track_elements(elements, tolerance_mm=1e-6):
                 "track", element.ref,
                 piece.buffer(half, cap_style=1, quad_segs=16),
                 element.layers, piece.length, element.obj,
-                part_of=element))
+                part_of=element,
+                ambiguity_mm=_ambiguity_at(spans, start, end, tolerance_mm)))
     return out
 
 
