@@ -245,6 +245,24 @@ class PhysicalStackup:
     def empty(self):
         return not self.layers
 
+    def copper_layers_between(self, first, second, inclusive=True):
+        """Every copper layer in the vertical span between two layers.
+
+        What a via passes through, which is not the same as what a trace runs
+        on. A via from the top layer to the bottom of a four-layer board sits
+        in three dielectrics and passes two inner planes, and an analysis that
+        attributes delay to that transit reads all of them - so scoping the
+        stackup question to the layers carrying horizontal copper asks for
+        less data than the calculation actually consumes.
+        """
+        names = [l.name for l in self.layers]
+        if first not in names or second not in names:
+            return []
+        low, high = sorted((names.index(first), names.index(second)))
+        span = self.layers[low:high + 1] if inclusive \
+            else self.layers[low + 1:high]
+        return [l.name for l in span if l.is_copper]
+
     # -- what is missing, for the question being asked ---------------------
     def relevant_dielectrics(self, layers=None):
         """The dielectrics that could matter to traces on `layers`.
@@ -720,6 +738,56 @@ def from_declaration(document, source=DECLARED):
         notes=document.get("notes") or [])
 
 
+def _refuse_total_thickness_disagreement(native, declared):
+    """The board states its own overall thickness. A supplement may not restate
+    it differently: one of the two would then be describing another board, and
+    nothing downstream could tell which."""
+    ours = native.declared_total_thickness_mm if native is not None else None
+    theirs = declared.declared_total_thickness_mm
+    if ours is None or theirs is None:
+        return
+    if abs(ours - theirs) > 1e-6:
+        raise StackupError(
+            "the board file states an overall thickness of {} mm and the "
+            "supplemental stackup states {} mm. A supplement fills in what the "
+            "design authority does not say; it does not disagree with what it "
+            "does".format(ours, theirs))
+
+
+def _refuse_structural_disagreement(native, declared, by_name):
+    """A supplement may describe the board's layers. It may not re-order them,
+    re-classify them, or invent them.
+
+    Field-level conflicts are caught below, one figure at a time. These are the
+    disagreements that are not about a figure at all: the same names in a
+    different order, or a layer the board calls copper and the supplement calls
+    a dielectric. Either makes every question about what is next to what answer
+    differently depending on which document you read, which is precisely what
+    having one design authority is supposed to prevent.
+    """
+    _refuse_total_thickness_disagreement(native, declared)
+
+    for name, entry in sorted(by_name.items()):
+        theirs = native.layer(name)
+        if theirs is None:
+            continue
+        if entry.kind != theirs.kind:
+            raise StackupError(
+                "the supplemental stackup calls layer {!r} a {} where the "
+                "board file calls it a {}".format(name, entry.kind,
+                                                  theirs.kind))
+
+    shared = [l.name for l in native.layers if l.name in by_name]
+    supplement_order = [l.name for l in declared.layers if l.name in set(shared)]
+    if shared != supplement_order:
+        raise StackupError(
+            "the supplemental stackup puts the board's layers in a different "
+            "order: the board file has {} and the supplement has {}. Which "
+            "layer is next to which decides every reference-plane question, "
+            "and it is the board file's to decide".format(
+                shared, supplement_order))
+
+
 def merge(native, declared):
     """Native data, with a board's declaration filling only what is absent.
 
@@ -738,6 +806,7 @@ def merge(native, declared):
         # used: overall board thickness is recorded by KiCad whether or not the
         # stackup was ever filled in, and if it came from there the result is
         # not purely a declaration.
+        _refuse_total_thickness_disagreement(native, declared)
         native_thickness = (native.declared_total_thickness_mm
                             if native is not None else None)
         return PhysicalStackup(
@@ -747,6 +816,7 @@ def merge(native, declared):
                 native_thickness or declared.declared_total_thickness_mm),
             notes=(list(native.notes) if native else []) + list(declared.notes))
     by_name = {l.name: l for l in declared.layers}
+    _refuse_structural_disagreement(native, declared, by_name)
     conflicts = []
     layers = []
     for entry in native.layers:
@@ -809,6 +879,69 @@ def board_copper_layers(board):
     import pcbnew
     return [pcbnew.LayerName(layer)
             for layer in board.GetEnabledLayers().CuStack()]
+
+
+def reference_copper(board, reference_nets):
+    """The copper actually poured on each reference layer, as filled polygons.
+
+    A layer "is a plane" today if any zone on it carries a reference net -
+    anywhere on the board. That is a statement about the layer, and a trace
+    needs a statement about the ground *underneath it*. A route crossing a
+    void, a split, or simply running past the edge of the pour has no reference
+    conductor there, and every closed-form transmission-line model assumes one.
+
+    So the filled polygons are what is returned, not the zone outlines. An
+    outline includes the voids, the thermal reliefs and the clearance cut-outs
+    that the fill removed, which is exactly the optimistic error that would
+    make a route over a hole look like a route over copper.
+
+    Returns {layer name: shapely geometry}. A layer whose zones carry no filled
+    polygons is absent from the mapping rather than present and empty: "not
+    filled" and "filled with nothing" are different, and the caller has to be
+    able to refuse the first rather than silently treat it as the second.
+    """
+    import pcbnew
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    wanted = set(reference_nets or ())
+    pieces = {}
+    unfilled = set()
+    for zone in board.Zones():
+        if zone.GetIsRuleArea():
+            continue
+        if zone.GetNetname() not in wanted:
+            continue
+        for layer in zone.GetLayerSet().CuStack():
+            name = pcbnew.LayerName(layer)
+            try:
+                polyset = zone.GetFilledPolysList(layer)
+            except Exception:                              # pragma: no cover
+                unfilled.add(name)
+                continue
+            if polyset is None or polyset.OutlineCount() == 0:
+                unfilled.add(name)
+                continue
+            for index in range(polyset.OutlineCount()):
+                outline = polyset.Outline(index)
+                points = [(outline.CPoint(i).x / 1e6, outline.CPoint(i).y / 1e6)
+                          for i in range(outline.PointCount())]
+                if len(points) < 3:
+                    continue
+                holes = []
+                for h in range(polyset.HoleCount(index)):
+                    hole = polyset.Hole(index, h)
+                    hp = [(hole.CPoint(i).x / 1e6, hole.CPoint(i).y / 1e6)
+                          for i in range(hole.PointCount())]
+                    if len(hp) >= 3:
+                        holes.append(hp)
+                shape = Polygon(points, holes)
+                if not shape.is_valid:
+                    shape = shape.buffer(0)
+                if not shape.is_empty:
+                    pieces.setdefault(name, []).append(shape)
+    return ({name: unary_union(shapes) for name, shapes in pieces.items()},
+            sorted(unfilled - set(pieces)))
 
 
 def plane_layers(board, reference_nets):
