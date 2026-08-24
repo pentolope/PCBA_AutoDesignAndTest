@@ -21,6 +21,11 @@ import. What this module owns is the decision, and one rule:
   * a board that declares `"required": false` gets its fallback, and every
     result records which backend actually ran and that it was a fallback.
 
+A backend is "got" only when this release can actually evaluate with it. An
+installed binary this toolkit has no code to drive is not availability, and
+treating it as such made the outcome depend on the machine rather than on the
+board - the one thing a validator must never do.
+
 Nothing silently downgrades: the *only* route to a different backend than the
 one requested is the board having said so in writing, and `Selection` carries
 that fact into the report rather than leaving the two cases looking alike.
@@ -29,6 +34,17 @@ that fact into the report rather than leaving the two cases looking alike.
 from __future__ import annotations
 
 ANALYTIC = "analytic"
+
+#: Backends whose evaluation this release actually implements.
+#:
+#: Separate from KNOWN on purpose. "This machine has an openEMS binary" and
+#: "this release can extract a delay with openEMS" are different facts, and
+#: only the second one makes a backend usable. Conflating them made the whole
+#: selection path depend on what happened to be installed on the developer's
+#: machine: a board declaring `required: false` got a clean fallback where the
+#: solver was absent and a hard error where it was present, which is exactly
+#: backwards and impossible to test reproducibly.
+IMPLEMENTED = (ANALYTIC,)
 
 #: Backends this release knows how to look for. A name not listed here is
 #: refused rather than attempted, so a typo in a manifest is a blocked run and
@@ -45,14 +61,41 @@ class BackendUnavailable(BackendError):
 
 
 def available(name, spec=None):
-    """Is this backend usable right now? (bool, detail). Never raises."""
+    """Can this release run the requested analysis with this backend?
+
+    (bool, detail). Never raises, and never depends on this machine: a backend
+    whose evaluation is not implemented is unusable whether or not its binary
+    is sitting on the PATH. Where a binary is relevant the detail says whether
+    one was found, because that is useful diagnostic information - but it is
+    reported, not acted on.
+    """
+    if name not in KNOWN:
+        return False, ("no backend named {!r} is implemented; this release "
+                       "has {}".format(name, ", ".join(KNOWN)))
+    if name not in IMPLEMENTED:
+        return False, ("this release recognises the {!r} backend but "
+                       "implements no evaluation for it, so it cannot produce "
+                       "a result{}".format(name, _installed_note(name, spec)))
     if name == ANALYTIC:
         return True, "closed-form analytic model, always available"
-    if name == "openems":
-        from . import openems
-        return openems.available(spec or {})
-    return False, "no backend named {!r} is implemented; this release has " \
-                  "{}".format(name, ", ".join(KNOWN))
+    # A backend in IMPLEMENTED that is not the analytic one would probe for
+    # whatever it needs here. None exists yet, and inventing the branch now
+    # would be inventing a probe nothing has ever run.
+    return False, "no availability probe is defined for {!r}".format(name)
+
+
+def _installed_note(name, spec):
+    """Whether a solver binary is present. Diagnostic only; never decisive."""
+    if name != "openems":
+        return ""
+    from . import openems
+    found = openems.executable(spec or {})
+    if found:
+        return (". An openEMS executable was found at {}, which does not help: "
+                "the geometry export, port definition, meshing and "
+                "S-parameter reduction that would drive it are not "
+                "written".format(found))
+    return ". No openEMS executable was found either, though that is not why"
 
 
 class Selection:
@@ -150,9 +193,20 @@ def require(name, spec=None):
 
 
 def describe():
-    """What each known backend is and whether it is here. For preflight/report."""
+    """What each known backend is and whether it is usable. Diagnostic.
+
+    `evaluation_implemented` and `executable_found` are reported separately
+    because they are separately interesting: a maintainer wants to know a
+    solver is installed even while this release cannot drive it.
+    """
     rows = []
     for name in KNOWN:
         ok, detail = available(name)
-        rows.append({"backend": name, "available": bool(ok), "detail": detail})
+        row = {"backend": name, "available": bool(ok),
+               "evaluation_implemented": name in IMPLEMENTED,
+               "detail": detail}
+        if name == "openems":
+            from . import openems
+            row["executable_found"] = openems.executable() or None
+        rows.append(row)
     return rows
