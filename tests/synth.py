@@ -125,7 +125,38 @@ def add_two_pad_footprint(board, ref, x_mm, y_mm, pitch_mm, nets,
     return fp, pads
 
 
-def add_zone(board, net, layers, rect_mm):
+def add_through_hole_footprint(board, ref, x_mm, y_mm, net=None,
+                               pad_mm=1.2, drill_mm=0.6, numbers=("1",),
+                               nets=None):
+    """A plated through-hole part: pads on every copper layer, with a barrel.
+
+    `numbers` may repeat a pad number, which KiCad permits and which the path
+    layer has to cope with; `nets` gives one net per pad when they differ.
+    """
+    fp = pcbnew.FOOTPRINT(board)
+    fp.SetReference(ref)
+    fp.SetValue(ref)
+    board.Add(fp)
+    fp.SetPosition(pcbnew.VECTOR2I(MM(x_mm), MM(y_mm)))
+    pads = []
+    for index, number in enumerate(numbers):
+        pad = pcbnew.PAD(fp)
+        pad.SetNumber(number)
+        pad.SetAttribute(pcbnew.PAD_ATTRIB_PTH)
+        pad.SetShape(pcbnew.PAD_SHAPE_CIRCLE)
+        pad.SetSize(pcbnew.VECTOR2I(MM(pad_mm), MM(pad_mm)))
+        pad.SetDrillSize(pcbnew.VECTOR2I(MM(drill_mm), MM(drill_mm)))
+        pad.SetLayerSet(pad.PTHMask())
+        pad.SetPosition(pcbnew.VECTOR2I(MM(x_mm + index * 2.0), MM(y_mm)))
+        chosen = (nets[index] if nets else net)
+        if chosen is not None:
+            pad.SetNet(chosen)
+        fp.Add(pad)
+        pads.append(pad)
+    return fp, pads
+
+
+def add_zone(board, net, layers, rect_mm, fill=True):
     """A filled-copper zone on one or more layers, so a plane is a real pour."""
     zone = pcbnew.ZONE(board)
     layer_set = pcbnew.LSET()
@@ -146,6 +177,23 @@ def add_zone(board, net, layers, rect_mm):
     outline.thisown = 0
     zone.SetOutline(outline)
     board.Add(zone)
+
+    # Fill it. A zone that has never been filled carries no filled polygons,
+    # and a coverage question answered from an unfilled zone is a question
+    # answered about nothing - which is exactly the state the toolkit reports
+    # rather than guesses at. These layers carry no other copper, so the fill
+    # of a rectangle is that rectangle, and setting it directly keeps the
+    # fixture deterministic instead of depending on the filler's clearance
+    # arithmetic.
+    if not fill:
+        return zone
+    for layer in layers:
+        filled = pcbnew.SHAPE_POLY_SET()
+        filled.NewOutline()
+        for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
+            filled.Append(MM(x), MM(y))
+        zone.SetFilledPolysList(layer, filled)
+    zone.SetIsFilled(True)
     return zone
 
 
