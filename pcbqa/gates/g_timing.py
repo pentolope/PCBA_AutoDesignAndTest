@@ -121,23 +121,49 @@ class GeometryAnalysis:
         return (record["resolved"].id, record["resolved"].destination.label)
 
 
-def _unreferenced_total(state, only=None):
-    """Copper with no reference conductor on any candidate plane.
+def _unreferenced_by_path(state, only=None):
+    """Per resolved path, copper with no reference conductor anywhere below.
 
-    The design measurement, so the *best* candidate counts: copper is only
-    reported unreferenced here if nothing poured on any reference layer covers
-    it. Whether the plane a formula happens to need is the one that covers it
-    is the propagation model's question, and a stricter one.
+    Three decisions, each of which had a wrong alternative:
+
+      * *Per path*, never summed across paths. The old total accumulated
+        every resolved endpoint path, so a shared branch counted its shared
+        copper once per load hanging off it - a number whose meaning
+        changed with the fan-out. Each path is measured on its own, and a
+        limit reads "no single endpoint path may carry more than this".
+      * The ``<any>`` union measure, not a per-plane one. This is the design
+        question - is there reference *anywhere* below - which is exactly the
+        measure the resolver computed geometrically against the union of the
+        pours. Any per-plane figure would overstate it.
+      * Unknown is unknown, never zero. A reference layer whose zones were
+        never filled, or reference structure that was never measured at all,
+        yields None - and a None measurement cannot satisfy a declared limit.
     """
-    total = 0.0
+    if state.unfilled_layers:
+        return None, "reference layer(s) {} carry no filled polygons, so " \
+                     "coverage was never established".format(
+                         ", ".join(state.unfilled_layers))
+    per_path = {}
     for name, record in state.all_paths():
         if only is not None and name != only:
             continue
+        total = 0.0
         for conductor in record["resolved"].conductors():
             per_layer = conductor.get("unreferenced_by_layer_mm") or {}
-            if per_layer:
-                total += min(per_layer.values())
-    return total
+            if not per_layer:
+                if conductor.get("reference_checked"):
+                    return None, "a conductor was reference-checked but " \
+                                 "carries no coverage figures"
+                return None, "reference coverage was never measured: no " \
+                             "poured reference copper exists to measure " \
+                             "against"
+            union = per_layer.get("<any>")
+            if union is None:
+                union = min(per_layer.values())
+            total += union
+        key = (record["resolved"].id, record["resolved"].destination.label)
+        per_path["{}->{}".format(*key)] = round(total, 4)
+    return per_path, None
 
 
 def _identifier(kind, name):
@@ -400,8 +426,16 @@ def path_integrity(ctx, res):
     # because it is pure geometry; compared here only when a board states a
     # requirement. `timing.propagation.reference_discontinuity` answers the
     # other question and does not affect this one.
-    unreferenced = _unreferenced_total(state)
-    res.measurements["unreferenced_copper_mm"] = round(unreferenced, 4)
+    per_path, unknown_reason = _unreferenced_by_path(state)
+    if per_path:
+        worst = max(per_path, key=per_path.get)
+        res.measurements["worst_path_unreferenced_mm"] = per_path[worst]
+        res.measurements["worst_unreferenced_path"] = worst
+        res.measurements["unreferenced_mm_by_path"] = {
+            key: value for key, value in sorted(per_path.items()) if value}
+    else:
+        res.measurements["worst_path_unreferenced_mm"] = None
+        res.measurements["unreferenced_unknown"] = unknown_reason
     res.measurements["reference_layers_not_filled"] = state.unfilled_layers
     for name, interface in sorted(state.interfaces.items()):
         key = "timing.interfaces.{}.max_unreferenced_mm".format(name)
@@ -410,13 +444,27 @@ def path_integrity(ctx, res):
         limit = res.limit(ctx.manifest.constraint(
             key, units="mm",
             cid="timing.{}.max_unreferenced_mm".format(name)))
-        measured = _unreferenced_total(state, only=name)
-        if measured > limit.value:
+        measured, unknown = _unreferenced_by_path(state, only=name)
+        if measured is None:
+            # Unknown coverage cannot satisfy a declared limit. An unfilled
+            # or unmeasurable reference structure is not zero exposure; it is
+            # a question nobody has answered yet.
             problems.append({
                 "interface": name,
-                "issue": "more of this interface's copper has no reference "
-                         "conductor beneath it than the board accepts",
-                "measured_mm": round(measured, 4), "limit_mm": limit.value})
+                "issue": "max_unreferenced_mm is declared but the exposure "
+                         "cannot be measured: {}. The requirement is "
+                         "unevaluated, not met".format(unknown),
+                "limit_mm": limit.value})
+            continue
+        offenders = {path: value for path, value in measured.items()
+                     if value > limit.value}
+        for path_name, value in sorted(offenders.items()):
+            problems.append({
+                "interface": name, "path": path_name,
+                "issue": "this path carries more copper with no reference "
+                         "conductor anywhere beneath it than the board "
+                         "accepts on any single path",
+                "measured_mm": value, "limit_mm": limit.value})
 
     res.measurements["interfaces"] = summary
     res.measurements["paths_resolved"] = sum(
@@ -581,8 +629,9 @@ def interconnect_delay(ctx, res):
             continue
         limited += 1
         problem = _compare_maximum(delay["delay_ps"], limit.value,
-                                    delay["insufficient"],
-                                    upper=delay.get("delay_upper_ps"))
+                                   delay["insufficient"],
+                                   lower=delay.get("delay_lower_ps"),
+                                   upper=delay.get("delay_upper_ps"))
         if problem:
             problems.append({"interface": name, "path": delay["path"],
                              **problem})
@@ -615,41 +664,51 @@ def interconnect_delay(ctx, res):
             state.selection.used))
 
 
-def _compare_maximum(value, limit, insufficient, upper=None):
-    """Compare against a maximum, honouring what the measurement actually is.
+def _compare_maximum(value, limit, insufficient, lower=None, upper=None):
+    """Compare a measurement against a maximum, deciding on its interval.
 
-    `value` is a lower bound whenever something on the path was omitted, and
-    `upper` is the matching upper bound - present only when every omission was
-    bounded by the board. Three outcomes, and which one applies is decided by
-    the numbers rather than by how confidently the board described them:
+    `value` is the nominal figure and is reported; the decision is made on
+    `[lower, upper]`, the bracket the toolkit can actually stand behind.
+    Three outcomes, decided by the numbers rather than by how confidently
+    anything was described:
 
-      * the lower bound already exceeds the limit: proof, so it fails;
-      * an upper bound exists and is within the limit: proof, so it passes;
-      * otherwise the requirement straddles what is known, and an unevaluated
-        requirement is not a satisfied one.
+      * `lower` exceeds the limit: every point in the interval does, so the
+        violation is proven and it fails;
+      * `upper` exists and is within the limit: every point complies, so the
+        requirement is proven met;
+      * anything else - the limit falls inside the interval, or the interval
+        has no upper end - is undecidable, and an undecided requirement is
+        not a satisfied one.
+
+    The nominal is deliberately never grounds for a FAIL on its own: with an
+    interval in play the nominal exceeding the limit proves nothing, because
+    the truth may sit below it.
     """
     if value is None:
         return {"issue": "a limit is declared but the value could not be "
                          "derived; the requirement is unevaluated, not met",
                 "insufficient": list(insufficient)[:3]}
-    if value > limit:
-        return {"issue": "the measured value exceeds the declared limit",
-                "measured": value, "limit": limit,
-                "measured_is_lower_bound": upper != value}
+    lower = value if lower is None else lower
+    if lower > limit:
+        return {"issue": "the measured value exceeds the declared limit over "
+                         "the whole of its uncertainty interval",
+                "measured": value, "lower_bound": lower, "limit": limit}
     if upper is not None and upper <= limit:
         return None
     if upper is None:
-        return {"issue": "the value is an unbounded lower bound, because some "
-                         "portion of the path contributes an unmodelled amount "
-                         "of unstated size. A lower bound below a maximum "
-                         "proves nothing about the value above it: model the "
-                         "portion, state a `max_delay_ps` bounding what was "
-                         "omitted, or drop the limit",
-                "lower_bound": value, "limit": limit}
-    return {"issue": "the limit falls between what is known: the modelled "
-                     "portion alone is within it, and the omitted portions "
-                     "could carry it past",
-            "lower_bound": value, "upper_bound": upper, "limit": limit}
+        return {"issue": "the value has no upper bound, because some portion "
+                         "contributes an unmodelled amount of unstated size. "
+                         "A figure without an upper end can never prove a "
+                         "maximum is met: model the portion, state a bound "
+                         "with provenance for what was omitted, or drop the "
+                         "limit",
+                "measured": value, "lower_bound": lower, "limit": limit}
+    return {"issue": "the limit falls inside the uncertainty interval: the "
+                     "requirement is met at the interval's lower end and "
+                     "violated at its upper end, so it is undecided rather "
+                     "than met",
+            "measured": value, "lower_bound": lower, "upper_bound": upper,
+            "limit": limit}
 
 
 def _delay_row(interface, delay):
@@ -661,7 +720,12 @@ def _delay_row(interface, delay):
         "copper_length_mm": delay["copper_length_mm"],
         "length_by_layer_mm": delay["length_by_layer_mm"],
         "delay_ps": delay["delay_ps"],
+        "delay_lower_ps": delay.get("delay_lower_ps"),
+        "delay_upper_ps": delay.get("delay_upper_ps"),
+        "geometric_uncertainty_ps": delay.get("geometric_uncertainty_ps"),
+        "length_uncertainty_mm": delay.get("length_uncertainty_mm"),
         "delay_is_lower_bound": delay.get("delay_is_lower_bound", False),
+        "assumptions": delay.get("assumptions") or [],
         "fidelity": delay["fidelity"],
         "crosses": [t["reference"] for t in delay["component_traversals"]],
         "component_traversals": delay["component_traversals"],
@@ -728,14 +792,15 @@ def interconnect_skew(ctx, res):
                 # A spread built from lower bounds is not itself a lower
                 # bound - the unknown amounts may differ per path in either
                 # direction - so it cannot be compared at all.
-                # A spread built from lower bounds is not itself a lower
-                # bound: the unknown amounts differ per path and in either
-                # direction, so the spread has no bound at all until every
-                # omission on every member is bounded.
-                upper = (record["skew_upper_ps"] if field == "skew_ps"
-                         else record[field])
+                if field == "skew_ps":
+                    lower = record["skew_lower_ps"]
+                    upper = record["skew_upper_ps"]
+                else:
+                    lower = record["length_spread_lower_mm"]
+                    upper = record["length_spread_upper_mm"]
                 problem = _compare_maximum(record[field], limit.value,
-                                           record["insufficient"], upper=upper)
+                                           record["insufficient"],
+                                           lower=lower, upper=upper)
                 if problem:
                     problems.append({"interface": name, "group": group_name,
                                      "units": units,
@@ -769,66 +834,138 @@ def _members(interface, group):
             if pattern.match(r["resolved"].id)]
 
 
+def _spread_upper(los, his):
+    """The largest spread the intervals can actually realise.
+
+    ``max(his) - min(los)`` was tried first and is sound but not tight: when
+    one member supplies both extremes it claims a spread that member cannot
+    produce, since it would have to arrive at two times at once. Self-review
+    caught it manufacturing undecidable verdicts where a proven PASS existed,
+    and reporting nonzero possible skew for a single-member group. The
+    realisable maximum pairs one member's latest against a *different*
+    member's earliest:
+
+        upper = max over i != j of (his[i] - los[j])
+
+    which is exact - some pair realises it, and no assignment exceeds it,
+    because the realised extremes always belong to some ordered pair. For a
+    single member it is zero, as a single arrival's spread is. Verified
+    against brute-force enumeration over random interval sets.
+    """
+    n = len(los)
+    if n < 2:
+        return 0.0
+    best = None
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            candidate = his[i] - los[j]
+            best = candidate if best is None else max(best, candidate)
+    return max(0.0, best)
+
+
 def _group_record(interface, name, group, members, delays, paths):
-    """One endpoint group's arrival spread, in time and in length."""
-    endpoints, times, lengths, insufficient = [], [], [], []
+    """One endpoint group's arrival spread, as an interval.
+
+    Each member arrives somewhere in `[lo_i, hi_i]`. The spread of the
+    nominal arrivals is reported, but it is neither a lower nor an upper
+    bound on the true skew: an omission on the *earliest* path can close the
+    gap just as one on the latest can widen it. What brackets the truth is
+    interval arithmetic over the group:
+
+        skew_lower = max(0, max_i(lo_i) - min_i(hi_i))
+        skew_upper = max_i(hi_i) - min_i(lo_i)
+
+    The lower bound: some path must arrive no earlier than the largest lower
+    endpoint, and some path must arrive no later than the smallest upper
+    endpoint, so the spread cannot be less than their difference - and when
+    every interval overlaps a common point, zero true skew is possible and
+    the bound is zero. The upper bound: no pair can be further apart than the
+    extreme endpoints. Members with no upper endpoint make `skew_upper`
+    unknowable, but `skew_lower` survives them: an unbounded member cannot
+    *lower* anyone else's earliest arrival.
+
+    The same arithmetic covers the length spread, with each member's length
+    in `[L_i - u_i, L_i + u_i]` from the junction uncertainty - which is
+    always a finite interval, so the length spread always has both ends.
+    """
+    endpoints, nominals, lows, highs, insufficient = [], [], [], [], []
+    length_lows, length_highs, lengths = [], [], []
     any_bound = False
+    assumptions = 0
     for record in members:
         delay = delays.get(paths.key(record))
         resolved = record["resolved"]
         length = round(resolved.copper_length_mm, 6)
+        u_mm = (delay or {}).get("length_uncertainty_mm") or 0.0
         entry = {"path": resolved.id,
                  "destination": resolved.destination.label,
                  "source": resolved.source.label,
                  "copper_length_mm": length,
+                 "length_uncertainty_mm": u_mm,
                  "delay_ps": None if delay is None else delay["delay_ps"]}
         if delay is not None:
+            entry["delay_lower_ps"] = delay.get("delay_lower_ps")
+            entry["delay_upper_ps"] = delay.get("delay_upper_ps")
             entry["delay_is_lower_bound"] = delay.get("delay_is_lower_bound",
                                                       False)
             any_bound = any_bound or entry["delay_is_lower_bound"]
+            assumptions += len(delay.get("assumptions") or [])
             if delay["delay_ps"] is None:
                 insufficient.extend(delay["insufficient"][:2])
             else:
-                times.append((delay["delay_ps"], resolved.destination.label))
+                nominals.append((delay["delay_ps"],
+                                 resolved.destination.label))
+                lows.append((delay.get("delay_lower_ps",
+                                       delay["delay_ps"]),
+                             resolved.destination.label))
+                highs.append(delay.get("delay_upper_ps"))
         endpoints.append(entry)
         lengths.append((length, resolved.destination.label))
+        length_lows.append(length - u_mm)
+        length_highs.append(length + u_mm)
 
-    have_all = bool(times) and len(times) == len(members)
-    ordered = times if have_all else lengths
+    have_all = bool(nominals) and len(nominals) == len(members)
+    skew_lower = skew_upper = skew_nominal = None
+    if have_all:
+        skew_nominal = round(max(nominals)[0] - min(nominals)[0], 6)
+        finite_highs = [h for h in highs if h is not None]
+        # An unbounded member contributes +infinity to the his, which cannot
+        # lower a minimum - so the lower bound stands on whatever is finite,
+        # and is zero when nothing is.
+        skew_lower = (round(max(0.0, max(lows)[0] - min(finite_highs)), 6)
+                      if finite_highs else 0.0)
+        skew_upper = (round(_spread_upper([lo for lo, _label in lows],
+                                          finite_highs), 6)
+                      if len(finite_highs) == len(highs) else None)
+
+    spread_nominal = spread_lower = spread_upper = None
+    if lengths:
+        spread_nominal = round(max(lengths)[0] - min(lengths)[0], 6)
+        spread_lower = round(max(0.0, max(length_lows) - min(length_highs)),
+                             6)
+        spread_upper = round(_spread_upper(length_lows, length_highs), 6)
+
+    ordered = nominals if have_all else lengths
     return {
         "interface": interface, "group": name,
         "description": group.get("description"),
         "members": len(members),
         "endpoints": endpoints,
-        "skew_ps": (round(max(times)[0] - min(times)[0], 6)
-                    if have_all else None),
-        "length_spread_mm": (round(max(lengths)[0] - min(lengths)[0], 6)
-                             if lengths else None),
+        "skew_ps": skew_nominal,
+        "skew_lower_ps": skew_lower,
+        "skew_upper_ps": skew_upper,
+        "length_spread_mm": spread_nominal,
+        "length_spread_lower_mm": spread_lower,
+        "length_spread_upper_mm": spread_upper,
         "earliest": min(ordered)[1] if ordered else None,
         "latest": max(ordered)[1] if ordered else None,
         "insufficient": insufficient,
         "any_lower_bound": any_bound,
-        # The worst spread the omissions permit: the latest arrival pushed out
-        # by everything omitted from it, against the earliest left where it is.
-        # None as soon as one member's omissions are unbounded.
-        "skew_upper_ps": _skew_upper(members, delays, paths, times, have_all),
+        "assumptions_relied_on": assumptions,
         "measured_in": "ps" if have_all else "mm",
     }
-
-
-def _skew_upper(members, delays, paths, times, have_all):
-    """An upper bound on a group's spread, when every omission is bounded."""
-    if not have_all or not times:
-        return None
-    worst = 0.0
-    for record in members:
-        delay = delays.get(paths.key(record))
-        bound = None if delay is None else delay.get("omitted_bound_ps")
-        if delay is not None and delay.get("delay_is_lower_bound") \
-                and bound is None:
-            return None
-        worst = max(worst, bound or 0.0)
-    return round(max(times)[0] + worst - min(times)[0], 6)
 
 
 def _limit_for(ctx, res, interface, key, units):

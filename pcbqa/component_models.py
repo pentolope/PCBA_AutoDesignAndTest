@@ -204,11 +204,20 @@ def evaluate(declaration, reference=None):
                 "lower bound".format(justification),
                 {"justification": justification})
         _finite_non_negative(bound, "max_delay_ps", where)
+        provenance = declaration.get("provenance")
+        if not provenance:
+            raise ComponentModelError(
+                "{}: max_delay_ps is a number that PASS/FAIL arithmetic will "
+                "lean on, so it requires a `provenance` saying where the "
+                "number came from - a datasheet, a calculation, a "
+                "measurement. The justification explains the decision to "
+                "omit; it does not source the figure".format(where))
         return Contribution(
             UNMODELLED, model, 0.0, UNKNOWN_CONTRIBUTION,
-            "zero attributed, with what was omitted bounded at {} ps: "
-            "{}".format(bound, justification),
-            {"justification": justification, "max_delay_ps": float(bound)})
+            "zero attributed, with what was omitted bounded at {} ps "
+            "({}): {}".format(bound, provenance, justification),
+            {"justification": justification, "max_delay_ps": float(bound),
+             "provenance": provenance})
 
     # MODEL_FIXED
     delay = declaration.get("delay_ps")

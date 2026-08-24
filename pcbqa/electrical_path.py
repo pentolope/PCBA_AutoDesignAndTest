@@ -555,6 +555,7 @@ class PathResolver:
         #: means for the formula it was about to use.
         self.unfilled_reference_layers = list(unfilled_reference_layers)
         self._prepared = {}
+        self._combined = {}
         self._graphs = {}
         self._pads = None
         self._footprints = None
@@ -892,36 +893,66 @@ class PathResolver:
         }
 
     def _uncovered_by_layer(self, element):
-        """Per candidate plane, how much of this piece it does not cover.
+        """Per candidate reference structure, how much of this piece it fails
+        to cover.
 
-        Per layer, deliberately, and never unioned across them. A microstrip on
-        the top layer is referenced to one specific plane; copper on a *different*
-        reference-net layer somewhere else in the stack does not carry its return
-        current and does not make its formula valid. Unioning the two answered a
-        question nobody asked - "is there reference copper anywhere below?" -
-        and let a void in the plane actually being used pass unnoticed because
-        another layer happened to be continuous there.
+        Three kinds of key, all measured here while the shapes still exist,
+        because every later consumer holds only scalars:
 
-        Measured as a fraction of area rather than by cutting the piece again:
-        the piece is a constant-width rectangle, so the uncovered fraction of
-        its area is the uncovered fraction of its length, and that is accurate
-        enough to decide whether a closed-form model applies at all.
+          * one per plane (``"In1.Cu"``): coverage by that plane alone. A
+            microstrip is referenced to one specific plane, and copper poured
+            on a *different* reference-net layer does not carry its return
+            current - so these are never unioned into a single verdict.
+          * one per plane pair (``"In1.Cu&In2.Cu"``, sorted): coverage by the
+            *intersection* of the two. A stripline needs both planes, so its
+            geometry is incomplete wherever either is missing; two disjoint
+            3 mm gaps leave 6 mm without the geometry, which no combination
+            of the per-plane scalars can reconstruct once the positions are
+            gone.
+          * ``"<any>"``: coverage by the union of every candidate plane. The
+            *design* measure - copper with no reference conductor anywhere
+            below it - which is smaller than any per-plane figure and is what
+            a board-level acceptance limit is about.
+
+        Measured as a fraction of area rather than by cutting the piece
+        again: the piece is a constant-width rectangle, so the uncovered
+        fraction of its area is the uncovered fraction of its length, and
+        that is accurate enough to decide whether a closed-form model applies
+        at all.
         """
         shape = element.shape
         if not self.reference_copper or shape.is_empty or shape.area <= 0:
             return {}
-        out = {}
-        for layer, copper in self.reference_copper.items():
-            prepared = self._prepared.get(layer)
+
+        def measure(key, copper):
+            prepared = self._prepared.get(key)
             if prepared is None:
                 from shapely.prepared import prep
-                prepared = self._prepared[layer] = prep(copper)
+                prepared = self._prepared[key] = prep(copper)
             if not prepared.intersects(shape):
-                out[layer] = round(element.length_mm, 6)
-                continue
+                return round(element.length_mm, 6)
             remaining = shape.difference(copper)
-            out[layer] = round(
-                element.length_mm * (remaining.area / shape.area), 6)
+            return round(element.length_mm * (remaining.area / shape.area), 6)
+
+        out = {}
+        names = sorted(self.reference_copper)
+        for name in names:
+            out[name] = measure(name, self.reference_copper[name])
+        for index, first in enumerate(names):
+            for second in names[index + 1:]:
+                key = "{}&{}".format(first, second)
+                if key not in self._combined:
+                    self._combined[key] = self.reference_copper[
+                        first].intersection(self.reference_copper[second])
+                out[key] = measure("<prep>" + key, self._combined[key])
+        if len(names) > 1:
+            if "<any>" not in self._combined:
+                from shapely.ops import unary_union
+                self._combined["<any>"] = unary_union(
+                    list(self.reference_copper.values()))
+            out["<any>"] = measure("<prep><any>", self._combined["<any>"])
+        else:
+            out["<any>"] = out[names[0]]
         return out
 
     def _measure_component(self, path, step, position):
