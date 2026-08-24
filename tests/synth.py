@@ -127,7 +127,7 @@ def add_two_pad_footprint(board, ref, x_mm, y_mm, pitch_mm, nets,
 
 def add_through_hole_footprint(board, ref, x_mm, y_mm, net=None,
                                pad_mm=1.2, drill_mm=0.6, numbers=("1",),
-                               nets=None):
+                               nets=None, copper_layers=None):
     """A plated through-hole part: pads on every copper layer, with a barrel.
 
     `numbers` may repeat a pad number, which KiCad permits and which the path
@@ -146,7 +146,16 @@ def add_through_hole_footprint(board, ref, x_mm, y_mm, net=None,
         pad.SetShape(pcbnew.PAD_SHAPE_CIRCLE)
         pad.SetSize(pcbnew.VECTOR2I(MM(pad_mm), MM(pad_mm)))
         pad.SetDrillSize(pcbnew.VECTOR2I(MM(drill_mm), MM(drill_mm)))
-        pad.SetLayerSet(pad.PTHMask())
+        if copper_layers is None:
+            pad.SetLayerSet(pad.PTHMask())
+        else:
+            # A padstack that carries copper on only some layers. The hole
+            # still goes through the board - which is the distinction the
+            # toolkit has to get right.
+            layer_set = pcbnew.LSET()
+            for layer in copper_layers:
+                layer_set.addLayer(layer)
+            pad.SetLayerSet(layer_set)
         pad.SetPosition(pcbnew.VECTOR2I(MM(x_mm + index * 2.0), MM(y_mm)))
         chosen = (nets[index] if nets else net)
         if chosen is not None:

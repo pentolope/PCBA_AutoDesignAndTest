@@ -120,6 +120,19 @@ def fidelity_rank(name):
     return FIDELITY_RANK.get(name, -1)
 
 
+def _stub_extent(record):
+    """Which parts of the barrel this model does not describe."""
+    top, bottom = record.get("via_top_layer"), record.get("via_bottom_layer")
+    entered, left = record.get("from_layer"), record.get("to_layer")
+    above = top if top not in (entered, left) else None
+    below = bottom if bottom not in (entered, left) else None
+    if not above and not below:
+        return None
+    return {"above": above, "below": below,
+            "note": "barrel outside the traversed span; stub effects are not "
+                    "modelled by this release"}
+
+
 def weakest(fidelities):
     """The weakest fidelity in a set.
 
@@ -150,45 +163,67 @@ class ViaPolicy:
                     a lower bound.
     ``none``        the board named the treatment but justified nothing. It
                     has chosen to omit the transit, not established that it is
-                    negligible - so this is *also* a lower bound, and saying
-                    otherwise would turn "not modelled yet" into an asserted
-                    exact zero. That was the bug.
+                    negligible - so this is a lower bound, and saying otherwise
+                    would turn "not modelled yet" into an asserted exact zero.
     ``none`` + justification
-                    the board has taken responsibility for the omission on a
-                    stated reason. Exact.
+                    the same, with a reason recorded. Prose explains a decision;
+                    it does not measure a barrel, so this is *still* a lower
+                    bound. A sentence cannot establish more physical certainty
+                    than the sentence contains.
+    ``none`` + ``max_delay_ps``
+                    the board states an upper bound on what it omitted. That is
+                    substance rather than explanation: the total is still a
+                    lower bound, but a *bounded* one, so a maximum-delay
+                    requirement can be decided against `delay + bound` instead
+                    of being unevaluable.
     ``geometric``   first-order: the barrel as a length of line in the
-                    surrounding dielectric. Exact given the data, and refused
-                    outright when the stackup lacks it.
+                    surrounding dielectric. The only treatment here that is
+                    exact, and refused outright when the stackup lacks the
+                    data it reads.
     """
 
-    __slots__ = ("model", "justification", "declared")
+    __slots__ = ("model", "justification", "declared", "max_delay_ps")
 
-    def __init__(self, model, justification=None, declared=True):
+    def __init__(self, model, justification=None, declared=True,
+                 max_delay_ps=None):
         self.model = model
         self.justification = justification
         self.declared = declared
+        self.max_delay_ps = max_delay_ps
 
     @property
     def exact(self):
         """Does this contribute a value rather than an acknowledged omission?"""
-        if self.model == VIA_GEOMETRIC:
-            return True
-        return bool(self.justification)
+        return self.model == VIA_GEOMETRIC
+
+    @property
+    def omitted_bound_ps(self):
+        """How much the omission could be worth, when the board says."""
+        return None if self.exact else self.max_delay_ps
 
     @property
     def fidelity(self):
         if self.model == VIA_GEOMETRIC:
             return ANALYTIC_TRANSMISSION_LINE
-        return DECLARED_MODEL if self.justification else UNKNOWN_CONTRIBUTION
+        return UNKNOWN_CONTRIBUTION
 
     def note(self):
         if self.model == VIA_GEOMETRIC:
             return ("first-order: barrel treated as a length of line in the "
                     "surrounding dielectric; no inductance, no stub, no "
                     "discontinuity")
+        if self.max_delay_ps is not None:
+            return ("vertical extent measured and no delay attributed, but "
+                    "the board bounds what it omitted at {} ps, so a maximum "
+                    "can still be decided against the bound{}".format(
+                        self.max_delay_ps,
+                        ": " + self.justification if self.justification
+                        else ""))
         if self.justification:
             return ("vertical extent measured, no delay attributed, on a "
-                    "declared justification: {}".format(self.justification))
+                    "declared reason: {}. A reason records a decision; it does "
+                    "not measure the transit, so this remains a lower "
+                    "bound".format(self.justification))
         if self.declared:
             return ("vertical extent measured and no delay attributed. This "
                     "board named the 'none' treatment but justified nothing, "
@@ -201,6 +236,9 @@ class ViaPolicy:
     def to_dict(self):
         return {"model": self.model, "declared": self.declared,
                 "justified": bool(self.justification),
+                "bounded": self.max_delay_ps is not None,
+                **({"max_delay_ps": self.max_delay_ps}
+                   if self.max_delay_ps is not None else {}),
                 **({"justification": self.justification}
                    if self.justification else {})}
 
@@ -209,14 +247,30 @@ def via_policy(declaration):
     """Read a board's `via_delay_model` declaration. Absent is a state too."""
     if declaration is None:
         return ViaPolicy(VIA_NONE, None, declared=False)
+    bound = None
     if isinstance(declaration, str):
         model, justification = declaration, None
     elif isinstance(declaration, dict):
         model = declaration.get("model")
         justification = declaration.get("justification")
+        bound = declaration.get("max_delay_ps")
         if not model:
             raise PropagationError(
                 "the via delay model declares no `model`")
+        if bound is not None:
+            if isinstance(bound, bool) or not isinstance(bound, (int, float)):
+                raise PropagationError(
+                    "via max_delay_ps is {!r}, not a number".format(bound))
+            if bound < 0 or bound != bound or bound in (float("inf"),
+                                                        float("-inf")):
+                raise PropagationError(
+                    "via max_delay_ps is {!r}, which is not a usable "
+                    "bound".format(bound))
+            if not justification:
+                raise PropagationError(
+                    "a via max_delay_ps bounds what the board omitted, so it "
+                    "requires a `justification` saying where the bound comes "
+                    "from")
     else:
         raise PropagationError(
             "via_delay_model is a {}, not a string or an object".format(
@@ -230,7 +284,12 @@ def via_policy(declaration):
         raise PropagationError(
             "via delay model {!r} is not implemented; this validator has "
             "{}".format(model, ", ".join(VIA_MODELS)))
-    return ViaPolicy(model, justification, declared=True)
+    if bound is not None and model == VIA_GEOMETRIC:
+        raise PropagationError(
+            "the geometric via model computes the transit, so bounding an "
+            "omission alongside it states two different things about the same "
+            "barrel")
+    return ViaPolicy(model, justification, declared=True, max_delay_ps=bound)
 
 
 #: The result contract every backend produces, whatever it is inside.
@@ -258,7 +317,8 @@ VIA_RESULT_FIELDS = ("from_layer", "to_layer", "model", "vertical_length_mm",
 #: honour that distinction cannot be plugged in here, which is deliberate:
 #: it is the distinction the gates make their decisions on.
 PATH_RESULT_FIELDS = ("path", "source", "destination", "delay_ps",
-                      "delay_is_lower_bound", "fidelity", "insufficient",
+                      "delay_is_lower_bound", "delay_upper_ps",
+                      "omitted_bound_ps", "fidelity", "insufficient",
                       "backend", "conductors", "vias",
                       "component_traversals")
 
@@ -432,6 +492,70 @@ def via_span_needs_stackup(via_model):
     return _via_model_name(via_model) == VIA_GEOMETRIC
 
 
+class ReferenceDiscontinuity:
+    """What a board says about copper whose reference plane is interrupted.
+
+    Two questions get confused here, and keeping them apart is the whole point.
+
+      1. Is this board acceptable with N millimetres of missing reference
+         copper? That is a design requirement. It belongs to a gate that
+         measures the board, and a board may set whatever limit it likes.
+      2. Does the microstrip equation still describe a trace over that gap?
+         That is a question about the formula, and no board-level tolerance
+         makes the answer yes.
+
+    A single `max_unreferenced_mm` answered the first and was read as answering
+    the second, so raising an acceptance threshold quietly turned an invalid
+    model valid. This object answers only the second, and answering it takes
+    more than a number: a treatment naming the assumption, a bound the board
+    commits to, and a reason. Absent, the model refuses - which is the
+    conservative reading and the default.
+    """
+
+    __slots__ = ("treatment", "up_to_mm", "justification")
+
+    REFUSE = "refuse"
+    ASSUME_CONTINUOUS = "assume_continuous"
+    TREATMENTS = (REFUSE, ASSUME_CONTINUOUS)
+
+    def __init__(self, declaration=None):
+        if declaration is None:
+            self.treatment, self.up_to_mm, self.justification = (
+                self.REFUSE, 0.0, None)
+            return
+        if not isinstance(declaration, dict):
+            raise PropagationError(
+                "timing.propagation.reference_discontinuity is a {}, not an "
+                "object".format(type(declaration).__name__))
+        treatment = declaration.get("treatment", self.REFUSE)
+        if treatment not in self.TREATMENTS:
+            raise PropagationError(
+                "reference discontinuity treatment {!r} is not one of "
+                "{}".format(treatment, ", ".join(self.TREATMENTS)))
+        self.treatment = treatment
+        self.up_to_mm = declaration.get("up_to_mm", 0.0) or 0.0
+        self.justification = declaration.get("justification")
+        if treatment == self.ASSUME_CONTINUOUS:
+            if not self.up_to_mm:
+                raise PropagationError(
+                    "assuming reference continuity requires `up_to_mm`: the "
+                    "assumption has to have a size, or nothing bounds what is "
+                    "being assumed away")
+            if not self.justification:
+                raise PropagationError(
+                    "assuming reference continuity requires a `justification` "
+                    "saying why the formula still applies over the gap")
+
+    def permits(self, missing_mm):
+        return (self.treatment == self.ASSUME_CONTINUOUS
+                and missing_mm <= self.up_to_mm)
+
+    def to_dict(self):
+        return {"treatment": self.treatment, "up_to_mm": self.up_to_mm,
+                **({"justification": self.justification}
+                   if self.justification else {})}
+
+
 class PropagationModel:
     """Turns a resolved path plus a physical stackup into a delay.
 
@@ -444,7 +568,7 @@ class PropagationModel:
 
     def __init__(self, stackup, reference_layers, model=HAMMERSTAD,
                  via_model=None, declared_layers=None, backend="analytic",
-                 max_unreferenced_mm=0.0):
+                 discontinuity=None, unfilled_reference_layers=()):
         if model not in MODELS:
             raise PropagationError(
                 "propagation model {!r} is not implemented; this validator has "
@@ -454,11 +578,16 @@ class PropagationModel:
         self.reference_layers = set(reference_layers or ())
         self.model = model
         self.via_model = self.via_treatment.model
-        #: How much copper a board accepts having no reference conductor under
-        #: it. Zero unless the board declares otherwise, because a route with
-        #: no return path underneath is not the geometry any of these formulas
-        #: describe.
-        self.max_unreferenced_mm = max_unreferenced_mm
+        #: What to do about copper whose reference plane is interrupted. This
+        #: is a statement about the *formula*, not about the design: whether a
+        #: microstrip equation still describes a trace that runs over a void is
+        #: a different question from whether the board is acceptable with that
+        #: void in it, and a board-level tolerance answering the second must
+        #: not silently answer the first. `refuse` unless declared otherwise.
+        self.discontinuity = ReferenceDiscontinuity(discontinuity)
+        #: Reference layers whose zones were never filled. Coverage against one
+        #: of these is unknown, and unknown is not covered.
+        self.unfilled_reference_layers = set(unfilled_reference_layers or ())
         self.backend = backend
         self.declared = {
             layer: DeclaredLayerModel(layer, spec)
@@ -560,6 +689,13 @@ class PropagationModel:
         return {
             "layer": layer, "width_mm": width_mm,
             "mode": geometry.mode,
+            # The specific planes this result is about. Coverage is checked
+            # against exactly these, because these are the conductors the
+            # formula assumes are carrying the return current.
+            "reference_layers_used": [name for name in
+                                      (geometry.reference_above,
+                                       geometry.reference_below)
+                                      if name],
             "model": record_model,
             "fidelity": ANALYTIC_TRANSMISSION_LINE,
             "epsilon_r": geometry.epsilon_r,
@@ -622,6 +758,11 @@ class PropagationModel:
         # line in the surrounding dielectric. It attributes no inductance and
         # models no stub, which is why it is named `geometric` in the report.
         record["epsilon_r"] = span["epsilon_r"]
+        # What this model computes is the transit between the layers the signal
+        # actually changed between. Any barrel above or below that is stub, and
+        # stub effects are not modelled here at all - not as zero, but as
+        # outside what this calculation describes.
+        record["unmodelled_stub"] = _stub_extent(record)
         record["fidelity"] = self.via_treatment.fidelity
         record["exact"] = True
         record["delay_ps"] = round(
@@ -662,6 +803,79 @@ class PropagationModel:
                               if complete and len(unique) == 1 else None)}
 
     # -- whole paths -------------------------------------------------------
+    def _missing_on_used_planes(self, conductor, model):
+        """(worst missing mm, unfilled planes) for the planes this run uses."""
+        used = model.get("reference_layers_used") or []
+        per_layer = conductor.get("unreferenced_by_layer_mm") or {}
+        unfilled = [name for name in used
+                    if name in self.unfilled_reference_layers]
+        missing = 0.0
+        unknown = []
+        for name in used:
+            if name in unfilled:
+                continue
+            if name not in per_layer:
+                unknown.append(name)
+                continue
+            missing = max(missing, per_layer[name])
+        return missing, unfilled, unknown
+
+    def _reference_problem(self, conductor, model):
+        """Why this run cannot be modelled against the plane it needs, or None.
+
+        Three distinct states, and only the last one is "there is a gap":
+        the plane's zone was never filled, so nothing is known about what is
+        under the trace; no coverage was computed for it at all; or coverage
+        was computed and found wanting.
+        """
+        if not (model.get("reference_layers_used")):
+            return None
+        if not conductor.get("reference_checked"):
+            return None
+        missing, unfilled, unknown = self._missing_on_used_planes(conductor,
+                                                                 model)
+        common = {"portion": "conductor", "layer": conductor["layer"],
+                  "width_mm": conductor["width_mm"],
+                  "length_mm": conductor["length_mm"],
+                  "reference_layers_used": model["reference_layers_used"]}
+        if unfilled:
+            return {**common, "unfilled_reference_layers": unfilled,
+                    "issue": "the reference plane(s) {} carry no filled "
+                             "polygons, so whether copper is actually under "
+                             "this run was never established. An unfilled zone "
+                             "is not an empty one: refill the board and "
+                             "re-run".format(", ".join(unfilled))}
+        if unknown:
+            return {**common, "reference_layers_unmeasured": unknown,
+                    "issue": "no reference copper was found on {} at all, so "
+                             "the plane this run is referenced to does not "
+                             "exist as poured copper".format(
+                                 ", ".join(unknown))}
+        if missing <= 0.0 or self.discontinuity.permits(missing):
+            return None
+        return {**common, "unreferenced_mm": round(missing, 4),
+                "issue": "{} mm of this run has no poured reference conductor "
+                         "on the plane it is referenced to, so the "
+                         "transmission-line geometry the model assumes does "
+                         "not exist there. A board may declare "
+                         "`reference_discontinuity` to assume continuity over "
+                         "a stated distance, with a reason".format(
+                             round(missing, 4))}
+
+    def _assumed_continuity(self, conductor, model):
+        """Record an assumption that was exercised, so a reader sees it."""
+        if not conductor.get("reference_checked"):
+            return None
+        missing, unfilled, unknown = self._missing_on_used_planes(conductor,
+                                                                 model)
+        if unfilled or unknown or missing <= 0.0:
+            return None
+        return {"assumption": "reference continuity",
+                "layer": conductor["layer"],
+                "unreferenced_mm": round(missing, 4),
+                "up_to_mm": self.discontinuity.up_to_mm,
+                "justification": self.discontinuity.justification}
+
     def evaluate(self, resolved_path):
         """Total passive interconnect delay for one resolved path.
 
@@ -693,14 +907,27 @@ class PropagationModel:
             "propagation_model": self.model,
             "via_delay_model": self.via_model,
             "via_policy": self.via_treatment.to_dict(),
+            "reference_discontinuity": self.discontinuity.to_dict(),
             "backend": self.backend,
-            "length_ambiguity_mm": round(
-                sum(s.record.get("length_ambiguity_mm") or 0.0
+            # Summed across steps because each step's figure is already a sum
+            # over the distinct junctions that step crossed, and no junction
+            # can be crossed by two steps of one path: steps are on different
+            # nets. See `_walk_record` for what the number bounds.
+            "length_uncertainty_mm": round(
+                sum(s.record.get("length_uncertainty_mm") or 0.0
                     for s in getattr(resolved_path, "steps", ())), 6),
+            "ambiguous_junctions": sum(
+                s.record.get("ambiguous_junctions") or 0
+                for s in getattr(resolved_path, "steps", ())),
         }
         total = 0.0
         fidelities = set()
         exact = True
+        # What the omissions could add up to. `None` the moment one omission
+        # is unbounded, because an upper bound with an unbounded term in it is
+        # not an upper bound.
+        omitted = 0.0
+        omissions_bounded = True
 
         for conductor in resolved_path.conductors():
             try:
@@ -714,23 +941,13 @@ class PropagationModel:
                     "length_mm": conductor["length_mm"],
                     "issue": str(exc)})
                 continue
-            unreferenced = conductor.get("unreferenced_mm") or 0.0
-            if unreferenced > self.max_unreferenced_mm:
-                # Every closed form here assumes a reference conductor under
-                # the whole run. Copper crossing a split, a void, or the edge
-                # of the pour has none there, and the formula does not describe
-                # it - so the answer is no answer, not the nearest-looking one.
-                record["insufficient"].append({
-                    "portion": "conductor",
-                    "layer": conductor["layer"],
-                    "width_mm": conductor["width_mm"],
-                    "length_mm": conductor["length_mm"],
-                    "unreferenced_mm": round(unreferenced, 4),
-                    "issue": "{} mm of this run has no poured reference "
-                             "conductor beneath it, so the transmission-line "
-                             "geometry the model assumes does not exist there"
-                             .format(round(unreferenced, 4))})
+            problem = self._reference_problem(conductor, model)
+            if problem is not None:
+                record["insufficient"].append(problem)
                 continue
+            assumed = self._assumed_continuity(conductor, model)
+            if assumed:
+                record.setdefault("assumptions", []).append(assumed)
             delay = conductor["length_mm"] * model["ps_per_mm"]
             total += delay
             fidelities.add(model["fidelity"])
@@ -752,6 +969,11 @@ class PropagationModel:
                 fidelities.add(via["fidelity"])
             if via.get("exact") is False:
                 exact = False
+                bound = self.via_treatment.omitted_bound_ps
+                if bound is None:
+                    omissions_bounded = False
+                else:
+                    omitted += bound
             record["vias"].append(via)
 
         # Components. A traversal is never silently worth zero: an unmodelled
@@ -778,6 +1000,11 @@ class PropagationModel:
             fidelities.add(contribution.fidelity)
             if not contribution.exact:
                 exact = False
+                bound = contribution.omitted_bound_ps
+                if bound is None:
+                    omissions_bounded = False
+                else:
+                    omitted += bound
 
         unmodelled = [t["reference"] for t in record["component_traversals"]
                       if t["model_status"] == "unmodelled"]
@@ -804,6 +1031,14 @@ class PropagationModel:
 
         record["delay_ps"] = round(total, 6)
         record["delay_is_lower_bound"] = not exact
+        # The matching upper bound, when every omission was bounded. Equal to
+        # the lower one when nothing was omitted, which is what makes a fully
+        # modelled path decidable in the ordinary way without a special case.
+        record["delay_upper_ps"] = (
+            round(total + omitted, 6)
+            if (exact or omissions_bounded) else None)
+        record["omitted_bound_ps"] = (round(omitted, 6)
+                                      if omissions_bounded else None)
         record["fidelity"] = weakest(fidelities)
         return record
 

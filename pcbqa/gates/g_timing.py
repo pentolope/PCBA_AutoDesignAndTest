@@ -105,15 +105,39 @@ class GeometryAnalysis:
         spanned = set()
         for _name, record in self.all_paths():
             for transition in record["resolved"].via_transitions():
+                # The layers the signal actually changed between, which is what
+                # the geometric model integrates over. The rest of the barrel
+                # is stub, and this release models no stub effect - so asking
+                # for the stackup around it would be demanding data the
+                # calculation never reads.
                 spanned.update(stack.copper_layers_between(
-                    transition.get("via_top_layer"),
-                    transition.get("via_bottom_layer")))
+                    transition.get("from_layer"),
+                    transition.get("to_layer")))
         return spanned
 
     @staticmethod
     def key(record):
         """What identifies one resolved path: its route and its destination."""
         return (record["resolved"].id, record["resolved"].destination.label)
+
+
+def _unreferenced_total(state, only=None):
+    """Copper with no reference conductor on any candidate plane.
+
+    The design measurement, so the *best* candidate counts: copper is only
+    reported unreferenced here if nothing poured on any reference layer covers
+    it. Whether the plane a formula happens to need is the one that covers it
+    is the propagation model's question, and a stricter one.
+    """
+    total = 0.0
+    for name, record in state.all_paths():
+        if only is not None and name != only:
+            continue
+        for conductor in record["resolved"].conductors():
+            per_layer = conductor.get("unreferenced_by_layer_mm") or {}
+            if per_layer:
+                total += min(per_layer.values())
+    return total
 
 
 def _identifier(kind, name):
@@ -146,8 +170,9 @@ def geometry(ctx):
         if spec.get("reference_nets"):
             poured, unfilled = stackup_physical.reference_copper(
                 board, spec["reference_nets"])
-        resolver = electrical_path.PathResolver(board, geom.pad_copper_polygon,
-                                                reference_copper=poured)
+        resolver = electrical_path.PathResolver(
+            board, geom.pad_copper_polygon, reference_copper=poured,
+            unfilled_reference_layers=unfilled)
         interfaces = {}
         for name, declared in sorted(
                 (manifest.get("timing.interfaces") or {}).items()):
@@ -265,8 +290,8 @@ def propagation_analysis(ctx):
                 via_model=spec.get("via_delay_model"),
                 declared_layers=spec.get("declared_layers"),
                 backend=selection.used,
-                max_unreferenced_mm=(ctx.manifest.get(
-                    "timing.physical_stackup.max_unreferenced_mm", 0.0) or 0.0))
+                discontinuity=spec.get("reference_discontinuity"),
+                unfilled_reference_layers=paths.unfilled_layers)
         except (backends.BackendError, propagation.PropagationError) as exc:
             return PropagationAnalysis(
                 error="{}: {}".format(type(exc).__name__, exc))
@@ -370,6 +395,29 @@ def path_integrity(ctx, res):
                                  "cross its series part starts on the wrong "
                                  "side of it",
                         "required": required, "crosses": row["crosses"]})
+    # The *design* question about reference continuity, which is not the same
+    # as whether a propagation formula applies over the gap. Measured here
+    # because it is pure geometry; compared here only when a board states a
+    # requirement. `timing.propagation.reference_discontinuity` answers the
+    # other question and does not affect this one.
+    unreferenced = _unreferenced_total(state)
+    res.measurements["unreferenced_copper_mm"] = round(unreferenced, 4)
+    res.measurements["reference_layers_not_filled"] = state.unfilled_layers
+    for name, interface in sorted(state.interfaces.items()):
+        key = "timing.interfaces.{}.max_unreferenced_mm".format(name)
+        if not ctx.manifest.has(key):
+            continue
+        limit = res.limit(ctx.manifest.constraint(
+            key, units="mm",
+            cid="timing.{}.max_unreferenced_mm".format(name)))
+        measured = _unreferenced_total(state, only=name)
+        if measured > limit.value:
+            problems.append({
+                "interface": name,
+                "issue": "more of this interface's copper has no reference "
+                         "conductor beneath it than the board accepts",
+                "measured_mm": round(measured, 4), "limit_mm": limit.value})
+
     res.measurements["interfaces"] = summary
     res.measurements["paths_resolved"] = sum(
         len(i["paths"]) for i in state.interfaces.values())
@@ -428,12 +476,6 @@ def physical_stackup(ctx, res):
         res.measurements["reference_copper_layers"] = sorted(
             paths.reference_copper)
         res.measurements["reference_layers_not_filled"] = paths.unfilled_layers
-        for layer in paths.unfilled_layers:
-            res.finding(layer=layer,
-                        issue="a reference net is assigned to this layer but "
-                              "its zones carry no filled polygons, so whether "
-                              "copper is actually under a route there cannot "
-                              "be established; refill the board and re-run")
     res.measurements["layers_in_use"] = layers
     res.measurements["fields_required_by_declared_analyses"] = sorted(required)
     res.measurements["insufficient_fields"] = missing
@@ -454,6 +496,15 @@ def physical_stackup(ctx, res):
             "respect(s); that is not a question of completeness and no policy "
             "makes it acceptable".format(len(shape.contradictions)))
 
+    for layer in paths.unfilled_layers if ctx.manifest.has(
+            "timing.interfaces") else []:
+        missing.append({
+            "layer": layer, "field": "reference_fill",
+            "needed_for": "any propagation delay on a layer referenced to it",
+            "issue": "a reference net is assigned to this layer but its zones "
+                     "carry no filled polygons, so whether copper is actually "
+                     "under a route there cannot be established; refill the "
+                     "board and re-run"})
     no_planes = bool(layers) and not shape.reference_layers
     if no_planes:
         res.finding(issue="no copper layer carries a zone on any declared "
@@ -529,9 +580,9 @@ def interconnect_delay(ctx, res):
         if limit is None:
             continue
         limited += 1
-        problem = _compare_maximum(delay["delay_ps"],
-                                   delay.get("delay_is_lower_bound", False),
-                                   limit.value, delay["insufficient"])
+        problem = _compare_maximum(delay["delay_ps"], limit.value,
+                                    delay["insufficient"],
+                                    upper=delay.get("delay_upper_ps"))
         if problem:
             problems.append({"interface": name, "path": delay["path"],
                              **problem})
@@ -564,26 +615,41 @@ def interconnect_delay(ctx, res):
             state.selection.used))
 
 
-def _compare_maximum(value, is_lower_bound, limit, insufficient):
-    """Compare a measurement against a maximum, honouring what it actually is."""
+def _compare_maximum(value, limit, insufficient, upper=None):
+    """Compare against a maximum, honouring what the measurement actually is.
+
+    `value` is a lower bound whenever something on the path was omitted, and
+    `upper` is the matching upper bound - present only when every omission was
+    bounded by the board. Three outcomes, and which one applies is decided by
+    the numbers rather than by how confidently the board described them:
+
+      * the lower bound already exceeds the limit: proof, so it fails;
+      * an upper bound exists and is within the limit: proof, so it passes;
+      * otherwise the requirement straddles what is known, and an unevaluated
+        requirement is not a satisfied one.
+    """
     if value is None:
         return {"issue": "a limit is declared but the value could not be "
                          "derived; the requirement is unevaluated, not met",
                 "insufficient": list(insufficient)[:3]}
     if value > limit:
-        # A lower bound already over the limit is proof, because the true
-        # value is larger still.
         return {"issue": "the measured value exceeds the declared limit",
                 "measured": value, "limit": limit,
-                "measured_is_lower_bound": is_lower_bound}
-    if is_lower_bound:
-        return {"issue": "the value is a lower bound, because some portion of "
-                         "the path contributes an unmodelled amount, and a "
-                         "lower bound below a maximum proves nothing about the "
-                         "value above it. Declare a delay model for the "
-                         "unmodelled portion, or drop the limit",
+                "measured_is_lower_bound": upper != value}
+    if upper is not None and upper <= limit:
+        return None
+    if upper is None:
+        return {"issue": "the value is an unbounded lower bound, because some "
+                         "portion of the path contributes an unmodelled amount "
+                         "of unstated size. A lower bound below a maximum "
+                         "proves nothing about the value above it: model the "
+                         "portion, state a `max_delay_ps` bounding what was "
+                         "omitted, or drop the limit",
                 "lower_bound": value, "limit": limit}
-    return None
+    return {"issue": "the limit falls between what is known: the modelled "
+                     "portion alone is within it, and the omitted portions "
+                     "could carry it past",
+            "lower_bound": value, "upper_bound": upper, "limit": limit}
 
 
 def _delay_row(interface, delay):
@@ -662,10 +728,14 @@ def interconnect_skew(ctx, res):
                 # A spread built from lower bounds is not itself a lower
                 # bound - the unknown amounts may differ per path in either
                 # direction - so it cannot be compared at all.
-                bound = (record["any_lower_bound"] if field == "skew_ps"
-                         else False)
-                problem = _compare_maximum(record[field], bound, limit.value,
-                                           record["insufficient"])
+                # A spread built from lower bounds is not itself a lower
+                # bound: the unknown amounts differ per path and in either
+                # direction, so the spread has no bound at all until every
+                # omission on every member is bounded.
+                upper = (record["skew_upper_ps"] if field == "skew_ps"
+                         else record[field])
+                problem = _compare_maximum(record[field], limit.value,
+                                           record["insufficient"], upper=upper)
                 if problem:
                     problems.append({"interface": name, "group": group_name,
                                      "units": units,
@@ -738,8 +808,27 @@ def _group_record(interface, name, group, members, delays, paths):
         "latest": max(ordered)[1] if ordered else None,
         "insufficient": insufficient,
         "any_lower_bound": any_bound,
+        # The worst spread the omissions permit: the latest arrival pushed out
+        # by everything omitted from it, against the earliest left where it is.
+        # None as soon as one member's omissions are unbounded.
+        "skew_upper_ps": _skew_upper(members, delays, paths, times, have_all),
         "measured_in": "ps" if have_all else "mm",
     }
+
+
+def _skew_upper(members, delays, paths, times, have_all):
+    """An upper bound on a group's spread, when every omission is bounded."""
+    if not have_all or not times:
+        return None
+    worst = 0.0
+    for record in members:
+        delay = delays.get(paths.key(record))
+        bound = None if delay is None else delay.get("omitted_bound_ps")
+        if delay is not None and delay.get("delay_is_lower_bound") \
+                and bound is None:
+            return None
+        worst = max(worst, bound or 0.0)
+    return round(max(times)[0] + worst - min(times)[0], 6)
 
 
 def _limit_for(ctx, res, interface, key, units):

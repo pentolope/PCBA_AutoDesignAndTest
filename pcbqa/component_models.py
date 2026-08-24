@@ -14,10 +14,17 @@ authority", and there are exactly three honest answers:
 
 ``implemented``
     The board declared a model this release evaluates, and it was evaluated.
-    Two exist. ``none`` attributes zero *deliberately*, on a stated
-    justification - which is a different claim from having no model at all,
-    and the difference is exactly who is answerable for it. ``fixed_delay``
-    attributes a stated number with stated provenance.
+    Only ``fixed_delay`` reaches this: it attributes a stated number with
+    stated provenance, which is a value.
+
+    ``none`` does not, even with a justification. Prose records *why* a
+    contribution was omitted; it does not measure the part, and omitting
+    something for a stated reason is still omitting it. A justified ``none``
+    is therefore an omission with its reason on the record - better than an
+    unexplained one, and not a value. What turns it into arithmetic is
+    ``max_delay_ps``: a stated upper bound on what was left out, which lets a
+    maximum requirement be decided against `total + bound` instead of being
+    unevaluable.
 
 ``unsupported``
     The board declared a model this release cannot evaluate. This is the case
@@ -60,6 +67,20 @@ class ComponentModelError(Exception):
     """A component model declaration cannot be used. Always blocks."""
 
 
+def _finite_non_negative(value, field, where):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ComponentModelError(
+            "{}: {} is {!r}, not a number".format(where, field, value))
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ComponentModelError(
+            "{}: {} is {!r}, which is not a finite number".format(
+                where, field, value))
+    if value < 0:
+        raise ComponentModelError(
+            "{}: {} is {}, and a passive traversal cannot advance a signal in "
+            "time".format(where, field, value))
+
+
 class Contribution:
     """One component traversal's contribution to a path, and its standing."""
 
@@ -85,9 +106,23 @@ class Contribution:
         """Is the contribution a value rather than an acknowledged omission?
 
         False for an unmodelled traversal, which is what makes a path total
-        containing one a lower bound.
+        containing one a lower bound. A justification does not change this:
+        prose records why a contribution was omitted, and omitting it for a
+        stated reason is still omitting it.
         """
         return self.kind == IMPLEMENTED
+
+    @property
+    def omitted_bound_ps(self):
+        """An upper bound on what the omission is worth, when one was stated.
+
+        This is the only thing that lets a maximum requirement be decided over
+        an omission: the total is a lower bound, and the total plus every
+        omission's bound is the matching upper one.
+        """
+        if self.exact:
+            return None
+        return self.parameters.get("max_delay_ps")
 
     def to_dict(self):
         return {"model": self.model, "model_status": self.kind,
@@ -150,17 +185,30 @@ def evaluate(declaration, reference=None):
 
     if model == MODEL_NONE:
         justification = declaration.get("justification")
+        bound = declaration.get("max_delay_ps")
         if not justification:
             raise ComponentModelError(
                 "{}: the {!r} model attributes zero delay deliberately, so it "
                 "requires a `justification`. Without one it is "
                 "indistinguishable from having declared no model at all, and "
                 "the two mean different things".format(where, model))
+        if bound is None:
+            # A reason records a decision. It does not measure the part, so
+            # the traversal is still an acknowledged omission and the total
+            # containing it is still a lower bound. Bounding it is what turns
+            # explanation into arithmetic - see `max_delay_ps` below.
+            return Contribution(
+                UNMODELLED, model, 0.0, UNKNOWN_CONTRIBUTION,
+                "zero attributed on a declared reason: {}. A reason records a "
+                "decision rather than measuring the part, so this remains a "
+                "lower bound".format(justification),
+                {"justification": justification})
+        _finite_non_negative(bound, "max_delay_ps", where)
         return Contribution(
-            IMPLEMENTED, model, 0.0, DECLARED_MODEL,
-            "zero attributed on a declared justification: {}".format(
-                justification),
-            {"justification": justification})
+            UNMODELLED, model, 0.0, UNKNOWN_CONTRIBUTION,
+            "zero attributed, with what was omitted bounded at {} ps: "
+            "{}".format(bound, justification),
+            {"justification": justification, "max_delay_ps": float(bound)})
 
     # MODEL_FIXED
     delay = declaration.get("delay_ps")
@@ -168,17 +216,7 @@ def evaluate(declaration, reference=None):
     if delay is None:
         raise ComponentModelError(
             "{}: the {!r} model declares no `delay_ps`".format(where, model))
-    if isinstance(delay, bool) or not isinstance(delay, (int, float)):
-        raise ComponentModelError(
-            "{}: delay_ps is {!r}, not a number".format(where, delay))
-    if delay != delay or delay in (float("inf"), float("-inf")):
-        raise ComponentModelError(
-            "{}: delay_ps is {!r}, which is not a finite number".format(
-                where, delay))
-    if delay < 0:
-        raise ComponentModelError(
-            "{}: delay_ps is {}, and a passive traversal cannot advance a "
-            "signal in time".format(where, delay))
+    _finite_non_negative(delay, "delay_ps", where)
     if not provenance:
         raise ComponentModelError(
             "{}: the {!r} model states no `provenance`; a delay nobody can "

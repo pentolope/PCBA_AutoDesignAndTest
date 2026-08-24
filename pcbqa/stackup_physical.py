@@ -850,19 +850,26 @@ def merge(native, declared):
                 "; ".join("{} {} native={} declared={}".format(
                     c["layer"], c["field"], c["native"], c["declared"])
                     for c in conflicts[:6])))
-    extra = [name for name in by_name if native.layer(name) is None]
-    invented_copper = sorted(name for name in extra
-                             if by_name[name].is_copper)
-    if invented_copper:
-        raise StackupError(
-            "the board's supplemental stackup adds copper layer(s) {} that the "
-            "board file does not have. A supplement fills in what the design "
-            "authority does not say; it does not add layers to the "
-            "design".format(", ".join(invented_copper)))
-    notes = list(native.notes) + list(declared.notes)
+    extra = sorted(name for name in by_name if native.layer(name) is None)
     if extra:
-        notes.append("supplemental declaration names layer(s) the board file "
-                     "does not have: {}".format(", ".join(sorted(extra))))
+        # Any kind of layer, not just copper. A dielectric inserted between two
+        # coppers moves them apart and changes what references what, exactly as
+        # adding a copper layer would; a mask entry appearing between a trace
+        # and its plane would do the same. The rule is about structure, so it
+        # cannot depend on which kind of structure it is.
+        #
+        # This applies only where the board file states a structure at all. A
+        # board whose stackup was never filled in has no structure to
+        # contradict, and the declaration supplying the whole of it is the
+        # documented second source - handled above, before this point.
+        raise StackupError(
+            "the board's supplemental stackup adds layer(s) {} that the board "
+            "file does not have. Native structure is the design authority and "
+            "the supplement fills in physical properties it does not state; "
+            "adding a layer is not filling in a property, and every question "
+            "about which layer is next to which would answer differently "
+            "depending on which document you read".format(", ".join(extra)))
+    notes = list(native.notes) + list(declared.notes)
     return PhysicalStackup(layers, MERGED,
                            declared_total_thickness_mm=(
                                native.declared_total_thickness_mm

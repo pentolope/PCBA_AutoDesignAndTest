@@ -483,19 +483,26 @@ class ResolvedPath:
         the length, because it is the propagation model that has to refuse on
         it and the model never sees the individual pieces.
         """
-        totals, unreferenced = {}, {}
+        totals, unreferenced, unfilled = {}, {}, []
         checked = False
         for step in self.steps:
             for record in step.record.get("conductors") or []:
                 key = (record["layer"], record["width_mm"])
                 totals[key] = totals.get(key, 0.0) + record["length_mm"]
-                unreferenced[key] = unreferenced.get(key, 0.0) + (
-                    record.get("unreferenced_mm") or 0.0)
+                per_layer = unreferenced.setdefault(key, {})
+                for name, value in (record.get("unreferenced_by_layer_mm")
+                                    or {}).items():
+                    per_layer[name] = per_layer.get(name, 0.0) + value
+                for name in record.get("reference_layers_unfilled") or []:
+                    if name not in unfilled:
+                        unfilled.append(name)
                 checked = checked or record.get("reference_checked", False)
         return [{"layer": layer, "width_mm": width,
                  "length_mm": round(length, 6),
-                 "unreferenced_mm": round(unreferenced.get(
-                     (layer, width), 0.0), 6),
+                 "unreferenced_by_layer_mm": {
+                     name: round(value, 6) for name, value
+                     in sorted(unreferenced.get((layer, width), {}).items())},
+                 "reference_layers_unfilled": sorted(unfilled),
                  "reference_checked": checked}
                 for (layer, width), length in sorted(totals.items())]
 
@@ -532,7 +539,8 @@ class PathResolver:
     nothing, two loads on one branch share everything.
     """
 
-    def __init__(self, board, pad_polygon, reference_copper=None):
+    def __init__(self, board, pad_polygon, reference_copper=None,
+                 unfilled_reference_layers=()):
         self.board = board
         self.pad_polygon = pad_polygon
         #: {layer name: poured reference copper}, when the caller knows it.
@@ -540,6 +548,12 @@ class PathResolver:
         #: it that a transmission-line model assumes; absent means the question
         #: was not asked, which is different from asked and answered no.
         self.reference_copper = dict(reference_copper or {})
+        #: Layers a reference net is assigned to whose zones carry no filled
+        #: polygons. Coverage against one of these is *unknown*, which is a
+        #: third state and not the same as uncovered: nobody has established
+        #: either way, and only the propagation model can decide what that
+        #: means for the formula it was about to use.
+        self.unfilled_reference_layers = list(unfilled_reference_layers)
         self._prepared = {}
         self._graphs = {}
         self._pads = None
@@ -731,7 +745,7 @@ class PathResolver:
         by_layer = {}
         by_geometry = {}
         uncovered = {}
-        ambiguity = 0.0
+        junctions = {}
         transitions = []
         elements = graph.elements
         for position, index in enumerate(chain):
@@ -746,9 +760,13 @@ class PathResolver:
                 width = round(element.obj.GetWidth() / 1e6, 6)
                 key = (layer, width)
                 by_geometry[key] = by_geometry.get(key, 0.0) + element.length_mm
-                ambiguity = max(ambiguity, element.ambiguity_mm)
-                uncovered[key] = uncovered.get(key, 0.0) + self._uncovered_mm(
-                    element)
+                for identity, span in element.junctions:
+                    junctions[identity] = span
+                for layer_name, missing in self._uncovered_by_layer(
+                        element).items():
+                    per_layer = uncovered.setdefault(key, {})
+                    per_layer[layer_name] = per_layer.get(layer_name,
+                                                          0.0) + missing
             if element.kind == "via":
                 transitions.append(
                     self._via_record(element, elements, chain, position))
@@ -768,11 +786,26 @@ class PathResolver:
             "conductors": [
                 {"layer": layer, "width_mm": width,
                  "length_mm": round(length, 6),
-                 "unreferenced_mm": round(uncovered.get((layer, width), 0.0), 6),
-                 "reference_checked": bool(self.reference_copper)}
+                 "unreferenced_by_layer_mm": {
+                     name: round(value, 6) for name, value
+                     in sorted(uncovered.get((layer, width), {}).items())},
+                 "reference_layers_unfilled": list(
+                     self.unfilled_reference_layers),
+                 "reference_checked": bool(self.reference_copper
+                                           or self.unfilled_reference_layers)}
                 for (layer, width), length in sorted(by_geometry.items())],
             "via_transitions": transitions,
-            "length_ambiguity_mm": round(ambiguity, 6),
+            # A bound, not an error bar. Each ambiguous junction's cut sits in
+            # the middle of a shared region and could have been placed anywhere
+            # in it, so this walk's length could differ by up to half that
+            # region at each junction it passes. Distinct junctions are summed
+            # because their displacements are independent and could in
+            # principle all fall the same way; that makes this a worst case
+            # rather than an expected error, and it is deliberately not
+            # converted into a delay uncertainty here.
+            "length_uncertainty_mm": round(
+                sum(span / 2.0 for span in junctions.values()), 6),
+            "ambiguous_junctions": len(junctions),
             "elements_traversed": len(chain),
         }
 
@@ -795,6 +828,7 @@ class PathResolver:
             "to_layer": _neighbour_layer(elements, chain, position, +1, self),
             "via_top_layer": self.layer_name(via.TopLayer()),
             "via_bottom_layer": self.layer_name(via.BottomLayer()),
+            "barrel_is_traversed_span": False,
             "drill_mm": round(via.GetDrill() / 1e6, 4),
             "pad_mm": round(via.GetWidth(pcbnew.F_Cu) / 1e6, 4),
         }
@@ -817,9 +851,30 @@ class PathResolver:
         if entered is None or left is None or entered == left:
             return None
         pad = element.obj
-        stack = [layer for layer in self.board.GetEnabledLayers().CuStack()
-                 if pad.IsOnLayer(layer)]
+        attribute = pad.GetAttribute()
+        if attribute != pcbnew.PAD_ATTRIB_PTH:
+            # Only a plated hole conducts between layers. A surface-mount pad
+            # has no hole at all and an unplated one has a hole with nothing in
+            # it, so a walk that appears to change layer through either is not
+            # describing a connection the board has - and guessing a barrel
+            # extent for it would put a delay on copper that is not joined.
+            raise PathError(
+                "the walk changes layer from {} to {} at pad {}, which is {} "
+                "rather than a plated through hole. Only a plated hole "
+                "conducts between layers, so this is not a transition the "
+                "board contains".format(
+                    entered, left, element.ref,
+                    "unplated" if attribute == pcbnew.PAD_ATTRIB_NPTH
+                    else "surface-mount"))
+        # The barrel is the hole, and a plated through hole goes through the
+        # board. Which layers carry copper *pads* is a padstack decision - an
+        # inner layer with no connection often has none - and reading the span
+        # off copper membership therefore under-states the barrel on exactly
+        # the padstacks where it matters. The span is the board's copper stack.
+        stack = list(self.board.GetEnabledLayers().CuStack())
         names = [self.layer_name(layer) for layer in stack]
+        with_copper = [self.layer_name(layer) for layer in stack
+                       if pad.IsOnLayer(layer)]
         where = pad.GetPosition()
         return {
             "through": "pad",
@@ -830,39 +885,44 @@ class PathResolver:
             "to_layer": left,
             "via_top_layer": names[0] if names else None,
             "via_bottom_layer": names[-1] if names else None,
+            "layers_with_copper": with_copper,
+            "barrel_is_traversed_span": False,
             "drill_mm": round(pad.GetDrillSizeX() / 1e6, 4),
-            "plated": pad.GetAttribute() == pcbnew.PAD_ATTRIB_PTH,
+            "plated": True,
         }
 
-    def _uncovered_mm(self, element):
-        """How much of one copper piece has no reference conductor beneath it.
+    def _uncovered_by_layer(self, element):
+        """Per candidate plane, how much of this piece it does not cover.
 
-        Zero when the caller asked no reference question. Otherwise the length
-        of this piece whose footprint is not covered by poured reference
-        copper on any reference layer - a route past the edge of a pour, over a
-        void, or across a split.
+        Per layer, deliberately, and never unioned across them. A microstrip on
+        the top layer is referenced to one specific plane; copper on a *different*
+        reference-net layer somewhere else in the stack does not carry its return
+        current and does not make its formula valid. Unioning the two answered a
+        question nobody asked - "is there reference copper anywhere below?" -
+        and let a void in the plane actually being used pass unnoticed because
+        another layer happened to be continuous there.
 
         Measured as a fraction of area rather than by cutting the piece again:
         the piece is a constant-width rectangle, so the uncovered fraction of
         its area is the uncovered fraction of its length, and that is accurate
         enough to decide whether a closed-form model applies at all.
         """
-        if not self.reference_copper:
-            return 0.0
         shape = element.shape
-        if shape.is_empty or shape.area <= 0:
-            return 0.0
-        remaining = shape
+        if not self.reference_copper or shape.is_empty or shape.area <= 0:
+            return {}
+        out = {}
         for layer, copper in self.reference_copper.items():
             prepared = self._prepared.get(layer)
             if prepared is None:
                 from shapely.prepared import prep
                 prepared = self._prepared[layer] = prep(copper)
-            if prepared.intersects(remaining):
-                remaining = remaining.difference(copper)
-                if remaining.is_empty:
-                    return 0.0
-        return round(element.length_mm * (remaining.area / shape.area), 6)
+            if not prepared.intersects(shape):
+                out[layer] = round(element.length_mm, 6)
+                continue
+            remaining = shape.difference(copper)
+            out[layer] = round(
+                element.length_mm * (remaining.area / shape.area), 6)
+        return out
 
     def _measure_component(self, path, step, position):
         """Check the part really does bridge the nets either side of it."""

@@ -45,10 +45,10 @@ class Element:
     """
 
     __slots__ = ("kind", "ref", "shape", "layers", "length_mm", "obj",
-                 "part_of", "ambiguity_mm")
+                 "part_of", "junctions")
 
     def __init__(self, kind, ref, shape, layers, length_mm, obj=None,
-                 part_of=None, ambiguity_mm=0.0):
+                 part_of=None, junctions=()):
         self.kind = kind
         self.ref = ref
         self.shape = shape
@@ -56,12 +56,14 @@ class Element:
         self.length_mm = length_mm
         self.obj = obj
         self.part_of = part_of
-        #: How far this piece's boundary could reasonably have been placed
-        #: elsewhere. Zero for copper that meets end to end; the length of the
-        #: shared region where copper overlaps this piece along its length,
-        #: because a walk entering there entered *somewhere* in that region and
-        #: the graph has to pick one point.
-        self.ambiguity_mm = ambiguity_mm
+        #: The ambiguous junctions bounding this piece, as
+        #: ``(identity, span_mm)``. `identity` names the cut itself - the track
+        #: it is on and where along it - so a walk crossing one junction counts
+        #: it once however many pieces meet there. `span_mm` is the length of
+        #: the shared region the cut sits in the middle of: the cut could have
+        #: been placed anywhere in it, so the piece's own length could differ
+        #: by up to half of it at this end.
+        self.junctions = tuple(junctions)
 
     def touches(self, other):
         if self.layers.isdisjoint(other.layers):
@@ -149,21 +151,22 @@ def _projected_span(line, meeting):
     return min(projected), max(projected)
 
 
-def _ambiguity_at(spans, start, end, tolerance_mm):
-    """How wide the shared region was that put a boundary here.
+def _junctions_at(track_id, spans, start, end, tolerance_mm):
+    """The ambiguous junctions bounding one piece, each named once.
 
-    A piece bounded by a long overlap could have been cut anywhere in that
-    overlap, so this is how far its length could reasonably differ. It is
-    reported rather than corrected: there is no single right cut point, and
-    inventing one and staying quiet about it is what this replaces.
+    A junction is identified by the track it cuts and where along that track it
+    falls, so two pieces meeting at it report the *same* junction rather than
+    two of them. That is what lets a walk add up its uncertainty without
+    counting a cut twice for having passed through it.
     """
-    worst = 0.0
+    found = []
     for low, high, width in spans:
         middle = (low + high) / 2.0
-        if (abs(middle - start) <= tolerance_mm
-                or abs(middle - end) <= tolerance_mm):
-            worst = max(worst, width)
-    return worst
+        for boundary in (start, end):
+            if abs(middle - boundary) <= tolerance_mm:
+                found.append(((track_id, round(middle, 6)), width))
+                break
+    return tuple(found)
 
 
 def split_track_elements(elements, tolerance_mm=1e-6):
@@ -268,7 +271,8 @@ def split_track_elements(elements, tolerance_mm=1e-6):
                 piece.buffer(half, cap_style=1, quad_segs=16),
                 element.layers, piece.length, element.obj,
                 part_of=element,
-                ambiguity_mm=_ambiguity_at(spans, start, end, tolerance_mm)))
+                junctions=_junctions_at(id(element.obj), spans, start, end,
+                                        tolerance_mm)))
     return out
 
 
