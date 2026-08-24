@@ -477,14 +477,26 @@ class ResolvedPath:
         return {k: round(v, 6) for k, v in sorted(totals.items())}
 
     def conductors(self):
-        """Every (layer, width) run of copper the path traverses, merged."""
-        totals = {}
+        """Every (layer, width) run of copper the path traverses, merged.
+
+        The copper with no reference conductor beneath it is summed alongside
+        the length, because it is the propagation model that has to refuse on
+        it and the model never sees the individual pieces.
+        """
+        totals, unreferenced = {}, {}
+        checked = False
         for step in self.steps:
             for record in step.record.get("conductors") or []:
                 key = (record["layer"], record["width_mm"])
                 totals[key] = totals.get(key, 0.0) + record["length_mm"]
+                unreferenced[key] = unreferenced.get(key, 0.0) + (
+                    record.get("unreferenced_mm") or 0.0)
+                checked = checked or record.get("reference_checked", False)
         return [{"layer": layer, "width_mm": width,
-                 "length_mm": round(length, 6)}
+                 "length_mm": round(length, 6),
+                 "unreferenced_mm": round(unreferenced.get(
+                     (layer, width), 0.0), 6),
+                 "reference_checked": checked}
                 for (layer, width), length in sorted(totals.items())]
 
     def via_transitions(self):
@@ -520,9 +532,15 @@ class PathResolver:
     nothing, two loads on one branch share everything.
     """
 
-    def __init__(self, board, pad_polygon):
+    def __init__(self, board, pad_polygon, reference_copper=None):
         self.board = board
         self.pad_polygon = pad_polygon
+        #: {layer name: poured reference copper}, when the caller knows it.
+        #: Used to check that a trace has the reference conductor underneath
+        #: it that a transmission-line model assumes; absent means the question
+        #: was not asked, which is different from asked and answered no.
+        self.reference_copper = dict(reference_copper or {})
+        self._prepared = {}
         self._graphs = {}
         self._pads = None
         self._footprints = None
@@ -530,12 +548,20 @@ class PathResolver:
     # -- board indices -----------------------------------------------------
     def _index(self):
         if self._pads is None:
+            # A label maps to a *list*. KiCad lets one footprint carry several
+            # physical pads with the same number - split pads, a thermal pad
+            # numbered with its signal pad, a connector shell - and keeping
+            # only the last one seen made `REF.1` mean whichever pad the
+            # iteration order happened to end on. Duplicates are legitimate
+            # when they are one electrical node; they are an ambiguity when
+            # they are not, and only a list can tell the two apart.
             pads, footprints = {}, {}
             for footprint in self.board.Footprints():
                 ref = footprint.GetReference()
                 footprints[ref] = footprint
                 for pad in footprint.Pads():
-                    pads["{}.{}".format(ref, pad.GetNumber())] = pad
+                    label = "{}.{}".format(ref, pad.GetNumber())
+                    pads.setdefault(label, []).append(pad)
             self._pads, self._footprints = pads, footprints
         return self._pads, self._footprints
 
@@ -557,8 +583,31 @@ class PathResolver:
 
     def pads_on_net(self, net):
         pads, _footprints = self._index()
-        return sorted(label for label, pad in pads.items()
-                      if pad.GetNetname() == net)
+        return sorted(label for label, group in pads.items()
+                      if any(p.GetNetname() == net for p in group))
+
+    def pad_nets(self, label):
+        """Every net the physical pads behind one label are on."""
+        pads, _footprints = self._index()
+        return sorted({p.GetNetname() for p in pads.get(label, [])})
+
+    def _one_node(self, label, where):
+        """The pads behind a label, once they are proven to be one node.
+
+        Several physical pads sharing a number are fine as long as they are on
+        one net: electrically they are one place, and a length measured to any
+        of them is a length measured to it. On different nets they are not one
+        place, and no measurement to "that pad" has an answer.
+        """
+        pads, _footprints = self._index()
+        group = pads.get(label, [])
+        nets = {p.GetNetname() for p in group}
+        if len(nets) > 1:
+            raise PathError(
+                "{}: {} names {} physical pads and they are not on one net "
+                "({}). A selector has to name one electrical place".format(
+                    where, label, len(group), ", ".join(sorted(nets))))
+        return group
 
     def layer_name(self, layer_id):
         """The canonical layer name, which is what a stackup is written in.
@@ -638,6 +687,9 @@ class PathResolver:
             raise PathError(
                 "path {!r}: step {} targets {} which is not a pad on net "
                 "{!r}".format(path.id, step.index, target_label, step.net))
+        where = "path {!r}: step {}".format(path.id, step.index)
+        for label in list(sources) + [target_label]:
+            self._one_node(label, where)
         if len(sources) > 1 and step.source_selection == SOURCE_UNIQUE:
             raise PathError(
                 "path {!r}: step {} selects source {!r} on net {!r}, which "
@@ -678,6 +730,8 @@ class PathResolver:
         """
         by_layer = {}
         by_geometry = {}
+        uncovered = {}
+        ambiguity = 0.0
         transitions = []
         elements = graph.elements
         for position, index in enumerate(chain):
@@ -692,17 +746,33 @@ class PathResolver:
                 width = round(element.obj.GetWidth() / 1e6, 6)
                 key = (layer, width)
                 by_geometry[key] = by_geometry.get(key, 0.0) + element.length_mm
+                ambiguity = max(ambiguity, element.ambiguity_mm)
+                uncovered[key] = uncovered.get(key, 0.0) + self._uncovered_mm(
+                    element)
             if element.kind == "via":
                 transitions.append(
                     self._via_record(element, elements, chain, position))
+            elif element.kind == "pad" and position:
+                # A plated through-hole pad is a barrel like any other. When a
+                # walk enters it on one layer and leaves on another, the signal
+                # went down the hole - and recording nothing there would drop
+                # that transit from the result silently, which is the one thing
+                # a pad must not get away with for being inside a footprint.
+                crossing = self._pad_transition(element, elements, chain,
+                                                position)
+                if crossing is not None:
+                    transitions.append(crossing)
         return {
             "length_by_layer_mm": {k: round(v, 6)
                                    for k, v in sorted(by_layer.items())},
-            "conductors": [{"layer": layer, "width_mm": width,
-                            "length_mm": round(length, 6)}
-                           for (layer, width), length
-                           in sorted(by_geometry.items())],
+            "conductors": [
+                {"layer": layer, "width_mm": width,
+                 "length_mm": round(length, 6),
+                 "unreferenced_mm": round(uncovered.get((layer, width), 0.0), 6),
+                 "reference_checked": bool(self.reference_copper)}
+                for (layer, width), length in sorted(by_geometry.items())],
             "via_transitions": transitions,
+            "length_ambiguity_mm": round(ambiguity, 6),
             "elements_traversed": len(chain),
         }
 
@@ -729,6 +799,71 @@ class PathResolver:
             "pad_mm": round(via.GetWidth(pcbnew.F_Cu) / 1e6, 4),
         }
 
+    def _pad_transition(self, element, elements, chain, position):
+        """A layer change made through a pad, recorded like the barrel it is.
+
+        Returns None when the walk entered and left the pad on the same layer,
+        which is the ordinary case and no transition at all.
+
+        The pad's own copper extent is what bounds the barrel, so a pad present
+        only on the outer layers spans the whole board and one on an inner pair
+        spans only between them. `via_top_layer`/`via_bottom_layer` keep the
+        names the via record uses, because the consumer of both is one model
+        and it should not have to care which kind of hole it was.
+        """
+        import pcbnew
+        entered = _neighbour_layer(elements, chain, position, -1, self)
+        left = _neighbour_layer(elements, chain, position, +1, self)
+        if entered is None or left is None or entered == left:
+            return None
+        pad = element.obj
+        stack = [layer for layer in self.board.GetEnabledLayers().CuStack()
+                 if pad.IsOnLayer(layer)]
+        names = [self.layer_name(layer) for layer in stack]
+        where = pad.GetPosition()
+        return {
+            "through": "pad",
+            "pad": element.ref,
+            "x_mm": round(where.x / 1e6, 4),
+            "y_mm": round(where.y / 1e6, 4),
+            "from_layer": entered,
+            "to_layer": left,
+            "via_top_layer": names[0] if names else None,
+            "via_bottom_layer": names[-1] if names else None,
+            "drill_mm": round(pad.GetDrillSizeX() / 1e6, 4),
+            "plated": pad.GetAttribute() == pcbnew.PAD_ATTRIB_PTH,
+        }
+
+    def _uncovered_mm(self, element):
+        """How much of one copper piece has no reference conductor beneath it.
+
+        Zero when the caller asked no reference question. Otherwise the length
+        of this piece whose footprint is not covered by poured reference
+        copper on any reference layer - a route past the edge of a pour, over a
+        void, or across a split.
+
+        Measured as a fraction of area rather than by cutting the piece again:
+        the piece is a constant-width rectangle, so the uncovered fraction of
+        its area is the uncovered fraction of its length, and that is accurate
+        enough to decide whether a closed-form model applies at all.
+        """
+        if not self.reference_copper:
+            return 0.0
+        shape = element.shape
+        if shape.is_empty or shape.area <= 0:
+            return 0.0
+        remaining = shape
+        for layer, copper in self.reference_copper.items():
+            prepared = self._prepared.get(layer)
+            if prepared is None:
+                from shapely.prepared import prep
+                prepared = self._prepared[layer] = prep(copper)
+            if prepared.intersects(remaining):
+                remaining = remaining.difference(copper)
+                if remaining.is_empty:
+                    return 0.0
+        return round(element.length_mm * (remaining.area / shape.area), 6)
+
     def _measure_component(self, path, step, position):
         """Check the part really does bridge the nets either side of it."""
         pads, footprints = self._index()
@@ -737,13 +872,16 @@ class PathResolver:
             raise PathError(
                 "path {!r}: step {} crosses {}, which is not on the "
                 "board".format(path.id, step.index, step.reference))
-        entry = pads.get(step.entry_label)
-        leave = pads.get(step.exit_label)
-        for label, pad in ((step.entry_label, entry), (step.exit_label, leave)):
-            if pad is None:
+        where = "path {!r}: step {}".format(path.id, step.index)
+        entry_group = self._one_node(step.entry_label, where)
+        leave_group = self._one_node(step.exit_label, where)
+        for label, group in ((step.entry_label, entry_group),
+                             (step.exit_label, leave_group)):
+            if not group:
                 raise PathError(
                     "path {!r}: step {} names pad {}, which {} does not "
                     "have".format(path.id, step.index, label, step.reference))
+        entry, leave = entry_group[0], leave_group[0]
         before = path.steps[position - 1] if position else None
         after = (path.steps[position + 1]
                  if position + 1 < len(path.steps) else None)
