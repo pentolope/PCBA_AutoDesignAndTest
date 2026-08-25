@@ -1170,10 +1170,21 @@ class FeasibilityIsAboutCombinations(unittest.TestCase):
                             if r["requirement"] == "min_drill_mm"]
         self.assertTrue(drill_rejections)
         self.assertIn("0.3", drill_rejections[0]["issue"])
+        # The 1-layer row the page publishes is "NPTH only": a
+        # via-shaped non-plated hole, not an interlayer plated via. It
+        # lives in the catalog under its own category for what it
+        # actually describes, and a generic plated-via requirement on a
+        # 1-layer board refuses for want of any covering rule rather
+        # than reading an NPTH as a barrel.
         via_rejections = [r for r in single["rejections"]
                           if r["requirement"] == "min_via_diameter_mm"]
         self.assertTrue(via_rejections)
-        self.assertIn("0.5", via_rejections[0]["issue"])
+        self.assertIn("no published via rule covers a 1-layer",
+                      via_rejections[0]["issue"])
+        npth = self.catalog["capabilities"][
+            "npth-via 1-layer (capabilities)"]
+        self.assertEqual(npth["category"], "via-npth")
+        self.assertEqual(npth["value"], {"hole": 0.3, "diameter": 0.5})
 
     def test_two_layer_drill_and_via_use_two_layer_evidence(self):
         result = selection.select(
@@ -1476,6 +1487,82 @@ class StatedRestrictionsBeatGlobalLists(unittest.TestCase):
                              for r in result["rejections"]),
                          result["rejections"])
 
+    def test_a_newly_added_restriction_cannot_be_silently_ignored(self):
+        """The parser discovers restriction-shaped statements instead of
+        enumerating known ones: a new 0.8 mm exclusion lands in the
+        catalog, changes the digest, and therefore demands review."""
+        raw = _raw_sources()
+        raw["thickness-options"] += (
+            b"<div>Boards with 0.8mm thickness are special. This "
+            b"thickness is not available for 8-layer PCBs.</div>")
+        catalog = jlcpcb.parse(raw)
+        record = catalog["capabilities"]["thickness_restriction 0.8mm"]
+        self.assertEqual(record["value"]["excluded_layer_counts"], [8])
+        self.assertNotEqual(model.normalized_digest(catalog),
+                            model.normalized_digest(
+                                jlcpcb.parse(_raw_sources())))
+        result = selection.select(
+            catalog, _requirements(copper_layers=8,
+                                   board_thickness_mm=0.8))
+        self.assertTrue(any(r["requirement"] == "board_thickness_mm"
+                            for r in result["rejections"]))
+
+    def test_a_restriction_this_code_cannot_read_fails_the_parse(self):
+        """A restriction-shaped sentence that will not normalize stops
+        the acquisition; it must never vanish while the page 'parses
+        fine'."""
+        raw = _raw_sources()
+        raw["thickness-options"] += (
+            b"<div>Certain finishes are not available for thin-layer "
+            b"PCBs.</div>")
+        with self.assertRaises(jlcpcb.ParseError) as caught:
+            jlcpcb.parse(raw)
+        self.assertIn("half-understood", str(caught.exception))
+
+    def test_duplicate_restrictions_for_one_thickness_refuse(self):
+        raw = _raw_sources()
+        raw["thickness-options"] += (
+            b"<div>Also, 0.6mm thickness boards are not available for "
+            b"8-layer PCBs.</div>")
+        with self.assertRaises(jlcpcb.ParseError) as caught:
+            jlcpcb.parse(raw)
+        self.assertIn("name 0.6 mm", str(caught.exception))
+
+    def test_overlapping_scoped_ranges_intersect_conservatively(self):
+        """A second drill record covering multilayer boards with a
+        narrower range: the merged rule takes the highest floor AND the
+        lowest ceiling, so a 5 mm drill inside one record's range but
+        above the other's ceiling rejects."""
+        catalog = copy.deepcopy(self.catalog)
+        catalog["capabilities"]["drill_diameter multilayer-b (synthetic)"]             = model.capability(
+                "capabilities", "drill_diameter multilayer-b (synthetic)",
+                {"min": 0.2, "max": 4.0}, units="mm",
+                conditions="synthetic overlapping range",
+                category="drill",
+                applies={"min_layers": 4, "max_layers": None})
+        tight = selection.select(
+            catalog, _requirements(min_drill_mm=0.18))
+        rejection = [r for r in tight["rejections"]
+                     if r["requirement"] == "min_drill_mm"][0]
+        self.assertIn("0.2", rejection["issue"])
+        passing = selection.select(
+            catalog, _requirements(min_drill_mm=0.3))
+        cited = [e for e in passing["explanations"] if "drill" in e][0]
+        self.assertIn("0.2-4.0", cited)
+
+    def test_contradictory_scoped_ranges_refuse(self):
+        catalog = copy.deepcopy(self.catalog)
+        catalog["capabilities"]["drill_diameter multilayer-b (synthetic)"]             = model.capability(
+                "capabilities", "drill_diameter multilayer-b (synthetic)",
+                {"min": 7.0, "max": 8.0}, units="mm",
+                conditions="synthetic contradictory range",
+                category="drill",
+                applies={"min_layers": 4, "max_layers": None})
+        result = selection.select(catalog, _requirements())
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "min_drill_mm"][0]
+        self.assertIn("contradict", rejection["issue"])
+
     def test_an_unreadable_restriction_record_refuses_the_pair(self):
         catalog = copy.deepcopy(self.catalog)
         catalog["capabilities"]["thickness_restriction 0.6mm"][
@@ -1544,7 +1631,7 @@ class StatedRestrictionsBeatGlobalLists(unittest.TestCase):
         result = selection.select(
             self.catalog, _requirements(copper_layers=1,
                                         inner_copper_oz=None,
-                                        min_via_diameter_mm=0.5))
+                                        min_via_diameter_mm=None))
         self.assertTrue(result["feasible"], result["rejections"])
         cited = [e for e in result["explanations"]
                  if "outer copper is an offered option" in e][0]

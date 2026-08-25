@@ -57,6 +57,7 @@ OUT_OF_VOCABULARY = (
     "edge-to-copper clearance",
     "solder-mask constraints",
     "via covering (tented / plugged / filled)",
+    "via annular-ring and hole-to-diameter relationships",
     "blind and buried via technology",
     "gold fingers",
     "controlled-depth routing",
@@ -349,7 +350,7 @@ def select(catalog, requirements):
     drill = _require_number(requirements, "min_drill_mm")
     if drill is not None:
         record, problem = _scoped_rule(capabilities, "drill", layers,
-                                       ("min", "max"))
+                                       {"min": "floor", "max": "ceiling"})
         if problem is not None:
             rejections.append({"requirement": "min_drill_mm",
                                "issue": problem})
@@ -369,7 +370,8 @@ def select(catalog, requirements):
     via = _require_number(requirements, "min_via_diameter_mm")
     if via is not None:
         record, problem = _scoped_rule(capabilities, "via", layers,
-                                       ("hole", "diameter"))
+                                       {"hole": "floor",
+                                        "diameter": "floor"})
         if problem is not None:
             rejections.append({"requirement": "min_via_diameter_mm",
                                "issue": problem})
@@ -592,12 +594,17 @@ def _pick_weight(which, required, records, stated_default, rejections,
 def _scoped_rule(capabilities, category, layers, expected_keys):
     """The one record of `category` whose stated scope covers this board.
 
-    Returns (record, None) or (None, refusal text). No record covering the
-    class means the capability is unknown for it; a covering record whose
-    value does not carry the expected published quantities means the
-    published terminology no longer maps to this requirement, and both
-    refuse rather than borrow or guess. Multiple covering records take
-    the strictest reading per quantity.
+    `expected_keys` maps each published quantity to its direction:
+    "floor" for a minimum the design must clear, "ceiling" for a maximum
+    it must stay under. Returns (record, None) or (None, refusal text).
+    No record covering the class means the capability is unknown for it;
+    a covering record whose value does not carry the expected published
+    quantities means the published terminology no longer maps to this
+    requirement, and both refuse rather than borrow or guess. Multiple
+    covering records intersect conservatively - floors take the highest
+    stated floor, ceilings the lowest stated ceiling - and an empty
+    intersection refuses outright: contradictory evidence is a fact to
+    report, never a number to manufacture.
     """
     covering = []
     for identity in sorted(capabilities):
@@ -624,15 +631,28 @@ def _scoped_rule(capabilities, category, layers, expected_keys):
                 "carry the quantities this requirement needs ({}); the "
                 "page's terminology no longer maps safely and guessing "
                 "which number means what is refused".format(
-                    category, ", ".join(expected_keys)))
+                    category, ", ".join(sorted(expected_keys))))
     if len(covering) == 1:
-        return covering[0], None
-    strictest = dict(covering[0])
-    strictest["value"] = {key: max(r["value"][key] for r in covering)
-                          for key in expected_keys}
-    strictest["source"] = ", ".join(sorted({r["source"]
-                                            for r in covering}))
-    return strictest, None
+        merged = covering[0]
+    else:
+        merged = dict(covering[0])
+        merged["value"] = {
+            key: (max if direction == "floor" else min)(
+                r["value"][key] for r in covering)
+            for key, direction in expected_keys.items()}
+        merged["source"] = ", ".join(sorted({r["source"]
+                                             for r in covering}))
+    floors = [merged["value"][k] for k, d in expected_keys.items()
+              if d == "floor"]
+    ceilings = [merged["value"][k] for k, d in expected_keys.items()
+                if d == "ceiling"]
+    if floors and ceilings and max(floors) > min(ceilings):
+        return None, (
+            "the published {} rules covering this board class contradict "
+            "each other (a floor of {} against a ceiling of {}); "
+            "contradictory evidence is refused, not averaged".format(
+                category, max(floors), min(ceilings)))
+    return merged, None
 
 
 def _thickness_restriction(capabilities, thickness, layers):

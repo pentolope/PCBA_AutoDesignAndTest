@@ -1,5 +1,5 @@
 {
-  "approved_utc": "2026-08-25T15:52:35.037311+00:00",
+  "approved_utc": "2026-08-25T17:08:44.725546+00:00",
   "declared_source_ids": [
     "impedance",
     "capabilities",
@@ -476,6 +476,22 @@
           "min": 1
         }
       },
+      "npth-via 1-layer (capabilities)": {
+        "applies": {
+          "max_layers": 1,
+          "min_layers": 1
+        },
+        "category": "via-npth",
+        "conditions": "non-plated (NPTH) via-shaped hole size and diameter minima for 1-layer boards; the page adds: NPTH only",
+        "excerpt": "1-layer (NPTH only): 0.3 mm hole size / 0.5 mm via diameter",
+        "name": "npth-via 1-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "diameter": 0.5,
+          "hole": 0.3
+        }
+      },
       "outer_copper_2layer_oz": {
         "applies": {
           "max_layers": 2,
@@ -576,7 +592,7 @@
       "thickness_restriction 0.4mm": {
         "category": "board-thickness-restriction",
         "conditions": "stated as not available for these layer counts; full sentence: For 0.4mm thickness boards, only ENIG finish is accepted. These boards cannot be made with a panel and are not available",
-        "excerpt": "For 0.4mm thickness boards, only ENIG finish is accepted. These boards cannot be made with a panel and are not available for 1-layer PCBs",
+        "excerpt": "For 0.4mm thickness boards, only ENIG finish is accepted. These boards cannot be made with a panel and are not available for 1-layer PCBs.",
         "name": "thickness_restriction 0.4mm",
         "source": "thickness-options",
         "units": "mm",
@@ -590,7 +606,7 @@
       "thickness_restriction 0.6mm": {
         "category": "board-thickness-restriction",
         "conditions": "stated as not available for these layer counts; full sentence: Boards with 0.6mm thickness have a maximum size of 100mm x 100mm. This thickness is not available for 1-layer, 4-layer, ",
-        "excerpt": "Boards with 0.6mm thickness have a maximum size of 100mm x 100mm. This thickness is not available for 1-layer, 4-layer, or 6-layer PCBs",
+        "excerpt": "Boards with 0.6mm thickness have a maximum size of 100mm x 100mm. This thickness is not available for 1-layer, 4-layer, or 6-layer PCBs.",
         "name": "thickness_restriction 0.6mm",
         "source": "thickness-options",
         "units": "mm",
@@ -884,29 +900,13 @@
         "units": "mil",
         "value": 0.7
       },
-      "via 1-layer (capabilities)": {
-        "applies": {
-          "max_layers": 1,
-          "min_layers": 1
-        },
-        "category": "via",
-        "conditions": "via hole size and via diameter minima for 1-layer boards; the page adds: NPTH only",
-        "excerpt": "1-layer (NPTH only): 0.3 mm hole size / 0.5 mm via diameter",
-        "name": "via 1-layer (capabilities)",
-        "source": "capabilities",
-        "units": "mm",
-        "value": {
-          "diameter": 0.5,
-          "hole": 0.3
-        }
-      },
       "via 2-layer (capabilities)": {
         "applies": {
           "max_layers": 2,
           "min_layers": 2
         },
         "category": "via",
-        "conditions": "via hole size and via diameter minima for 2-layer boards",
+        "conditions": "via hole size and diameter minima for 2-layer boards",
         "excerpt": "2-layer: 0.15mm hole size / 0.25mm via diameter",
         "name": "via 2-layer (capabilities)",
         "source": "capabilities",
@@ -922,7 +922,7 @@
           "min_layers": 4
         },
         "category": "via",
-        "conditions": "via hole size and via diameter minima for multilayer boards",
+        "conditions": "via hole size and diameter minima for multilayer boards",
         "excerpt": "Multilayer: 0.15 mm hole size / 0.25 mm via diameter",
         "name": "via multilayer (capabilities)",
         "source": "capabilities",
@@ -4235,49 +4235,49 @@
       }
     }
   },
-  "normalized_sha256": "7777d68d13ec2ab99cd9b847a9d0afc96f5c10fb95ade20bab2d0134194726c8",
+  "normalized_sha256": "21c904a74d3f14ece2144333366be0bc37cde4b1b777590006d7d23e7277fe68",
   "outcome": "complete",
   "parser": {
     "id": "pcbqa.fabricators.jlcpcb",
-    "version": "4"
+    "version": "5"
   },
-  "replaced_normalized_sha256": "fd6b92a3449cd4ae5586b20e3bc2e459bacce87afaa87569a0419bcdf0ec284d",
-  "retrieved_utc": "2026-08-25T15:52:10.479160+00:00",
+  "replaced_normalized_sha256": "7777d68d13ec2ab99cd9b847a9d0afc96f5c10fb95ade20bab2d0134194726c8",
+  "retrieved_utc": "2026-08-25T17:08:26.060903+00:00",
   "schema_version": 3,
   "sources": [
     {
       "bytes": 294087,
       "id": "impedance",
       "kind": "official-stackup-page",
-      "sha256_raw": "efedd89db8e3c5c87ca08e8151184f5e78a0d29641f8ceb99d9ef844b2d144cf",
+      "sha256_raw": "de80dd74670e6759123162dc298df4047ebf80c8a7275441f2abb3ab9f42a1b7",
       "url": "https://jlcpcb.com/impedance"
     },
     {
-      "bytes": 134879,
+      "bytes": 134873,
       "id": "capabilities",
       "kind": "official-capabilities-page",
-      "sha256_raw": "1fc1f7527e4f1a0080c9c190a7e43dc9d8a93cdc5273c794cec6e241353cf7a2",
+      "sha256_raw": "632d4a439c5604b3c79efc171a01a2852eb749ffdd2a1e5c0e0d534024a382f9",
       "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
     },
     {
-      "bytes": 109954,
+      "bytes": 109942,
       "id": "copper-weight",
       "kind": "official-help-article",
-      "sha256_raw": "cdedf7a4ed28900c1e6d5f29e6322e42b40a18bb783c3646e54fca5e5722e94c",
+      "sha256_raw": "cc8bd6c2ea92a4747ad870448939b3b5461b3fa79ad91f94bb49be5f75081490",
       "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
     },
     {
       "bytes": 135792,
       "id": "impedance-calculator",
       "kind": "official-help-article",
-      "sha256_raw": "5aef22212cf7006799250c19ae21980eba1b42fb46694e93f49c04439a5c984b",
+      "sha256_raw": "78d1cdc0d3141e014cd9c5a702eb2653be486805a5a5fcbce03c3718a5ad7071",
       "url": "https://jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator"
     },
     {
-      "bytes": 95027,
+      "bytes": 94619,
       "id": "thickness-options",
       "kind": "official-resource-page",
-      "sha256_raw": "2e8efb6ee24e3c9a47b854b00c19c5b1424a8cd2fb0e41735e80eaeaa2e17c1f",
+      "sha256_raw": "d2e849caa7230432fda7a962f5864218854a8076a9e208f67dc0cbc3320532a5",
       "url": "https://jlcpcb.com/resources/pcb-thickness"
     }
   ]

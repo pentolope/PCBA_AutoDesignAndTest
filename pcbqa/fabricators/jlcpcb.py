@@ -61,7 +61,7 @@ FABRICATOR = "jlcpcb"
 
 #: Bump when extraction logic changes meaning. A changed parser version with
 #: unchanged raw sources explains a changed normalized catalog by itself.
-PARSER_VERSION = "4"
+PARSER_VERSION = "5"
 
 SOURCES = (
     {"id": "impedance", "kind": "official-stackup-page",
@@ -91,11 +91,17 @@ _TAG = re.compile(r"<[^>]+>")
 _MM = re.compile(r"^([0-9.]+)\s*mm$")
 
 
+_SCRIPT = re.compile(r"<(script|style)\b.*?</\1>", re.S | re.I)
+
+
 def _text_lines(html):
-    # Non-breaking spaces are presentation: the page interleaves them
-    # freely with ordinary spaces (the 2-layer via row is written entirely
-    # with U+00A0), and a probe must not fail on which space a template
-    # happened to emit.
+    # Script and style blocks are not page text: the SPA's data payload
+    # repeats whole passages of visible prose inside window.__NUXT__,
+    # and reading those as statements would double-count every sentence
+    # the page actually shows. Non-breaking spaces are presentation too
+    # - the 2-layer via row is written entirely with U+00A0 - and a
+    # probe must not fail on which space a template happened to emit.
+    html = _SCRIPT.sub("\n", html)
     text = _TAG.sub("\n", html).replace(" ", " ").replace("&nbsp;", " ")
     return [line.strip() for line in text.split("\n") if line.strip()]
 
@@ -558,9 +564,19 @@ def _parse_drills_and_vias(text, catalog):
             r"{}(?: \(([^)]+)\))?: ([\d.]+) ?mm hole size / ([\d.]+) ?mm "
             r"via diameter".format(label), text)
         if via:
-            identity = "via {} (capabilities)".format(label.lower())
-            conditions = ("via hole size and via diameter minima for {} "
-                          "boards".format(label.lower()))
+            # A row the page itself marks "NPTH only" describes non-plated
+            # holes, not interlayer plated vias; it is normalized under its
+            # own category so a generic via requirement can never consume
+            # it as if a barrel existed. The detection is the page's own
+            # annotation, not the layer count.
+            npth = bool(via.group(1)) and "NPTH" in via.group(1)
+            category = "via-npth" if npth else "via"
+            identity = "{} {} (capabilities)".format(
+                "npth-via" if npth else "via", label.lower())
+            conditions = ("{} hole size and diameter minima for {} "
+                          "boards".format(
+                              "non-plated (NPTH) via-shaped"
+                              if npth else "via", label.lower()))
             if via.group(1):
                 conditions += "; the page adds: {}".format(via.group(1))
             catalog["capabilities"][identity] = model.capability(
@@ -568,7 +584,7 @@ def _parse_drills_and_vias(text, catalog):
                 {"hole": float(via.group(2)),
                  "diameter": float(via.group(3))},
                 units="mm", conditions=conditions,
-                excerpt=via.group(0)[:160], category="via",
+                excerpt=via.group(0)[:160], category=category,
                 applies={"min_layers": low, "max_layers": high})
             emitted += 1
         else:
@@ -1091,45 +1107,56 @@ def _parse_thickness_options(html, catalog):
                        "capabilities page",
             excerpt=stated.group(0)[:160], category="board")
 
+    # Restrictions are DISCOVERED, not enumerated: every line that says
+    # "not available for ...-layer" is treated as a restriction-shaped
+    # statement, and each one must either normalize completely - a
+    # thickness read from the same line, layer counts read from the
+    # clause - or refuse the whole parse. A newly added exclusion (say,
+    # 0.8 mm for some count) therefore lands in the catalog and shows up
+    # as a reviewable semantic change; one this code cannot read stops
+    # the acquisition instead of vanishing while the page "parses fine".
     emitted = 0
-    for thickness, pattern in (
-            (0.4, r"For 0\.4 ?mm thickness boards, ([^.]+\.)?[^.]*?not "
-                  r"available for ((?:[\d]+-layer(?:,? (?:or )?)?)+) "
-                  r"PCBs"),
-            (0.6, r"Boards with 0\.6 ?mm thickness[^.]*\.[^.]*?not "
-                  r"available for ((?:[\d]+-layer(?:,? (?:or )?)?)+) "
-                  r"PCBs")):
-        found = re.search(pattern, text)
-        if not found:
-            catalog["not_extracted"].append({
-                "source": source,
-                "field": "thickness_restriction {}mm".format(thickness),
-                "reason": "restriction statement not found where last "
-                          "published"})
+    for line in _text_lines(html):
+        if "not available for" not in line or "-layer" not in line:
             continue
+        thickness_match = re.search(
+            r"([\d.]+) ?mm thickness", line)
+        clause = re.search(
+            r"not available for ((?:[\d]+-layer(?:,? (?:or )?)?)+) "
+            r"PCBs", line)
         counts = [int(v) for v in re.findall(r"(\d+)-layer",
-                                             found.group(0))]
-        if not counts:
+                                             clause.group(1))] \
+            if clause else []
+        if not thickness_match or not counts:
             raise ParseError(
-                "thickness page: a restriction sentence matched but named "
-                "no layer counts; refusing a restriction that cannot be "
-                "applied")
-        identity = "thickness_restriction {}mm".format(thickness)
+                "thickness page: a restriction-shaped statement could not "
+                "be read completely ({!r}); a restriction half-understood "
+                "would quietly re-widen a pair the fabricator forbids, so "
+                "the parse refuses".format(line[:120]))
+        thickness = float(thickness_match.group(1))
+        identity = "thickness_restriction {}mm".format(
+            "{:g}".format(thickness))
+        if identity in catalog["capabilities"]:
+            raise ParseError(
+                "thickness page: two restriction statements name {} mm; "
+                "which one governs cannot be decided here".format(
+                    thickness))
         catalog["capabilities"][identity] = model.capability(
             source, identity,
             {"thickness_mm": thickness,
              "excluded_layer_counts": sorted(set(counts))},
             units="mm",
             conditions="stated as not available for these layer counts; "
-                       "full sentence: {}".format(found.group(0)[:120]),
-            excerpt=found.group(0)[:160],
+                       "full sentence: {}".format(line[:120]),
+            excerpt=line[:160],
             category="board-thickness-restriction")
         emitted += 1
     if emitted < 2:
         raise ParseError(
-            "thickness page: only {} of 2 known restriction statements "
-            "parsed; a catalog without them would re-widen pairs the "
-            "fabricator forbids".format(emitted))
+            "thickness page: only {} restriction statement(s) discovered "
+            "where the page last published two; the statements have moved "
+            "or changed shape and must be re-reviewed, not dropped".format(
+                emitted))
 
 
 # ---------------------------------------------------------------------------

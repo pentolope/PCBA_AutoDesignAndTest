@@ -195,5 +195,51 @@
       }
     ],
     "to_normalized_sha256": "7777d68d13ec2ab99cd9b847a9d0afc96f5c10fb95ade20bab2d0134194726c8"
+  },
+  {
+    "change_summary": [
+      "capability-added: npth-via 1-layer (capabilities)",
+      "capability-removed: via 1-layer (capabilities)",
+      "capability-changed: via 2-layer (capabilities)",
+      "capability-changed: via multilayer (capabilities)"
+    ],
+    "from_normalized_sha256": "7777d68d13ec2ab99cd9b847a9d0afc96f5c10fb95ade20bab2d0134194726c8",
+    "initial": false,
+    "note": "Parser v5, hand-reviewed. All 4 changes are extractor-shape: the 1-layer via row - which the page itself marks 'NPTH only' - is reclassified under its own npth-via category so a generic plated-via requirement can never consume it as a barrel, and two conditions strings are reworded. Restriction discovery is now generic and fail-closed (any 'not available for N-layer' statement must normalize completely or the parse refuses; script/style payloads are stripped so the SPA's duplicated prose cannot double-count statements). No fabricator value changed.",
+    "parser": {
+      "id": "pcbqa.fabricators.jlcpcb",
+      "version": "5"
+    },
+    "promoted_utc": "2026-08-25T17:08:44.725546+00:00",
+    "retrieved_utc": "2026-08-25T17:08:26.060903+00:00",
+    "semantic_changes": 4,
+    "sources": [
+      {
+        "id": "impedance",
+        "sha256_raw": "de80dd74670e6759123162dc298df4047ebf80c8a7275441f2abb3ab9f42a1b7",
+        "url": "https://jlcpcb.com/impedance"
+      },
+      {
+        "id": "capabilities",
+        "sha256_raw": "632d4a439c5604b3c79efc171a01a2852eb749ffdd2a1e5c0e0d534024a382f9",
+        "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
+      },
+      {
+        "id": "copper-weight",
+        "sha256_raw": "cc8bd6c2ea92a4747ad870448939b3b5461b3fa79ad91f94bb49be5f75081490",
+        "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
+      },
+      {
+        "id": "impedance-calculator",
+        "sha256_raw": "78d1cdc0d3141e014cd9c5a702eb2653be486805a5a5fcbce03c3718a5ad7071",
+        "url": "https://jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator"
+      },
+      {
+        "id": "thickness-options",
+        "sha256_raw": "d2e849caa7230432fda7a962f5864218854a8076a9e208f67dc0cbc3320532a5",
+        "url": "https://jlcpcb.com/resources/pcb-thickness"
+      }
+    ],
+    "to_normalized_sha256": "21c904a74d3f14ece2144333366be0bc37cde4b1b777590006d7d23e7277fe68"
   }
 ]
