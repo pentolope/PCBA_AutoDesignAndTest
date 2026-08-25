@@ -710,6 +710,20 @@ def from_declaration(document, source=DECLARED):
         if field not in document:
             raise StackupError(
                 "a physical stackup declaration must state {!r}".format(field))
+    # A declaration that supplies quantitative physics has to say where those
+    # numbers came from. A structure-only declaration - names, kinds, nulls -
+    # asserts nothing numeric and needs no source; the moment a thickness or
+    # a permittivity appears, it is an engineering number that will reach
+    # PASS/FAIL arithmetic, and a number nobody can trace is a guess.
+    quantitative = any(
+        entry.get(field) is not None
+        for entry in document.get("layers", []) if isinstance(entry, dict)
+        for field in ("thickness_mm", "epsilon_r", "loss_tangent"))
+    if quantitative and not document.get("provenance"):
+        raise StackupError(
+            "the supplemental stackup states quantitative values but no "
+            "`provenance`; every number that can reach a timing decision "
+            "must say where it came from")
     layers = []
     for index, entry in enumerate(document["layers"]):
         if not isinstance(entry, dict):

@@ -875,14 +875,16 @@ def _group_record(interface, name, group, members, delays, paths):
     interval arithmetic over the group:
 
         skew_lower = max(0, max_i(lo_i) - min_i(hi_i))
-        skew_upper = max_i(hi_i) - min_i(lo_i)
+        skew_upper = max over i != j of (hi_i - lo_j)
 
     The lower bound: some path must arrive no earlier than the largest lower
     endpoint, and some path must arrive no later than the smallest upper
     endpoint, so the spread cannot be less than their difference - and when
     every interval overlaps a common point, zero true skew is possible and
-    the bound is zero. The upper bound: no pair can be further apart than the
-    extreme endpoints. Members with no upper endpoint make `skew_upper`
+    the bound is zero. The upper bound pairs one member's latest against a
+    *different* member's earliest - see `_spread_upper` for why the naive
+    max(hi) - min(lo) form was rejected. Members with no upper endpoint make
+    `skew_upper`
     unknowable, but `skew_lower` survives them: an unbounded member cannot
     *lower* anyone else's earliest arrival.
 

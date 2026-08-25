@@ -438,12 +438,15 @@ class DeclaredLayerModel:
         self.reference_layers = spec.get("reference_layers")
         if self.reference_layers is not None and (
                 not isinstance(self.reference_layers, list)
+                or not self.reference_layers
                 or not all(isinstance(name, str) and name
                            for name in self.reference_layers)):
             raise PropagationError(
                 "the declared propagation model for layer {!r} has a "
-                "reference_layers that is not a list of layer "
-                "names".format(layer))
+                "reference_layers that is not a non-empty list of layer "
+                "names. An empty list would scope the continuity check to "
+                "nothing at all - a bypass wearing a scope's clothes; omit "
+                "the field to check every candidate plane".format(layer))
         if self.epsilon_effective is None and self.ps_per_mm is None:
             raise PropagationError(
                 "the declared propagation model for layer {!r} states neither "
@@ -545,8 +548,14 @@ class ReferenceAssumption:
       * ``paths`` (optional): a regex over resolved path ids, so an assumption
         can be pinned to the interface it was written for.
 
-    And how much: ``up_to_mm`` bounds the gap being assumed over, per
-    conductor run. A gap larger than the assumption is not covered by it.
+    And how much: ``up_to_mm`` bounds the *summed* unreferenced length per
+    plane within one conductor run - several small gaps in a run cannot
+    slip under a bound written for one. What one declaration cannot bound
+    is accumulation across runs: a path crossing many separately-covered
+    runs leans on the assumption once per run, so the evaluation surfaces
+    `assumed_unreferenced_total_mm` on the path record and every use in
+    `assumptions`, and nothing marked `ASSUMED_TRANSMISSION_LINE` ever
+    reads as physically established geometry.
     """
 
     __slots__ = ("up_to_mm", "justification", "reference_layers",
@@ -564,13 +573,22 @@ class ReferenceAssumption:
                 "assume_continuous. Refusal is the default and needs no "
                 "declaration; the only thing worth declaring is an "
                 "assumption".format(treatment))
-        self.up_to_mm = declaration.get("up_to_mm", 0.0) or 0.0
+        self.up_to_mm = declaration.get("up_to_mm")
         self.justification = declaration.get("justification")
-        if not self.up_to_mm:
+        if self.up_to_mm is None:
             raise PropagationError(
                 "assuming reference continuity requires `up_to_mm`: the "
                 "assumption has to have a size, or nothing bounds what is "
                 "being assumed away")
+        if isinstance(self.up_to_mm, bool) \
+                or not isinstance(self.up_to_mm, (int, float)) \
+                or self.up_to_mm != self.up_to_mm \
+                or self.up_to_mm in (float("inf"), float("-inf")) \
+                or self.up_to_mm <= 0:
+            raise PropagationError(
+                "reference-continuity up_to_mm is {!r}, which is not a "
+                "finite positive length; a malformed bound would compare as "
+                "whatever Python happens to make of it".format(self.up_to_mm))
         if not self.justification:
             raise PropagationError(
                 "assuming reference continuity requires a `justification` "
@@ -1193,6 +1211,16 @@ class PropagationModel:
                       if t["model_status"] == "unmodelled"]
         if unmodelled:
             record["unmodelled_component_delay"] = unmodelled
+
+        if record.get("assumptions"):
+            # One declaration bounds each run; nothing bounds how many runs
+            # a path crosses. The accumulated length the whole path assumed
+            # over is therefore computed here and surfaced, so a reviewer
+            # reads one number instead of summing a nested report by hand.
+            record["assumed_unreferenced_total_mm"] = round(sum(
+                gap["unreferenced_mm"]
+                for use in record["assumptions"]
+                for gap in use["covered_gaps"]), 4)
 
         if record["insufficient"]:
             record["delay_ps"] = None

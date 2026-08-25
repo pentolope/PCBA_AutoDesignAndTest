@@ -710,7 +710,7 @@ class TheAnalyticModel(unittest.TestCase):
     def test_stripline_uses_the_homogeneous_dielectric_exactly(self):
         """An inner layer between two planes is TEM: e_eff is er, no formula."""
         stack = stackup_physical.from_declaration(
-            {"layers": [dict(entry, kind=_kind(entry))
+            {"provenance": "synthetic fixture values", "layers": [dict(entry, kind=_kind(entry))
                         for entry in FIXTURE_STACKUP]})
         model = propagation.PropagationModel(stack, {"F.Cu", "In2.Cu"})
         record = model.conductor("In1.Cu", TRACK_WIDTH_MM)
@@ -723,7 +723,7 @@ class TheAnalyticModel(unittest.TestCase):
 
     def test_a_layer_with_no_reference_plane_refuses(self):
         stack = stackup_physical.from_declaration(
-            {"layers": [dict(entry, kind=_kind(entry))
+            {"provenance": "synthetic fixture values", "layers": [dict(entry, kind=_kind(entry))
                         for entry in FIXTURE_STACKUP]})
         model = propagation.PropagationModel(stack, set())
         with self.assertRaises(propagation.Unsupported):
@@ -733,7 +733,7 @@ class TheAnalyticModel(unittest.TestCase):
         """Different permittivities above and below is not one homogeneous medium."""
         layers = [dict(entry, kind=_kind(entry)) for entry in FIXTURE_STACKUP]
         layers[3] = dict(layers[3], epsilon_r=3.0)
-        stack = stackup_physical.from_declaration({"layers": layers})
+        stack = stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": layers})
         model = propagation.PropagationModel(stack, {"F.Cu", "In2.Cu"})
         with self.assertRaises(propagation.Unsupported):
             model.conductor("In1.Cu", TRACK_WIDTH_MM)
@@ -741,7 +741,7 @@ class TheAnalyticModel(unittest.TestCase):
     def test_an_inner_layer_with_one_reference_plane_is_not_a_microstrip(self):
         """The field is in dielectric on both sides; Hammerstad does not apply."""
         stack = stackup_physical.from_declaration(
-            {"layers": [dict(entry, kind=_kind(entry))
+            {"provenance": "synthetic fixture values", "layers": [dict(entry, kind=_kind(entry))
                         for entry in FIXTURE_STACKUP]})
         geometry = stack.reference_geometry("In1.Cu", {"F.Cu"})
         self.assertEqual(geometry.mode, propagation.EMBEDDED_MICROSTRIP)
@@ -752,7 +752,7 @@ class TheAnalyticModel(unittest.TestCase):
 
     def test_an_outer_layer_with_one_reference_plane_is_a_microstrip(self):
         stack = stackup_physical.from_declaration(
-            {"layers": [dict(entry, kind=_kind(entry))
+            {"provenance": "synthetic fixture values", "layers": [dict(entry, kind=_kind(entry))
                         for entry in FIXTURE_STACKUP]})
         self.assertEqual(
             stack.reference_geometry("F.Cu", {"In1.Cu"}).mode,
@@ -760,7 +760,7 @@ class TheAnalyticModel(unittest.TestCase):
 
     def test_an_unknown_model_name_refuses(self):
         stack = stackup_physical.from_declaration(
-            {"layers": [dict(entry, kind=_kind(entry))
+            {"provenance": "synthetic fixture values", "layers": [dict(entry, kind=_kind(entry))
                         for entry in FIXTURE_STACKUP]})
         with self.assertRaises(propagation.PropagationError):
             propagation.PropagationModel(stack, {"In1.Cu"},
@@ -768,7 +768,7 @@ class TheAnalyticModel(unittest.TestCase):
 
     def test_a_declared_propagation_constant_needs_provenance(self):
         stack = stackup_physical.from_declaration(
-            {"layers": [dict(entry, kind=_kind(entry))
+            {"provenance": "synthetic fixture values", "layers": [dict(entry, kind=_kind(entry))
                         for entry in FIXTURE_STACKUP]})
         with self.assertRaises(propagation.PropagationError):
             propagation.PropagationModel(
@@ -777,7 +777,7 @@ class TheAnalyticModel(unittest.TestCase):
 
     def test_a_declared_propagation_constant_is_used_and_labelled(self):
         stack = stackup_physical.from_declaration(
-            {"layers": [dict(entry, kind=_kind(entry))
+            {"provenance": "synthetic fixture values", "layers": [dict(entry, kind=_kind(entry))
                         for entry in FIXTURE_STACKUP]})
         model = propagation.PropagationModel(
             stack, {"In1.Cu"}, model=propagation.DECLARED_EFFECTIVE,
@@ -800,7 +800,7 @@ class TheAnalyticModel(unittest.TestCase):
     def test_a_missing_material_figure_is_never_substituted(self):
         layers = [dict(entry, kind=_kind(entry)) for entry in FIXTURE_STACKUP]
         layers[1] = dict(layers[1], epsilon_r=None)
-        stack = stackup_physical.from_declaration({"layers": layers})
+        stack = stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": layers})
         model = propagation.PropagationModel(stack, {"In1.Cu"})
         with self.assertRaises(propagation.PropagationError):
             model.conductor("F.Cu", TRACK_WIDTH_MM)
@@ -863,7 +863,7 @@ class WhatADelayActuallyNeeds(unittest.TestCase):
                 if field in entry:
                     entry[field] = None
             layers.append(entry)
-        return stackup_physical.from_declaration({"layers": layers})
+        return stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": layers})
 
     def test_a_missing_loss_tangent_does_not_block_a_delay(self):
         """Loss tangent sets attenuation, not velocity."""
@@ -908,7 +908,7 @@ class WhatADelayActuallyNeeds(unittest.TestCase):
         layers = [dict(entry, kind=_kind(entry), thickness_mm=None,
                        epsilon_r=None, loss_tangent=None)
                   for entry in FIXTURE_STACKUP]
-        stack = stackup_physical.from_declaration({"layers": layers})
+        stack = stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": layers})
         model = propagation.PropagationModel(stack, {"In1.Cu", "In2.Cu"})
         record = model.via({"from_layer": "F.Cu", "to_layer": "B.Cu",
                             "via_top_layer": "F.Cu",
@@ -920,7 +920,7 @@ class WhatADelayActuallyNeeds(unittest.TestCase):
         layers = [dict(entry, kind=_kind(entry), thickness_mm=None,
                        epsilon_r=None, loss_tangent=None)
                   for entry in FIXTURE_STACKUP]
-        stack = stackup_physical.from_declaration({"layers": layers})
+        stack = stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": layers})
         model = propagation.PropagationModel(stack, {"In1.Cu", "In2.Cu"},
                                              via_model=propagation.VIA_GEOMETRIC)
         with self.assertRaises(propagation.Unsupported):
@@ -1259,7 +1259,8 @@ class WhereAStackupComesFrom(unittest.TestCase):
             os.makedirs(directory, exist_ok=True)
             with open(os.path.join(directory, "supplement.json"), "w",
                       encoding="utf-8") as handle:
-                json.dump({"layers": [dict(entry, kind=_kind(entry))
+                json.dump({"provenance": "synthetic fixture values",
+                           "layers": [dict(entry, kind=_kind(entry))
                                       for entry in FIXTURE_STACKUP]}, handle)
             document["timing"]["physical_stackup"]["supplement"] = \
                 "models/supplement.json"
@@ -1277,7 +1278,8 @@ class WhereAStackupComesFrom(unittest.TestCase):
             layers[1] = dict(layers[1], epsilon_r=9.9)
             with open(os.path.join(directory, "supplement.json"), "w",
                       encoding="utf-8") as handle:
-                json.dump({"layers": layers}, handle)
+                json.dump({"layers": layers,
+                           "provenance": "synthetic fixture values"}, handle)
             document["timing"]["physical_stackup"]["supplement"] = \
                 "models/supplement.json"
         fixture = make(mutate=mutate, with_stackup=True, tag="conflict")
@@ -1925,6 +1927,7 @@ def _supplement(layers, **top):
     def mutate(document, project):
         directory = os.path.join(project, "models")
         os.makedirs(directory, exist_ok=True)
+        top.setdefault("provenance", "synthetic fixture values")
         with open(os.path.join(directory, "supplement.json"), "w",
                   encoding="utf-8") as handle:
             json.dump({"layers": layers, **top}, handle)
@@ -1983,7 +1986,7 @@ class StackupApplicabilityFollowsTheAnalysis(unittest.TestCase):
 
     def test_a_layer_nothing_routes_on_cannot_block_an_analysis(self):
         """Only the layers the declared paths use are consulted."""
-        stack = stackup_physical.from_declaration({"layers": _fixture_layers()})
+        stack = stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": _fixture_layers()})
         stack.layers[3].epsilon_r = None            # the inner core
         missing = stack.completeness(
             required={stackup_physical.NEEDS_EPSILON_R}, layers=["F.Cu"])
@@ -2015,26 +2018,26 @@ class StackupContradictionsAlwaysBlock(unittest.TestCase):
 
     def test_a_permittivity_below_one_is_impossible(self):
         stack = stackup_physical.from_declaration(
-            {"layers": _fixture_layers(epsilon_r=0.5)})
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers(epsilon_r=0.5)})
         self.assertTrue(any("below 1" in p["issue"]
                             for p in stack.contradictions()))
 
     def test_a_negative_thickness_is_impossible(self):
         stack = stackup_physical.from_declaration(
-            {"layers": _fixture_layers(thickness_mm=-0.1)})
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers(thickness_mm=-0.1)})
         self.assertTrue(any("positive length" in p["issue"]
                             for p in stack.contradictions()))
 
     def test_two_adjacent_copper_layers_are_impossible(self):
         layers = [entry for entry in _fixture_layers()
                   if entry["name"] != "dielectric 1"]
-        stack = stackup_physical.from_declaration({"layers": layers})
+        stack = stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": layers})
         self.assertTrue(any("adjacent" in p["issue"]
                             for p in stack.contradictions()))
 
     def test_a_stackup_describing_other_copper_layers_is_caught(self):
         stack = stackup_physical.from_declaration(
-            {"layers": _fixture_layers()})
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers()})
         problems = stack.contradictions(["F.Cu", "In1.Cu", "B.Cu"])
         self.assertTrue(any("copper layers" in p["issue"] for p in problems),
                         problems)
@@ -2052,13 +2055,13 @@ class StackupContradictionsAlwaysBlock(unittest.TestCase):
 
     def test_a_supplement_may_not_add_a_copper_layer(self):
         native = stackup_physical.from_declaration(
-            {"layers": _fixture_layers()}, source=stackup_physical.NATIVE)
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers()}, source=stackup_physical.NATIVE)
         extra = _fixture_layers() + [
             {"name": "In9.Cu", "kind": "copper", "type": "copper",
              "thickness_mm": 0.0175}]
         with self.assertRaises(stackup_physical.StackupError):
             stackup_physical.merge(
-                native, stackup_physical.from_declaration({"layers": extra}))
+                native, stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": extra}))
 
 
 # ---------------------------------------------------------------------------
@@ -2069,7 +2072,7 @@ class ClassificationIsConservative(unittest.TestCase):
 
     def _stack(self, **kwargs):
         stack = stackup_physical.from_declaration(
-            {"layers": _fixture_layers()})
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers()})
         for key, value in kwargs.items():
             setattr(stack, key, value)
         return stack
@@ -2077,7 +2080,7 @@ class ClassificationIsConservative(unittest.TestCase):
     def test_outer_is_decided_by_the_board_not_by_the_declaration(self):
         """A supplement missing the bottom layer must not promote an inner one."""
         partial = stackup_physical.from_declaration(
-            {"layers": _fixture_layers()[:-1]})
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers()[:-1]})
         partial.board_copper_layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
         self.assertEqual(
             partial.reference_geometry("In2.Cu", {"In1.Cu"}).mode,
@@ -2381,7 +2384,7 @@ class FidelityCannotOverstate(unittest.TestCase):
     def test_a_path_with_no_modelled_copper_reports_nothing(self):
         """A total of zero would be a number where nothing was measured."""
         stack = stackup_physical.from_declaration(
-            {"layers": _fixture_layers()})
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers()})
         model = propagation.PropagationModel(stack, {"In1.Cu"})
 
         class _Empty:
@@ -2827,9 +2830,9 @@ class TheSupplementMayNotOutrankTheBoard(unittest.TestCase):
 
     def _merge(self, layers, **top):
         native = stackup_physical.from_declaration(
-            {"layers": _fixture_layers(), "total_thickness_mm": 1.305},
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers(), "total_thickness_mm": 1.305},
             source=stackup_physical.NATIVE)
-        declared = stackup_physical.from_declaration({"layers": layers, **top})
+        declared = stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": layers, **top})
         return stackup_physical.merge(native, declared)
 
     def test_a_different_overall_thickness_is_refused(self):
@@ -2871,10 +2874,10 @@ class TheSupplementMayNotOutrankTheBoard(unittest.TestCase):
             if entry["name"] == "dielectric 1":
                 entry["epsilon_r"] = None
         native = stackup_physical.from_declaration(
-            {"layers": native_layers}, source=stackup_physical.NATIVE)
+            {"provenance": "synthetic fixture values", "layers": native_layers}, source=stackup_physical.NATIVE)
         merged = stackup_physical.merge(
             native,
-            stackup_physical.from_declaration({"layers": _fixture_layers()}))
+            stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": _fixture_layers()}))
         self.assertEqual(merged.layer("dielectric 1").epsilon_r,
                          FIXTURE_EPSILON_R)
 
@@ -2980,6 +2983,10 @@ class ReferenceContinuity(unittest.TestCase):
         # And the value it produced is marked as standing on an assumption.
         self.assertEqual(record["fidelity"],
                          propagation.ASSUMED_TRANSMISSION_LINE)
+        # The path-level accumulation is surfaced as one number: a bound
+        # written per run must not hide how much the whole path leaned on it.
+        self.assertAlmostEqual(record["assumed_unreferenced_total_mm"],
+                               LENGTH_UNREFERENCED_MM, places=3)
 
     def test_a_bound_smaller_than_the_gap_still_refuses(self):
         def mutate(document, _project):
@@ -3372,7 +3379,7 @@ class WhatTheGeometricViaModelClaims(unittest.TestCase):
 
     def _model(self, via_model=None):
         stack = stackup_physical.from_declaration(
-            {"layers": _fixture_layers()})
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers()})
         return propagation.PropagationModel(
             stack, {"In1.Cu", "In2.Cu"},
             via_model=via_model or propagation.VIA_GEOMETRIC)
@@ -3473,9 +3480,9 @@ class ASupplementMayNotAddStructureOfAnyKind(unittest.TestCase):
 
     def _merge(self, layers):
         native = stackup_physical.from_declaration(
-            {"layers": _fixture_layers()}, source=stackup_physical.NATIVE)
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers()}, source=stackup_physical.NATIVE)
         return stackup_physical.merge(
-            native, stackup_physical.from_declaration({"layers": layers}))
+            native, stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": layers}))
 
     def test_an_extra_dielectric_is_refused(self):
         layers = _fixture_layers() + [
@@ -3506,10 +3513,10 @@ class ASupplementMayNotAddStructureOfAnyKind(unittest.TestCase):
             if entry["name"] == "dielectric 1":
                 entry["epsilon_r"] = None
         native = stackup_physical.from_declaration(
-            {"layers": native_layers}, source=stackup_physical.NATIVE)
+            {"provenance": "synthetic fixture values", "layers": native_layers}, source=stackup_physical.NATIVE)
         merged = stackup_physical.merge(
             native,
-            stackup_physical.from_declaration({"layers": _fixture_layers()}))
+            stackup_physical.from_declaration({"provenance": "synthetic fixture values", "layers": _fixture_layers()}))
         self.assertEqual(merged.layer("dielectric 1").epsilon_r,
                          FIXTURE_EPSILON_R)
 
@@ -3838,7 +3845,7 @@ class GapsOnTwoPlanesCombineAsAUnion(unittest.TestCase):
 
     def test_the_model_prefers_the_pair_key_and_falls_back_conservatively(self):
         stack = stackup_physical.from_declaration(
-            {"layers": _fixture_layers()})
+            {"provenance": "synthetic fixture values", "layers": _fixture_layers()})
         model = propagation.PropagationModel(stack, {"In1.Cu", "In2.Cu"})
         synthetic_model = {"reference_layers_used": ["In1.Cu", "In2.Cu"]}
         with_pair = {"layer": "F.Cu", "width_mm": 0.2, "length_mm": 20.0,
