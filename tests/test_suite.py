@@ -22,13 +22,45 @@ from tests import paths                                                    # noq
 from pcbqa import core                              # noqa: E402
 from pcbqa.core import Context, Manifest, Status     # noqa: E402
 from pcbqa.gates import (g_provenance, g_checks, g_geometry,  # noqa: F401
-                         g_contracts, g_assembly, g_export_parity)   # noqa: E402,F401
+                         g_contracts, g_assembly, g_export_parity,   # noqa: E402,F401
+                         g_fabrication, g_orientation, g_timing)     # noqa: E402,F401
+# The FULL registry, exactly as run.py loads it: the expected-failure matrix
+# compares every gate's status against the recorded expectation, and a gate
+# module nobody imported is a gate that silently never runs - in a parallel
+# worker a sibling test module used to import the missing three first, which
+# is why only serial runs ever noticed.
 from tests import build_portability                 # noqa: E402
 
 REVA = paths.REVA_MANIFEST
 EXPECTED = paths.REVA_EXPECTED
 PORTABILITY = paths.PORTABILITY_MANIFEST
 PYTHON = sys.executable
+
+#: Serial runs get the same output isolation the parallel runner gives its
+#: workers. Without it, `run.py` roots a temporary manifest's output beside
+#: that manifest's project - which for these tests is the FROZEN Rev A
+#: fixture, so the run's own attempt directory appears inside the tree
+#: PROV.FIXTURE_INTEGRITY holds to an exact inventory, and release tests
+#: judge attempts accumulated by every earlier invocation on the machine.
+#: The env var is inherited by the subprocesses these tests spawn.
+_OUTPUT_ISOLATION = {"owned": None, "saved": None}
+
+
+def setUpModule():
+    from pcbqa.parallel import ENV_OUTPUT_ROOT
+    _OUTPUT_ISOLATION["saved"] = os.environ.get(ENV_OUTPUT_ROOT)
+    if _OUTPUT_ISOLATION["saved"] is None:
+        _OUTPUT_ISOLATION["owned"] = tempfile.mkdtemp(
+            prefix="pcbqa_suite_out_")
+        os.environ[ENV_OUTPUT_ROOT] = _OUTPUT_ISOLATION["owned"]
+
+
+def tearDownModule():
+    from pcbqa.parallel import ENV_OUTPUT_ROOT
+    if _OUTPUT_ISOLATION["owned"] is not None:
+        os.environ.pop(ENV_OUTPUT_ROOT, None)
+        shutil.rmtree(_OUTPUT_ISOLATION["owned"], ignore_errors=True)
+        _OUTPUT_ISOLATION["owned"] = None
 
 
 def _configure_geometry():
