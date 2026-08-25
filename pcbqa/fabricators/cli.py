@@ -326,7 +326,7 @@ def _cmd_impedance(arguments, store):
     references = [int(value) for value in
                   arguments.references.split(",") if value.strip()]
     try:
-        result = _impedance.solve_with_provenance(approved, {
+        result = _impedance.solve(approved, {
             "requirements": requirements,
             "stackup": arguments.stackup,
             "copper_layer": arguments.layer,
@@ -345,7 +345,10 @@ def _cmd_impedance(arguments, store):
         print("ATTENTION: {}".format(item))
     result["approved_freshness"] = freshness
     print(json.dumps(result, indent=2))
-    return 0 if result.get("solved") else 1
+    # Exit success means a FEASIBLE design solution: a numeric root that
+    # violates the fabricator's own routing limits is diagnostics, not
+    # success.
+    return 0 if result.get("feasible") else 1
 
 
 def _cmd_export(arguments, store):

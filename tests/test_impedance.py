@@ -71,13 +71,14 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         return caught.exception
 
     def test_a_representative_solve_carries_its_whole_context(self):
-        result = impedance.solve_with_provenance(self.snapshot, _request())
-        solved = result["solved"]
-        self.assertTrue(solved["manufacturing"]["established"])
-        self.assertAlmostEqual(solved["impedance_ohm"], 50.0, places=2)
+        result = impedance.solve(self.snapshot, _request())
+        numeric = result["numeric_solution"]
+        self.assertTrue(result["feasible"])
+        self.assertTrue(result["manufacturing"]["established"])
+        self.assertAlmostEqual(numeric["impedance_ohm"], 50.0, places=2)
         # ~0.37 mm for 50 ohm over 0.2104 mm of er-4.4 prepreg with 1 oz
         # finished copper: the physically expected neighbourhood.
-        self.assertTrue(0.30 < solved["width_mm"] < 0.45, solved)
+        self.assertTrue(0.30 < numeric["width_mm"] < 0.45, numeric)
         context = result["context"]
         self.assertEqual(context["dielectric_record"],
                          "prepreg 7628 (NP-155F, impedance-calculator)")
@@ -89,15 +90,54 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
                          self.snapshot["normalized_sha256"])
         self.assertEqual(len(result["provenance"]["sources"]),
                          len(jlcpcb.SOURCES))
-        self.assertEqual(result["fabrication_tolerance"]["stated_percent"],
-                         10.0)
-        self.assertIn("nominal only",
-                      result["fabrication_tolerance"]["note"])
+
+    def test_an_uncontrolled_profile_claims_no_fabrication_tolerance(self):
+        """The base profile states impedance_control=false: the nominal
+        estimate is available, but the fabricator's controlled-impedance
+        tolerance is explicitly NOT applicable and not quoted as such."""
+        result = impedance.solve(self.snapshot, _request())
+        tolerance = result["fabrication_tolerance"]
+        self.assertFalse(tolerance["impedance_control_selected"])
+        self.assertFalse(tolerance["applicable"])
+        self.assertNotIn("stated_percent", tolerance)
+        self.assertIn("does NOT apply", tolerance["note"])
+
+    def test_a_controlled_profile_exposes_the_applicable_tolerance(self):
+        requirements = _requirements(impedance_control=True)
+        result = impedance.solve(self.snapshot, _request(
+            requirements=requirements, stackup="JLC04161H-7628"))
+        tolerance = result["fabrication_tolerance"]
+        self.assertTrue(tolerance["impedance_control_selected"])
+        self.assertTrue(tolerance["applicable"])
+        self.assertEqual(tolerance["stated_percent"], 10.0)
+        self.assertIn("nominal analytic estimate", tolerance["note"])
+
+    def test_there_is_exactly_one_public_solve(self):
+        """No provenance-free variant exists: every result an AI caller
+        can receive carries the evidence chain, on success and on
+        no-solution alike."""
+        self.assertFalse(hasattr(impedance, "solve_with_provenance"))
+        result = impedance.solve(
+            self.snapshot, _request(target_ohm=30.0,
+                                    width_search_mm={"min": 0.15,
+                                                     "max": 0.5}))
+        self.assertIsNone(result["numeric_solution"])
+        self.assertIn("provenance", result)
+        self.assertIn("fabrication_tolerance", result)
+        self.assertEqual(result["provenance"]["model_version"],
+                         impedance.MODEL_VERSION)
+
+    def test_soldermask_on_an_internal_layer_is_contradictory(self):
+        self._refuses("contradicts an internal", copper_layer=2,
+                      reference_copper_layers=[1, 3],
+                      soldermask_present=True)
 
     def test_repeated_solves_are_deterministic(self):
         first = impedance.solve(self.snapshot, _request())
         second = impedance.solve(copy.deepcopy(self.snapshot), _request())
-        self.assertEqual(first["solved"], second["solved"])
+        self.assertEqual(first["numeric_solution"],
+                         second["numeric_solution"])
+        self.assertEqual(first["feasible"], second["feasible"])
 
     def test_targets_outside_the_published_ranges_refuse(self):
         self._refuses("outside the fabricator's stated single-ended range",
@@ -262,25 +302,63 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         requirements = _requirements(min_track_mm=0.4, min_space_mm=0.4)
         result = impedance.solve(
             snapshot, _request(requirements=requirements, target_ohm=60.0))
-        solved = result["solved"]
-        self.assertFalse(solved["manufacturing"]["established"])
+        # The numeric root is preserved as diagnostics; the DESIGN answer
+        # is infeasible, and that is the field a caller must key on.
+        self.assertIsNotNone(result["numeric_solution"])
+        self.assertFalse(result["feasible"])
+        self.assertFalse(result["manufacturing"]["established"])
         self.assertIn("below the strictest published minimum",
-                      solved["manufacturing"]["issue"])
+                      result["manufacturing"]["issue"])
 
     def test_an_unreachable_target_is_a_clear_no_solution(self):
         result = impedance.solve(
             self.snapshot,
             _request(target_ohm=30.0,
                      width_search_mm={"min": 0.15, "max": 0.5}))
-        self.assertIsNone(result["solved"])
+        self.assertIsNone(result["numeric_solution"])
+        self.assertFalse(result["feasible"])
         self.assertIn("NOT returned", result["failure"])
 
     def test_provenance_reaches_the_sources(self):
-        result = impedance.solve_with_provenance(self.snapshot, _request())
+        result = impedance.solve(self.snapshot, _request())
         ids = {s["id"] for s in result["provenance"]["sources"]}
         self.assertIn("impedance-calculator", ids)
         self.assertEqual(result["provenance"]["model_version"],
                          impedance.MODEL_VERSION)
+
+    def test_cli_exit_status_tracks_feasibility(self):
+        """Exit 0 is a FEASIBLE design solution; anything else - here an
+        unreachable target - exits nonzero, so a script can trust the
+        status without parsing JSON."""
+        import json as json_module
+        import subprocess
+        import tempfile
+        requirements_path = os.path.join(
+            tempfile.mkdtemp(prefix="pcbqa_impcli_"), "req.json")
+        with open(requirements_path, "w", encoding="utf-8") as handle:
+            json_module.dump(_requirements(), handle)
+        base = [sys.executable, os.path.join(HERE, "run.py"),
+                "fab", "impedance", requirements_path,
+                "--stackup", "JLC-4L-no-requirement",
+                "--layer", "1", "--references", "2",
+                "--width-min", "0.1", "--width-max", "2.0",
+                "--soldermask", "absent"]
+        feasible = subprocess.run(base + ["--target", "50"],
+                                  capture_output=True, text=True, cwd=HERE)
+        self.assertEqual(feasible.returncode, 0, feasible.stdout[-500:])
+        document = json_module.loads(
+            feasible.stdout[feasible.stdout.index("{"):])
+        self.assertTrue(document["feasible"])
+        no_solution = subprocess.run(
+            [arg if arg not in ("0.1", "2.0") else
+             {"0.1": "0.15", "2.0": "0.5"}[arg] for arg in base]
+            + ["--target", "30"], capture_output=True, text=True,
+            cwd=HERE)
+        self.assertNotEqual(no_solution.returncode, 0)
+        document = json_module.loads(
+            no_solution.stdout[no_solution.stdout.index("{"):])
+        self.assertFalse(document["feasible"])
+        self.assertIsNone(document["numeric_solution"])
 
     def test_the_solver_module_performs_no_network_access(self):
         with open(os.path.join(HERE, "pcbqa", "fabricators",
@@ -392,9 +470,9 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
                     "retrieved_utc": "2026-08-25T00:00:00+00:00",
                     "sources": []}
         upper = impedance.resolve_context(
-            snapshot, _requirements(), "SYN-SYM", 2, [1, 3], True)
+            snapshot, _requirements(), "SYN-SYM", 2, [1, 3], False)
         lower = impedance.resolve_context(
-            snapshot, _requirements(), "SYN-SYM", 3, [2, 4], True)
+            snapshot, _requirements(), "SYN-SYM", 3, [2, 4], False)
         for key in ("topology", "span_mm", "epsilon_r",
                     "dielectric_record", "conductor_record",
                     "conductor_thickness_mm"):
@@ -404,12 +482,93 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
         self.assertEqual(z_upper, z_lower)
         self.assertEqual(upper["topology"], "symmetric-stripline")
 
+    def test_the_pinned_narrow_stripline_reference_vector(self):
+        """Hand-evaluated from the IPC-2141 / Wadell / MT-094 printed
+        form Z0 = 60/sqrt(er) * ln(4b/(0.67*pi*(0.8w+t))) at er=4.2,
+        w=0.2, b=1.0, t=0.03. The model-1 transcription (an equivalent-
+        diameter expansion with an unpinnable 0.51*pi term) produced
+        66.91 ohm here and fails this vector."""
+        z, _eps = impedance.stripline_z0(4.2, 0.2, 1.0, 0.03)
+        self.assertAlmostEqual(z, 67.4183, delta=0.005)
+
+    def test_the_wide_stripline_reference_vector(self):
+        """Hand-evaluated from Cohn's wide-strip fringing form at er=4.2,
+        w=0.6, b=1.0, t=0.03."""
+        z, _eps = impedance.stripline_z0(4.2, 0.6, 1.0, 0.03)
+        self.assertAlmostEqual(z, 41.3588, delta=0.005)
+
+    def test_the_microstrip_branch_reference_vectors(self):
+        """Hand-evaluated from the published Hammerstad expressions with
+        a vanishing conductor: narrow branch at u=0.5, er=4.3 and wide
+        branch at u=2, er=4.3."""
+        z, eps = impedance.microstrip_z0(4.3, 0.5, 1.0, 1e-12)
+        self.assertAlmostEqual(eps, 2.9965, places=3)
+        self.assertAlmostEqual(z, 96.371, delta=0.02)
+        z, eps = impedance.microstrip_z0(4.3, 2.0, 1.0, 1e-12)
+        self.assertAlmostEqual(eps, 3.2736, places=3)
+        self.assertAlmostEqual(z, 49.365, delta=0.02)
+
+    @staticmethod
+    def _exact_cohn_z0(epsilon_r, width, plate_gap):
+        """Cohn's EXACT zero-thickness symmetric stripline, from the
+        elliptic-integral solution printed in the Polar Instruments IPC
+        paper: Z0 = (eta0/4)/sqrt(er) * K(k)/K(k'), k = sech(pi*w/2b),
+        k' = tanh(pi*w/2b). K evaluated by the AGM, implemented HERE so
+        the reference is independent of production code."""
+        import math
+
+        def complete_k(k):
+            a, b = 1.0, math.sqrt(1.0 - k * k)
+            for _ in range(60):
+                a, b = (a + b) / 2.0, math.sqrt(a * b)
+                if abs(a - b) < 1e-15:
+                    break
+            return math.pi / (2.0 * a)
+
+        argument = math.pi * width / (2.0 * plate_gap)
+        k = 1.0 / math.cosh(argument)
+        k_prime = math.tanh(argument)
+        return (376.730313668 / 4.0) / math.sqrt(epsilon_r) \
+            * complete_k(k) / complete_k(k_prime)
+
+    def test_both_stripline_branches_track_the_exact_solution(self):
+        """At t -> 0 the implemented branches are compared with Cohn's
+        exact elliptic solution. Measured characterisation, pinned here
+        as bounds rather than tuned away: the IPC-2141 narrow closed
+        form reads 2-4.5% LOW across its window, worst near the
+        w/(b-t)=0.35 branch edge; Cohn's wide fringing form tracks
+        within 0.6%. (At realistic conductor thicknesses the two
+        branches nearly meet at the seam; the seam-and-monotonicity
+        behaviour is guarded at solve time.)"""
+        t = 1e-9
+        for w_over_b in (0.15, 0.25, 0.34):
+            approx, _e = impedance.stripline_z0(4.2, w_over_b, 1.0, t)
+            exact = self._exact_cohn_z0(4.2, w_over_b, 1.0)
+            error = (approx - exact) / exact
+            self.assertTrue(-0.05 < error < -0.015,
+                            (w_over_b, approx, exact, error))
+        for w_over_b in (0.45, 0.6, 0.8):
+            approx, _e = impedance.stripline_z0(4.2, w_over_b, 1.0, t)
+            exact = self._exact_cohn_z0(4.2, w_over_b, 1.0)
+            self.assertLess(abs(approx - exact) / exact, 0.01,
+                            (w_over_b, approx, exact))
+
+    def test_stripline_validity_limits_refuse(self):
+        with self.assertRaises(propagation.Unsupported):
+            impedance.stripline_z0(4.2, 0.2, 1.0, 0.3)      # t/b > 0.25
+        with self.assertRaises(propagation.Unsupported):
+            impedance.stripline_z0(4.2, 1.1, 1.0, 0.03)     # w >= b
+        with self.assertRaises(propagation.Unsupported):
+            impedance.microstrip_z0(4.3, 25.0, 1.0, 1e-12)  # u > 20
+        with self.assertRaises(propagation.Unsupported):
+            impedance.microstrip_z0(4.3, 0.05, 1.0, 1e-12)  # u < 0.1
+
     def test_gapless_result_values_never_carry_nan(self):
         snapshot = _snapshot()
         result = impedance.solve(snapshot, _request(target_ohm=88.0))
-        if result["solved"] is not None:
-            for value in (result["solved"]["width_mm"],
-                          result["solved"]["impedance_ohm"]):
+        if result["numeric_solution"] is not None:
+            for value in (result["numeric_solution"]["width_mm"],
+                          result["numeric_solution"]["impedance_ohm"]):
                 self.assertEqual(value, value)
 
 

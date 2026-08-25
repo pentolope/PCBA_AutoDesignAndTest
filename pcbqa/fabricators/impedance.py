@@ -52,7 +52,11 @@ from . import selection
 from .. import propagation
 
 #: Bumped when the analytic model or its composition changes meaning.
-MODEL_VERSION = "1"
+#: Version 2 replaced the narrow-stripline branch: version 1 carried an
+#: equivalent-diameter expansion whose 0.51*pi*(t/w)^2 term could not be
+#: pinned to any printed source, so it was replaced outright by the
+#: IPC-2141 / Wadell closed form, which can.
+MODEL_VERSION = "2"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -111,13 +115,28 @@ def microstrip_z0(epsilon_r, width_mm, height_mm, conductor_mm):
 
 
 def stripline_z0(epsilon_r, width_mm, plate_gap_mm, conductor_mm):
-    """Cohn's symmetric-stripline Z0 with finite conductor thickness.
+    """Symmetric-stripline Z0 with finite conductor thickness.
 
-    `plate_gap_mm` is b: the dielectric span between the two reference
-    planes. Narrow strips (w/(b-t) < 0.35) use the equivalent-round-
-    conductor form; wide strips use the fringing-capacitance form. Both
-    are the standard published characterisations; t/b beyond 0.25 is
-    outside their stated validity and refuses.
+    `plate_gap_mm` is b: the span between the two reference planes.
+
+    Narrow strips - w/(b-t) < 0.35 - use the IPC-2141 closed form as
+    printed in Wadell's Transmission Line Design Handbook and reproduced
+    in Analog Devices tutorial MT-094:
+
+        Z0 = 60/sqrt(er) * ln( 4*b / (0.67*pi*(0.8*w + t)) )
+
+    Wide strips use Cohn's fringing-capacitance characterisation (Cohn,
+    "Characteristic Impedance of the Shielded-Strip Transmission Line",
+    IRE MTT 1954, as reproduced by Wadell). Stated validity, enforced
+    here: w/(b-t) < 0.35 for the narrow branch, t/b < 0.25 throughout,
+    and w < b for the wide branch's derivation. Both branches reduce at
+    t -> 0 to forms the test suite checks against Cohn's EXACT
+    zero-thickness elliptic-integral solution - an independent ground
+    truth, not a mirror of this code.
+
+    Version note: the model-1 narrow branch used an equivalent-diameter
+    expansion whose transcription could not be pinned to a printed
+    source; it was replaced, not repaired.
     """
     propagation._positive("relative permittivity", epsilon_r)
     propagation._positive("trace width", width_mm)
@@ -136,12 +155,8 @@ def stripline_z0(epsilon_r, width_mm, plate_gap_mm, conductor_mm):
             "stripline w/b = {:.3f} is outside the implemented validity "
             "window".format(w / b))
     if w / (b - t) < 0.35:
-        diameter = (w / 2.0) * (
-            1.0 + (t / (math.pi * w))
-            * (1.0 + math.log(4.0 * math.pi * w / t))
-            + 0.51 * math.pi * (t / w) ** 2)
         z0 = (60.0 / math.sqrt(epsilon_r)) * math.log(
-            4.0 * b / (math.pi * diameter))
+            4.0 * b / (0.67 * math.pi * (0.8 * w + t)))
         return z0, epsilon_r
     ratio = 1.0 / (1.0 - t / b)
     fringing = (0.0885 * epsilon_r / math.pi) * (
@@ -412,6 +427,13 @@ def resolve_context(approved_snapshot, requirements, stackup_id,
             "conductor_weight_oz": profile["outer_copper_oz"],
         })
     else:
+        if soldermask_present:
+            raise ImpedanceError(
+                "soldermask_present=true contradicts an internal routing "
+                "layer: soldermask coats the board's outer surfaces and "
+                "cannot touch a stripline. Declare it false for internal "
+                "layers - the input contract is strict everywhere, and a "
+                "contradiction is not quietly ignored")
         adjacent = sorted((copper_layer - 1, copper_layer + 1))
         if sorted(references) != adjacent:
             raise ImpedanceError(
@@ -447,6 +469,13 @@ def resolve_context(approved_snapshot, requirements, stackup_id,
         conductor_identity, conductor_record, conductor_mm = \
             _conductor_record(capabilities, "internal",
                               profile["inner_copper_oz"])
+        context["notes"].append(
+            "model characterisation, measured against Cohn's exact "
+            "zero-thickness elliptic solution: the IPC-2141 narrow closed "
+            "form reads 2-4.5% low across its window (worst near the "
+            "w/(b-t)=0.35 branch edge); the wide fringing form tracks "
+            "within 0.6%. The nominal below carries that model-class "
+            "bias, separate from any fabrication tolerance")
         context.update({
             "topology": STRIPLINE,
             "span_mm": round(thickness_a + thickness_b
@@ -496,7 +525,7 @@ def _impedance_at(context, width_mm):
                         context["conductor_thickness_mm"])
 
 
-def solve(approved_snapshot, request):
+def _solve(approved_snapshot, request):
     """Solve one impedance target against one approved construction.
 
     `request` keys: requirements (the fabrication requirements dict),
@@ -568,7 +597,8 @@ def solve(approved_snapshot, request):
                 "result would be meaningless".format(width, z, previous))
         previous = z
     if not z_high <= target <= z_low:
-        return _result(context, request, range_record, solved=None,
+        return _result(context, request, range_record, numeric=None,
+                       manufacturing=None,
                        failure="no width in [{} , {}] mm reaches {} ohm; "
                                "the domain spans {:.2f} down to {:.2f} "
                                "ohm. The nearest bound is NOT returned: "
@@ -590,12 +620,11 @@ def solve(approved_snapshot, request):
     z_final, eps_final = _impedance_at(context, width)
 
     checks = _manufacturing(catalog["capabilities"], context, width)
-    return _result(context, request, range_record, solved={
+    return _result(context, request, range_record, numeric={
         "width_mm": width,
         "impedance_ohm": round(z_final, 3),
         "epsilon_effective": round(eps_final, 4),
-        "manufacturing": checks,
-    }, failure=None)
+    }, manufacturing=checks, failure=None)
 
 
 def _manufacturing(capabilities, context, width):
@@ -623,8 +652,20 @@ def _manufacturing(capabilities, context, width):
             "evidence": cited}
 
 
-def _result(context, request, range_record, solved, failure):
-    document = {
+def _result(context, request, range_record, numeric, manufacturing,
+            failure):
+    """One result shape, with feasibility separated from arithmetic.
+
+    `numeric_solution` is the root of the analytic equation - useful
+    diagnostics even when unbuildable. `feasible` is the design answer:
+    true only when a numeric root exists AND the geometry survives the
+    profile's own published manufacturing limits. A caller that reads
+    only one field must read `feasible`; a width that the fabricator
+    will not route is never a successful design solution.
+    """
+    feasible = bool(numeric) and bool(manufacturing) \
+        and manufacturing.get("established", False)
+    return {
         "model": {
             "identity": context["topology"],
             "version": MODEL_VERSION,
@@ -640,26 +681,65 @@ def _result(context, request, range_record, solved, failure):
                     if key != "notes"},
         "target_range": {"value": range_record["value"],
                          "source": range_record["source"]},
-        "solved": solved,
+        "numeric_solution": numeric,
+        "manufacturing": manufacturing,
+        "feasible": feasible,
         "failure": failure,
     }
-    return document
 
 
-def solve_with_provenance(approved_snapshot, request):
-    """`solve`, wrapped with the evidence chain a reviewer reconstructs."""
-    document = solve(approved_snapshot, request)
+def _fabrication_tolerance(approved_snapshot, context):
+    """The stated impedance tolerance, scoped to what was actually bought.
+
+    JLCPCB's plus-minus figure describes its CONTROLLED-impedance
+    process. A profile that does not select impedance control gets an
+    ordinary build: the nominal analytic estimate is still meaningful,
+    but presenting the controlled-process tolerance as applying to it
+    would claim a control nobody ordered.
+    """
+    controlled = bool(context["profile"].get("impedance_control"))
     tolerance = approved_snapshot["normalized"]["capabilities"].get(
         "impedance_tolerance_standard_percent")
-    document["fabrication_tolerance"] = (
-        {"stated_percent": tolerance["value"],
-         "source": tolerance["source"],
-         "note": "the fabricator's stated impedance tolerance, quoted "
-                 "verbatim; it is NOT computed into an interval here, "
-                 "and the solved value above is nominal only"}
-        if tolerance is not None else
-        {"note": "no impedance tolerance is normalized from the approved "
-                 "sources; the solved value is nominal only"})
+    if not controlled:
+        return {
+            "impedance_control_selected": False,
+            "applicable": False,
+            "note": "the fabrication profile does not select controlled "
+                    "impedance, so the fabricator's stated "
+                    "controlled-impedance tolerance does NOT apply; the "
+                    "value above is an uncontrolled nominal analytic "
+                    "estimate only",
+        }
+    if tolerance is None:
+        return {
+            "impedance_control_selected": True,
+            "applicable": False,
+            "note": "no impedance tolerance is normalized from the "
+                    "approved sources; the value above is nominal only",
+        }
+    return {
+        "impedance_control_selected": True,
+        "applicable": True,
+        "stated_percent": tolerance["value"],
+        "source": tolerance["source"],
+        "note": "the fabricator's stated controlled-impedance tolerance, "
+                "quoted verbatim; it is NOT computed into an interval "
+                "here, and the value above remains the nominal analytic "
+                "estimate",
+    }
+
+
+def solve(approved_snapshot, request):
+    """The one public solve. Every result carries its evidence chain.
+
+    There is deliberately no provenance-free variant: an AI caller must
+    not be able to receive a geometry without the approved digest, parser
+    identity, source hashes and model identity attached. The numerical
+    internals stay private.
+    """
+    document = _solve(approved_snapshot, request)
+    document["fabrication_tolerance"] = _fabrication_tolerance(
+        approved_snapshot, document["context"])
     document["provenance"] = {
         "approved_normalized_sha256": approved_snapshot["normalized_sha256"],
         "parser": approved_snapshot.get("parser"),
