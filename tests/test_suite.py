@@ -322,6 +322,17 @@ class GenericSourceHygiene(unittest.TestCase):
         for root in self.PRODUCTION:
             for base, dirs, files in os.walk(root):
                 dirs[:] = [d for d in dirs if d != "__pycache__"]
+                if os.path.basename(os.path.dirname(base)) == "profiles"                         or os.path.basename(base) == "profiles":
+                    # A fabricator profile mixes two kinds of file: authored
+                    # source (process.json and friends), which these hygiene
+                    # rules govern, and the ACQUIRED evidence store - the
+                    # approved/observed catalog snapshots, whose numbers are
+                    # the fabricator's own (a 69% resin content is data, not
+                    # a leaked fixture answer) and whose observed side is
+                    # machine-local and not even committed. The store
+                    # directories are data, not source, and are not scanned.
+                    dirs[:] = [d for d in dirs
+                               if d not in ("catalog", "observed")]
                 for name in files:
                     if not name.endswith(self.PRODUCTION_SUFFIXES):
                         continue
@@ -630,7 +641,16 @@ class Mutations(unittest.TestCase):
     def _fixture_copy(self, tag):
         work = tempfile.mkdtemp(prefix="pcbqa_" + tag + "_")
         project = os.path.join(work, "project")
-        shutil.copytree(paths.REVA_PROJECT, project)
+        # Another worker may be running kicad-cli against the fixture
+        # at this moment, and kicad-cli drops a transient ~*.lck
+        # beside the project for the duration; racing that file into
+        # the copy loses (it vanishes between listing and copying).
+        # The fixture's own reject globs already call such files
+        # scratch that has no place in a frozen copy, so excluding
+        # them here is the inventory policy, not a workaround.
+        shutil.copytree(paths.REVA_PROJECT, project,
+                        ignore=shutil.ignore_patterns(
+                            "~*", "*.lck", "*.bak", "*.tmp", ".#*"))
         return project
 
     def _manifest_for(self, project, tag):
@@ -758,7 +778,16 @@ class Mutations(unittest.TestCase):
         """A copper layer changed after export must fail per-layer parity."""
         work = tempfile.mkdtemp(prefix="pcbqa_layer_")
         project = os.path.join(work, "project")
-        shutil.copytree(paths.REVA_PROJECT, project)
+        # Another worker may be running kicad-cli against the fixture
+        # at this moment, and kicad-cli drops a transient ~*.lck
+        # beside the project for the duration; racing that file into
+        # the copy loses (it vanishes between listing and copying).
+        # The fixture's own reject globs already call such files
+        # scratch that has no place in a frozen copy, so excluding
+        # them here is the inventory policy, not a workaround.
+        shutil.copytree(paths.REVA_PROJECT, project,
+                        ignore=shutil.ignore_patterns(
+                            "~*", "*.lck", "*.bak", "*.tmp", ".#*"))
         target = os.path.join(project, "generated", "release", "gerbers",
                               "microphone_array_v2-F_Cu.gbr")
         text = open(target, encoding="utf-8").read()
