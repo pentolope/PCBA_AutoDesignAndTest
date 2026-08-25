@@ -7,6 +7,11 @@
     python run.py release  <manifest>      clean-room release attempt
     python run.py coherence <manifest>     is the installed release one run?
     python run.py gates                    list gate IDs
+    python run.py fab <cmd>                fabricator knowledge: refresh,
+                                           status, diff, promote, select,
+                                           export-stackup. The ONLY commands
+                                           that may touch the network, and
+                                           only `fab refresh` does.
 
 <manifest> is a path. For the toolkit's own fixtures a bare name also works:
 `portability`, `clean`, or a negative fixture's directory name.
@@ -498,6 +503,9 @@ def main(argv):
         return cmd_selftest(argv)
     if cmd == "gates":
         return cmd_gates()
+    if cmd == "fab":
+        from pcbqa.fabricators import cli as fab_cli
+        return fab_cli.main(argv[2:])
     if cmd in ("validate", "release", "coherence"):
         if len(argv) < 3:
             print("usage: run.py {} <manifest.json>".format(cmd))

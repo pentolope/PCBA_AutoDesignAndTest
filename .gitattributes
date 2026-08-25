@@ -55,3 +55,12 @@ generated/release/**                   -text
 *.step               binary
 *.stp                binary
 *.wrl                binary
+
+# --- Fabricator evidence and its fixtures: exact bytes as fetched ---------
+# Approved raw evidence is bound to a recorded sha256_raw; any EOL translation
+# in either direction silently breaks that binding. The parser fixtures are
+# minimized excerpts of the same bytes and stay byte-stable for the same
+# reason.
+profiles/*/catalog/evidence/** -text
+profiles/*/observed/**         -text
+tests/fixtures/fabricators/**  -text

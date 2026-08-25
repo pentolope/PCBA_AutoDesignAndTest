@@ -1,0 +1,2673 @@
+{
+  "approved_utc": "2026-08-24T23:47:06.369127+00:00",
+  "complete": true,
+  "errors": [],
+  "fabricator": "jlcpcb",
+  "kind": "approved",
+  "normalized": {
+    "capabilities": {
+      "4L inner_copper_options": {
+        "category": "stackup-options",
+        "conditions": "4 copper layers, impedance-capable constructions",
+        "excerpt": "inner Copper Weight: 0.5, 1.0, 2.0",
+        "name": "4L inner_copper_options",
+        "source": "impedance",
+        "units": "oz",
+        "value": [
+          0.5,
+          1.0,
+          2.0
+        ]
+      },
+      "4L outer_copper_options": {
+        "category": "stackup-options",
+        "conditions": "4 copper layers, impedance-capable constructions",
+        "excerpt": "Outer Copper Weight: 1.0, 2.0",
+        "name": "4L outer_copper_options",
+        "source": "impedance",
+        "units": "oz",
+        "value": [
+          1.0,
+          2.0
+        ]
+      },
+      "4L thickness_options": {
+        "category": "stackup-options",
+        "conditions": "4 copper layers, impedance-capable constructions",
+        "excerpt": "Thickness: 0.8, 1.0, 1.2, 1.6, 2.0",
+        "name": "4L thickness_options",
+        "source": "impedance",
+        "units": "mm",
+        "value": [
+          0.8,
+          1.0,
+          1.2,
+          1.6,
+          2.0
+        ]
+      },
+      "6L inner_copper_options": {
+        "category": "stackup-options",
+        "conditions": "6 copper layers, impedance-capable constructions",
+        "excerpt": "inner Copper Weight: 0.5, 1.0, 2.0",
+        "name": "6L inner_copper_options",
+        "source": "impedance",
+        "units": "oz",
+        "value": [
+          0.5,
+          1.0,
+          2.0
+        ]
+      },
+      "6L outer_copper_options": {
+        "category": "stackup-options",
+        "conditions": "6 copper layers, impedance-capable constructions",
+        "excerpt": "Outer Copper Weight: 1.0, 2.0",
+        "name": "6L outer_copper_options",
+        "source": "impedance",
+        "units": "oz",
+        "value": [
+          1.0,
+          2.0
+        ]
+      },
+      "6L thickness_options": {
+        "category": "stackup-options",
+        "conditions": "6 copper layers, impedance-capable constructions",
+        "excerpt": "Thickness: 1.2, 1.6, 2.0",
+        "name": "6L thickness_options",
+        "source": "impedance",
+        "units": "mm",
+        "value": [
+          1.2,
+          1.6,
+          2.0
+        ]
+      },
+      "board_thickness_range_mm": {
+        "category": "board",
+        "excerpt": "Thickness\n0.4 \u2013 4.5 mm",
+        "name": "board_thickness_range_mm",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "max": 4.5,
+          "min": 0.4
+        }
+      },
+      "drill_diameter_multilayer_mm": {
+        "category": "drill",
+        "excerpt": "Multilayer: 0.15 \u2013 6.3 mm",
+        "name": "drill_diameter_multilayer_mm",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "max": 6.3,
+          "min": 0.15
+        }
+      },
+      "fr4_thickness_options_mm": {
+        "category": "board",
+        "conditions": "2.5 mm and above are for 12+ layer PCBs only",
+        "excerpt": "Thickness for FR4 are: 0.4/0.6/0.8/1.0/1.2/1.6/2.0 mm (2.5 mm and above are for 12+ layer PCBs only)",
+        "name": "fr4_thickness_options_mm",
+        "source": "capabilities",
+        "units": "mm",
+        "value": [
+          0.4,
+          0.6,
+          0.8,
+          1.0,
+          1.2,
+          1.6,
+          2.0
+        ]
+      },
+      "inner_copper_default_oz": {
+        "category": "copper",
+        "conditions": "stated default",
+        "excerpt": "Finished copper weight of inner layer is 0.5oz by default",
+        "name": "inner_copper_default_oz",
+        "source": "capabilities",
+        "units": "oz",
+        "value": 0.5
+      },
+      "inner_copper_oz": {
+        "category": "copper",
+        "excerpt": "Finished Inner Layer Copper\n0.5 oz / 1 oz / 2 oz",
+        "name": "inner_copper_oz",
+        "source": "capabilities",
+        "units": "oz",
+        "value": [
+          0.5,
+          1.0,
+          2.0
+        ]
+      },
+      "layer_count_range": {
+        "category": "layers",
+        "excerpt": "Layer count\n1-32 Layers",
+        "name": "layer_count_range",
+        "source": "capabilities",
+        "value": {
+          "max": 32,
+          "min": 1
+        }
+      },
+      "min_trace_space_masked_1oz_mm": {
+        "category": "trace",
+        "conditions": "covered by solder mask, 1 oz copper",
+        "excerpt": "Minimum trace width/clearance: 0.15/0.15mm,  when traces are covered by solder mask (1oz)",
+        "name": "min_trace_space_masked_1oz_mm",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.15,
+          "track": 0.15
+        }
+      },
+      "outer_copper_2layer_oz": {
+        "category": "copper",
+        "excerpt": "2-layer: 1 oz / 2 oz / 2.5 oz / 3.5 oz / 4.5oz\nMulti-layer",
+        "name": "outer_copper_2layer_oz",
+        "source": "capabilities",
+        "units": "oz",
+        "value": [
+          1.0,
+          2.0,
+          2.5,
+          3.5,
+          4.5
+        ]
+      },
+      "outer_copper_multilayer_oz": {
+        "category": "copper",
+        "excerpt": "Multi-layer: 1 oz / 2 oz",
+        "name": "outer_copper_multilayer_oz",
+        "source": "capabilities",
+        "units": "oz",
+        "value": [
+          1.0,
+          2.0
+        ]
+      },
+      "via_multilayer_mm": {
+        "category": "via",
+        "excerpt": "Multilayer: 0.15 mm hole size / 0.25 mm via diameter",
+        "name": "via_multilayer_mm",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "diameter": 0.25,
+          "hole": 0.15
+        }
+      }
+    },
+    "fabricator": "jlcpcb",
+    "materials": {
+      "core": {
+        "dk": 4.6,
+        "excerpt": "Core dielectric constant 4.6",
+        "kind": "core",
+        "name": "core",
+        "source": "impedance"
+      },
+      "prepreg 1080": {
+        "dk": 3.91,
+        "excerpt": "1080 -> 3.91",
+        "kind": "prepreg",
+        "name": "1080",
+        "source": "impedance"
+      },
+      "prepreg 2116": {
+        "dk": 4.16,
+        "excerpt": "2116 -> 4.16",
+        "kind": "prepreg",
+        "name": "2116",
+        "source": "impedance"
+      },
+      "prepreg 3313": {
+        "dk": 4.1,
+        "excerpt": "3313 -> 4.1",
+        "kind": "prepreg",
+        "name": "3313",
+        "source": "impedance"
+      },
+      "prepreg 7628": {
+        "dk": 4.4,
+        "excerpt": "7628 -> 4.4",
+        "kind": "prepreg",
+        "name": "7628",
+        "source": "impedance"
+      }
+    },
+    "not_extracted": [],
+    "schema_version": 1,
+    "stackups": {
+      "JLC-4L-no-requirement": {
+        "default_when_no_impedance_requirement": true,
+        "excerpt_sha256": "822b9999100bea59974157d0f8032072d6e82312f6d04dc58257e8b814b21fbc",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "1.1mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 1.065
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "No requirement",
+        "source": "impedance"
+      },
+      "JLC-6L-no-requirement": {
+        "default_when_no_impedance_requirement": true,
+        "excerpt_sha256": "df0d6b968ae95cecaa3f01c3461f67a0e7feeec03c35b84bb25958a1cbcaf6e2",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.55mm H/Hwithout copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.55
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.55mm H/Hwithout copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.55
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "No requirement",
+        "source": "impedance"
+      },
+      "JLC04161H-1080": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "6ed76ff5aa8dedcab7b00d5ecf8ab70c762178fc99c7510873913de29a4ef129",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "1.3mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 1.265
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-1080",
+        "source": "impedance"
+      },
+      "JLC04161H-1080A": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "692dbccad34870675dab41e155c146778a6f8cfd9f581874c6685bb347dfe3ed",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.084
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "1.1mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 1.065
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.084
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-1080A",
+        "source": "impedance"
+      },
+      "JLC04161H-2116": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "fb1360ae39402348abe09d076f1ba024821db2572b9bfb6206c5b9d106be26ae",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "1.3mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 1.265
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-2116",
+        "source": "impedance"
+      },
+      "JLC04161H-2116A": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "ccf4ae02261f587f54bbe168870653c21b5e5799825cf7e56c2a83e07844045e",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.6mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.6
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-2116A",
+        "source": "impedance"
+      },
+      "JLC04161H-2116B": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "96b2b0414f2aafa8a05b12e2482ecb69cb8c885b479d213476e6bbd186395b69",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.9mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.865
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-2116B",
+        "source": "impedance"
+      },
+      "JLC04161H-2116C": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "9163a724242d3665be410e7188cf32e7e48a59d95276751cd34bc292e1067a74",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "1.1mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 1.065
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-2116C",
+        "source": "impedance"
+      },
+      "JLC04161H-2116D": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "e9b2639006b9837de541bbbd710f89c71bc716d3c2dde5aef62b0560aa342669",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.7mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.7
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-2116D",
+        "source": "impedance"
+      },
+      "JLC04161H-2116E": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "0cc98336583ff13f45ffbb8252f2eebee5743118eb0f8586ea0242d244cc3bca",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.9mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.865
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-2116E",
+        "source": "impedance"
+      },
+      "JLC04161H-3313": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "f437a586258a9aa93ca076f5f94294b8410e6fec64263aa37f31314b4af90991",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "1.3mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 1.265
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-3313",
+        "source": "impedance"
+      },
+      "JLC04161H-3313A": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "40bcd7f147270d52ceaa86f9b54d989f70558e0bbc993161c83a7acfa12aaaae",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.107
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "1.1mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 1.065
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.107
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-3313A",
+        "source": "impedance"
+      },
+      "JLC04161H-7628": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "822b9999100bea59974157d0f8032072d6e82312f6d04dc58257e8b814b21fbc",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "1.1mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 1.065
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-7628",
+        "source": "impedance"
+      },
+      "JLC04161H-7628A": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "10e52205816b6e49a026cd4b2a2ebdebe54062141ef2fa357bba1139ec33eb3c",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.9mm H/HOZ with copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.865
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-7628A",
+        "source": "impedance"
+      },
+      "JLC04161H-7628B": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "811cf8bddf2af18debfdc50d6c7d1eb3f44a0a94817723b2c64393e13a09c8a7",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.4mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.4
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-7628B",
+        "source": "impedance"
+      },
+      "JLC04161H-7628C": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "a53fdfa1ba8593b9ad00375a0c6d144d6501dabe68bae5d6161ba200aa87496a",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.15mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.15
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-7628C",
+        "source": "impedance"
+      },
+      "JLC04161H-7628E": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "386c6bd200176975370bb50e01e64be48a0b85d9d4498fbf42b632d85b20ab5f",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.6mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.6
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-7628E",
+        "source": "impedance"
+      },
+      "JLC04161H-7628F": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "91ee8b2d86d1b34e44d2dd9c72006f755f298d0eb3561e18d766cc6b15c408fa",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.25mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.25
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-7628F",
+        "source": "impedance"
+      },
+      "JLC04161H-7628G": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "05ef000731bebd0e07cccb730cb5117f291092b3c9c2b003dd66ecefa77d2311",
+        "layer_count_section": 4,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.5mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.5
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC04161H-7628G",
+        "source": "impedance"
+      },
+      "JLC06161H-1080": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "d4892a88eb628190e9cc623118cd57c32f656fe475a3616aef762ef755d449ed",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.55mm H/Hwithout copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.55
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.55mm H/Hwithout copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.55
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-1080",
+        "source": "impedance"
+      },
+      "JLC06161H-1080A": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "f748843bc1f514a668266312ed14a2ab3944f7f5c0beb39318fae37e04874db8",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.6mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.6
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.6mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.6
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-1080A",
+        "source": "impedance"
+      },
+      "JLC06161H-1080B": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "bfd69c150c015766a7fd717dd1ca20a449343b3c7417abc6f6c7ad27eaca945b",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.10mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.1
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "annotation": "0.7 H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.7
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.10mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.1
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-1080B",
+        "source": "impedance"
+      },
+      "JLC06161H-2116": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "2d0560c5de59ea7dfbb81d29202886ef27f66aaa2ed733d2b38b37d22d29eab9",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.127
+          },
+          {
+            "form": "prepreg",
+            "material": "2313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0964
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.30mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.3
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2084
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2084
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.30mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.3
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0964
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.127
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-2116",
+        "source": "impedance"
+      },
+      "JLC06161H-2116A": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "912b4208606a420ab864355e073d122f42715850140adb6e00659f14b1760ef2",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.13mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.13
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "annotation": "0.7 H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.7
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.13mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.13
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-2116A",
+        "source": "impedance"
+      },
+      "JLC06161H-2116B": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "b9d898902035ec7585d1e5944e9d8256be45be56b1e9dec59f63d7283d806c5e",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.5mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.5
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.5mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.5
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-2116B",
+        "source": "impedance"
+      },
+      "JLC06161H-3313": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "49ba17bbac986d4c94c0fabc2ee322cda4616e91c9f1396b6abd329a9198d01d",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.55mm H/Hwithout copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.55
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1088
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.55mm H/Hwithout copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.55
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-3313",
+        "source": "impedance"
+      },
+      "JLC06161H-3313C": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "136ed5303bfe6b35cf65253e6b60c7dc833a4222c0ece15f5322218908a18b2a",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.107
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.4mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.4
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.4mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.4
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0784
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.107
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-3313C",
+        "source": "impedance"
+      },
+      "JLC06161H-3313D": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "d32e122a3ac0d578418980695f8f9c2c80bde37df018990259dee211c9e138f3",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.107
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.25mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.25
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.124
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.25mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.25
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.107
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-3313D",
+        "source": "impedance"
+      },
+      "JLC06161H-3313E": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "cce0ea9e877b88a38ee559cdb7485890b776b2d553e8b20b5c20b2ad609a6cfa",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.10mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.1
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "annotation": "0.7 H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.7
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.10mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.1
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "3313",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0994
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-3313E",
+        "source": "impedance"
+      },
+      "JLC06161H-7628": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "bf2bdf9a81894750d375c3e4131d316d4bd83c906120cb2cc5fb6f0f368a641f",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.4mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.4
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2028
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.4mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.4
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2104
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-7628",
+        "source": "impedance"
+      },
+      "JLC06161H-7628A": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "61b238fdd8f325b082113c9d0a337a9adee67b1f67095954fbc7a7fe61368946",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.10mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.1
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "form": "prepreg",
+            "material": "2116",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.1164
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.10mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.1
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-7628A",
+        "source": "impedance"
+      },
+      "JLC06161H-7628B": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "04177f71410be81073c4dea7d282e92e66d45238c405f25bcffcc6397964f824",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.35mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.35
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.35mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.35
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "1080",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.0764
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.218
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-7628B",
+        "source": "impedance"
+      },
+      "JLC06161H-7628D": {
+        "default_when_no_impedance_requirement": false,
+        "excerpt_sha256": "3c789cbfe3dea446448f0ee1308f326052be5e0b044193f39d5baa17b7d8ceb4",
+        "layer_count_section": 6,
+        "layers": [
+          {
+            "label": "Top Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.216
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2084
+          },
+          {
+            "label": "Inner Layer L2",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.2mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.2
+          },
+          {
+            "label": "Inner Layer L3",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2008
+          },
+          {
+            "label": "Inner Layer L4",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "annotation": "0.2mm H/HOZ without copper",
+            "form": "core",
+            "role": "dielectric",
+            "thickness_mm": 0.2
+          },
+          {
+            "label": "Inner Layer L5",
+            "role": "copper",
+            "thickness_mm": 0.0152
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.2084
+          },
+          {
+            "form": "prepreg",
+            "material": "7628",
+            "role": "dielectric",
+            "sheet_count": 1,
+            "thickness_mm": 0.216
+          },
+          {
+            "label": "Bottom Layer",
+            "role": "copper",
+            "thickness_mm": 0.035
+          }
+        ],
+        "name": "JLC06161H-7628D",
+        "source": "impedance"
+      }
+    }
+  },
+  "normalized_sha256": "e92df834668837d223d2a1a5a611022f68b8d89d01a1d37539abc5e751a3b3a9",
+  "parser": {
+    "id": "pcbqa.fabricators.jlcpcb",
+    "version": "1"
+  },
+  "replaced_normalized_sha256": null,
+  "retrieved_utc": "2026-08-24T23:46:43.118085+00:00",
+  "schema_version": 1,
+  "sources": [
+    {
+      "bytes": 297343,
+      "id": "impedance",
+      "kind": "official-stackup-page",
+      "sha256_raw": "74e6884aad8457b80638c7403f15a77f4338591992c075bffdf1dfae81d8fee0",
+      "url": "https://jlcpcb.com/impedance"
+    },
+    {
+      "bytes": 138184,
+      "id": "capabilities",
+      "kind": "official-capabilities-page",
+      "sha256_raw": "6907f24ad947f5248298f86c058df537494b7e3af59bf934bb624d8dc25793d3",
+      "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
+    }
+  ]
+}

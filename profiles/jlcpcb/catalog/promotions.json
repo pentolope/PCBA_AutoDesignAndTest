@@ -1,0 +1,28 @@
+[
+  {
+    "change_summary": [],
+    "from_normalized_sha256": null,
+    "initial": true,
+    "note": "Initial approved baseline. Sources: jlcpcb.com/impedance and jlcpcb.com/capabilities/pcb-capabilities, fetched 2026-08-24. Hand-reviewed against the rendered pages: 33 stackups (incl. per-section no-requirement defaults), prepreg Dk 7628=4.4/3313=4.1/1080=3.91, core Dk 4.6, 16 capability records, nothing unextracted. Semantically identical to an independent fetch earlier the same day (raw bytes differed only in page tokens), re-promoted after the semantic-digest rule was corrected to exclude excerpt evidence.",
+    "parser": {
+      "id": "pcbqa.fabricators.jlcpcb",
+      "version": "1"
+    },
+    "promoted_utc": "2026-08-24T23:47:06.369127+00:00",
+    "retrieved_utc": "2026-08-24T23:46:43.118085+00:00",
+    "semantic_changes": 0,
+    "sources": [
+      {
+        "id": "impedance",
+        "sha256_raw": "74e6884aad8457b80638c7403f15a77f4338591992c075bffdf1dfae81d8fee0",
+        "url": "https://jlcpcb.com/impedance"
+      },
+      {
+        "id": "capabilities",
+        "sha256_raw": "6907f24ad947f5248298f86c058df537494b7e3af59bf934bb624d8dc25793d3",
+        "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
+      }
+    ],
+    "to_normalized_sha256": "e92df834668837d223d2a1a5a611022f68b8d89d01a1d37539abc5e751a3b3a9"
+  }
+]
