@@ -1,10 +1,11 @@
 {
-  "approved_utc": "2026-08-25T13:45:27.954921+00:00",
+  "approved_utc": "2026-08-25T15:52:35.037311+00:00",
   "declared_source_ids": [
     "impedance",
     "capabilities",
     "copper-weight",
-    "impedance-calculator"
+    "impedance-calculator",
+    "thickness-options"
   ],
   "errors": [],
   "fabricator": "jlcpcb",
@@ -12,6 +13,11 @@
   "normalized": {
     "capabilities": {
       "4L inner_copper_options": {
+        "applies": {
+          "max_layers": 4,
+          "min_layers": 4,
+          "position": "inner"
+        },
         "category": "stackup-options",
         "conditions": "4 copper layers, impedance-capable constructions",
         "excerpt": "inner Copper Weight: 0.5, 1.0, 2.0",
@@ -25,6 +31,11 @@
         ]
       },
       "4L outer_copper_options": {
+        "applies": {
+          "max_layers": 4,
+          "min_layers": 4,
+          "position": "outer"
+        },
         "category": "stackup-options",
         "conditions": "4 copper layers, impedance-capable constructions",
         "excerpt": "Outer Copper Weight: 1.0, 2.0",
@@ -37,6 +48,10 @@
         ]
       },
       "4L thickness_options": {
+        "applies": {
+          "max_layers": 4,
+          "min_layers": 4
+        },
         "category": "stackup-options",
         "conditions": "4 copper layers, impedance-capable constructions",
         "excerpt": "Thickness: 0.8, 1.0, 1.2, 1.6, 2.0",
@@ -52,6 +67,11 @@
         ]
       },
       "6L inner_copper_options": {
+        "applies": {
+          "max_layers": 6,
+          "min_layers": 6,
+          "position": "inner"
+        },
         "category": "stackup-options",
         "conditions": "6 copper layers, impedance-capable constructions",
         "excerpt": "inner Copper Weight: 0.5, 1.0, 2.0",
@@ -65,6 +85,11 @@
         ]
       },
       "6L outer_copper_options": {
+        "applies": {
+          "max_layers": 6,
+          "min_layers": 6,
+          "position": "outer"
+        },
         "category": "stackup-options",
         "conditions": "6 copper layers, impedance-capable constructions",
         "excerpt": "Outer Copper Weight: 1.0, 2.0",
@@ -77,6 +102,10 @@
         ]
       },
       "6L thickness_options": {
+        "applies": {
+          "max_layers": 6,
+          "min_layers": 6
+        },
         "category": "stackup-options",
         "conditions": "6 copper layers, impedance-capable constructions",
         "excerpt": "Thickness: 1.2, 1.6, 2.0",
@@ -133,10 +162,47 @@
         "units": "um/oz",
         "value": 35.0
       },
-      "drill_diameter_multilayer_mm": {
+      "drill_diameter 1-layer (capabilities)": {
+        "applies": {
+          "max_layers": 1,
+          "min_layers": 1
+        },
         "category": "drill",
+        "conditions": "drilled hole diameter range for 1-layer boards",
+        "excerpt": "1-layer: 0.3 \u2013 6.3 mm",
+        "name": "drill_diameter 1-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "max": 6.3,
+          "min": 0.3
+        }
+      },
+      "drill_diameter 2-layer (capabilities)": {
+        "applies": {
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "drill",
+        "conditions": "drilled hole diameter range for 2-layer boards",
+        "excerpt": "2-layer: 0.15 \u2013 6.3 mm",
+        "name": "drill_diameter 2-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "max": 6.3,
+          "min": 0.15
+        }
+      },
+      "drill_diameter multilayer (capabilities)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 4
+        },
+        "category": "drill",
+        "conditions": "drilled hole diameter range for multilayer boards",
         "excerpt": "Multilayer: 0.15 \u2013 6.3 mm",
-        "name": "drill_diameter_multilayer_mm",
+        "name": "drill_diameter multilayer (capabilities)",
         "source": "capabilities",
         "units": "mm",
         "value": {
@@ -262,6 +328,23 @@
           2.0
         ]
       },
+      "fr4_thickness_options_mm (thickness-options)": {
+        "category": "board",
+        "conditions": "the same stated FR-4 thickness list, from the thickness resource page; corroborates the capabilities page",
+        "excerpt": "We offer the following thickness options: 0.4mm, 0.6mm, 0.8mm, 1.0mm, 1.2mm, 1.6mm, 2.0mm",
+        "name": "fr4_thickness_options_mm (thickness-options)",
+        "source": "thickness-options",
+        "units": "mm",
+        "value": [
+          0.4,
+          0.6,
+          0.8,
+          1.0,
+          1.2,
+          1.6,
+          2.0
+        ]
+      },
       "impedance_calculator_external_oz": {
         "category": "impedance",
         "conditions": "external copper weight the impedance calculator supports, although heavier is manufacturable",
@@ -334,6 +417,11 @@
         }
       },
       "inner_copper_default_oz": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 4,
+          "position": "inner"
+        },
         "category": "copper",
         "conditions": "stated default",
         "excerpt": "Finished copper weight of inner layer is 0.5oz by default",
@@ -343,6 +431,12 @@
         "value": 0.5
       },
       "inner_copper_fr4_oz": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 4,
+          "position": "inner"
+        },
+        "availability": "conditional",
         "category": "copper",
         "conditions": "FR-4 inner layer; availability depends on total layers and overall thickness (specifics not published)",
         "excerpt": "0.5oz (default), 1oz, 2oz",
@@ -356,6 +450,11 @@
         ]
       },
       "inner_copper_oz": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 4,
+          "position": "inner"
+        },
         "category": "copper",
         "excerpt": "Finished Inner Layer Copper\n0.5 oz / 1 oz / 2 oz",
         "name": "inner_copper_oz",
@@ -378,6 +477,11 @@
         }
       },
       "outer_copper_2layer_oz": {
+        "applies": {
+          "max_layers": 2,
+          "min_layers": 2,
+          "position": "outer"
+        },
         "category": "copper",
         "excerpt": "2-layer: 1 oz / 2 oz / 2.5 oz / 3.5 oz / 4.5oz\nMulti-layer",
         "name": "outer_copper_2layer_oz",
@@ -392,6 +496,11 @@
         ]
       },
       "outer_copper_fr4_2layer_heavy_oz": {
+        "applies": {
+          "max_layers": 2,
+          "min_layers": 2,
+          "position": "outer"
+        },
         "category": "copper",
         "conditions": "FR-4 outer layer, 2-layer boards only, special high-current",
         "excerpt": "2.5oz, 3.5oz, 4.5oz",
@@ -405,6 +514,11 @@
         ]
       },
       "outer_copper_fr4_standard_oz": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 1,
+          "position": "outer"
+        },
         "category": "copper",
         "conditions": "FR-4 outer layer, standard options",
         "excerpt": "1oz, 2oz (standard)",
@@ -417,6 +531,11 @@
         ]
       },
       "outer_copper_multilayer_oz": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 4,
+          "position": "outer"
+        },
         "category": "copper",
         "excerpt": "Multi-layer: 1 oz / 2 oz",
         "name": "outer_copper_multilayer_oz",
@@ -453,6 +572,36 @@
         "source": "impedance-calculator",
         "units": "mil",
         "value": 1.2
+      },
+      "thickness_restriction 0.4mm": {
+        "category": "board-thickness-restriction",
+        "conditions": "stated as not available for these layer counts; full sentence: For 0.4mm thickness boards, only ENIG finish is accepted. These boards cannot be made with a panel and are not available",
+        "excerpt": "For 0.4mm thickness boards, only ENIG finish is accepted. These boards cannot be made with a panel and are not available for 1-layer PCBs",
+        "name": "thickness_restriction 0.4mm",
+        "source": "thickness-options",
+        "units": "mm",
+        "value": {
+          "excluded_layer_counts": [
+            1
+          ],
+          "thickness_mm": 0.4
+        }
+      },
+      "thickness_restriction 0.6mm": {
+        "category": "board-thickness-restriction",
+        "conditions": "stated as not available for these layer counts; full sentence: Boards with 0.6mm thickness have a maximum size of 100mm x 100mm. This thickness is not available for 1-layer, 4-layer, ",
+        "excerpt": "Boards with 0.6mm thickness have a maximum size of 100mm x 100mm. This thickness is not available for 1-layer, 4-layer, or 6-layer PCBs",
+        "name": "thickness_restriction 0.6mm",
+        "source": "thickness-options",
+        "units": "mm",
+        "value": {
+          "excluded_layer_counts": [
+            1,
+            4,
+            6
+          ],
+          "thickness_mm": 0.6
+        }
       },
       "trace_coils_masked_1oz": {
         "category": "trace-coils",
@@ -735,10 +884,47 @@
         "units": "mil",
         "value": 0.7
       },
-      "via_multilayer_mm": {
+      "via 1-layer (capabilities)": {
+        "applies": {
+          "max_layers": 1,
+          "min_layers": 1
+        },
         "category": "via",
+        "conditions": "via hole size and via diameter minima for 1-layer boards; the page adds: NPTH only",
+        "excerpt": "1-layer (NPTH only): 0.3 mm hole size / 0.5 mm via diameter",
+        "name": "via 1-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "diameter": 0.5,
+          "hole": 0.3
+        }
+      },
+      "via 2-layer (capabilities)": {
+        "applies": {
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "via",
+        "conditions": "via hole size and via diameter minima for 2-layer boards",
+        "excerpt": "2-layer: 0.15mm hole size / 0.25mm via diameter",
+        "name": "via 2-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "diameter": 0.25,
+          "hole": 0.15
+        }
+      },
+      "via multilayer (capabilities)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 4
+        },
+        "category": "via",
+        "conditions": "via hole size and via diameter minima for multilayer boards",
         "excerpt": "Multilayer: 0.15 mm hole size / 0.25 mm via diameter",
-        "name": "via_multilayer_mm",
+        "name": "via multilayer (capabilities)",
         "source": "capabilities",
         "units": "mm",
         "value": {
@@ -4049,43 +4235,50 @@
       }
     }
   },
-  "normalized_sha256": "fd6b92a3449cd4ae5586b20e3bc2e459bacce87afaa87569a0419bcdf0ec284d",
+  "normalized_sha256": "7777d68d13ec2ab99cd9b847a9d0afc96f5c10fb95ade20bab2d0134194726c8",
   "outcome": "complete",
   "parser": {
     "id": "pcbqa.fabricators.jlcpcb",
-    "version": "3"
+    "version": "4"
   },
-  "replaced_normalized_sha256": "c01eac2fc111764513aa30bebd60f379cf220be9511569b322efe24efff25b04",
-  "retrieved_utc": "2026-08-25T13:45:02.787549+00:00",
+  "replaced_normalized_sha256": "fd6b92a3449cd4ae5586b20e3bc2e459bacce87afaa87569a0419bcdf0ec284d",
+  "retrieved_utc": "2026-08-25T15:52:10.479160+00:00",
   "schema_version": 3,
   "sources": [
     {
-      "bytes": 294085,
+      "bytes": 294087,
       "id": "impedance",
       "kind": "official-stackup-page",
-      "sha256_raw": "aea035bcdbc79d3211399f2922647f0faa3f8c76ad741777a036e92627f0fad4",
+      "sha256_raw": "efedd89db8e3c5c87ca08e8151184f5e78a0d29641f8ceb99d9ef844b2d144cf",
       "url": "https://jlcpcb.com/impedance"
     },
     {
-      "bytes": 134878,
+      "bytes": 134879,
       "id": "capabilities",
       "kind": "official-capabilities-page",
-      "sha256_raw": "191cec2a05f6b4ed202119c4b9e43076004e28a1b1b270178f7962069aee52b5",
+      "sha256_raw": "1fc1f7527e4f1a0080c9c190a7e43dc9d8a93cdc5273c794cec6e241353cf7a2",
       "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
     },
     {
-      "bytes": 109952,
+      "bytes": 109954,
       "id": "copper-weight",
       "kind": "official-help-article",
-      "sha256_raw": "10e5f95c4b4710c18d5fe267a83254d34589364ded28b6a79a6a66e649d10e28",
+      "sha256_raw": "cdedf7a4ed28900c1e6d5f29e6322e42b40a18bb783c3646e54fca5e5722e94c",
       "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
     },
     {
-      "bytes": 135788,
+      "bytes": 135792,
       "id": "impedance-calculator",
       "kind": "official-help-article",
-      "sha256_raw": "1e86ed5b0f36c46a21ce919f4bd8e40530d0d2aa6b99b5ec8d5750e83c03ef42",
+      "sha256_raw": "5aef22212cf7006799250c19ae21980eba1b42fb46694e93f49c04439a5c984b",
       "url": "https://jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator"
+    },
+    {
+      "bytes": 95027,
+      "id": "thickness-options",
+      "kind": "official-resource-page",
+      "sha256_raw": "2e8efb6ee24e3c9a47b854b00c19c5b1424a8cd2fb0e41735e80eaeaa2e17c1f",
+      "url": "https://jlcpcb.com/resources/pcb-thickness"
     }
   ]
 }

@@ -61,7 +61,7 @@ FABRICATOR = "jlcpcb"
 
 #: Bump when extraction logic changes meaning. A changed parser version with
 #: unchanged raw sources explains a changed normalized catalog by itself.
-PARSER_VERSION = "3"
+PARSER_VERSION = "4"
 
 SOURCES = (
     {"id": "impedance", "kind": "official-stackup-page",
@@ -73,6 +73,8 @@ SOURCES = (
     {"id": "impedance-calculator", "kind": "official-help-article",
      "url": "https://jlcpcb.com/help/article/"
             "user-guide-to-the-jlcpcb-impedance-calculator"},
+    {"id": "thickness-options", "kind": "official-resource-page",
+     "url": "https://jlcpcb.com/resources/pcb-thickness"},
 )
 
 
@@ -90,7 +92,11 @@ _MM = re.compile(r"^([0-9.]+)\s*mm$")
 
 
 def _text_lines(html):
-    text = _TAG.sub("\n", html)
+    # Non-breaking spaces are presentation: the page interleaves them
+    # freely with ordinary spaces (the 2-layer via row is written entirely
+    # with U+00A0), and a probe must not fail on which space a template
+    # happened to emit.
+    text = _TAG.sub("\n", html).replace(" ", " ").replace("&nbsp;", " ")
     return [line.strip() for line in text.split("\n") if line.strip()]
 
 
@@ -235,11 +241,17 @@ def _parse_section_options(body, layer_count, catalog):
         values, excerpt = _option_list(lines, anchor, pattern)
         identity = "{}L {}".format(layer_count, key)
         if values:
+            applies = {"min_layers": layer_count, "max_layers": layer_count}
+            if "outer" in key:
+                applies["position"] = "outer"
+            elif "inner" in key:
+                applies["position"] = "inner"
             catalog["capabilities"][identity] = model.capability(
                 source, identity, values, units=units,
                 conditions="{} copper layers, impedance-capable "
                            "constructions".format(layer_count),
-                excerpt=excerpt, category="stackup-options")
+                excerpt=excerpt, category="stackup-options",
+                applies=applies)
         else:
             catalog["not_extracted"].append({
                 "source": source, "field": identity,
@@ -441,42 +453,40 @@ def _parse_capabilities(html, catalog):
         ("layer_count_range", "layers",
          r"Layer count\n(\d+)-(\d+) Layers",
          lambda m: {"min": int(m.group(1)), "max": int(m.group(2))}, None,
-         None),
+         None, None),
         ("fr4_thickness_options_mm", "board",
          r"Thickness for FR4 are: ([\d./]+) ?mm \(([^)]*)\)",
          lambda m: [float(v) for v in m.group(1).split("/")], "mm",
-         lambda m: m.group(2)),
+         lambda m: m.group(2), None),
         ("board_thickness_range_mm", "board",
          r"Thickness\n0\.4 " + dash + r" ([\d.]+) ?mm",
-         lambda m: {"min": 0.4, "max": float(m.group(1))}, "mm", None),
+         lambda m: {"min": 0.4, "max": float(m.group(1))}, "mm", None,
+         None),
         ("outer_copper_multilayer_oz", "copper",
          r"Multi-layer: ((?:[\d.]+ ?oz(?: / )?)+)",
          lambda m: [float(v) for v in re.findall(r"[\d.]+", m.group(1))],
-         "oz", None),
+         "oz", None,
+         {"position": "outer", "min_layers": 4, "max_layers": None}),
         ("outer_copper_2layer_oz", "copper",
          r"2-layer: ((?:[\d.]+ ?oz(?: / )?)+)\nMulti-layer",
          lambda m: [float(v) for v in re.findall(r"[\d.]+", m.group(1))],
-         "oz", None),
+         "oz", None,
+         {"position": "outer", "min_layers": 2, "max_layers": 2}),
         ("inner_copper_oz", "copper",
          r"Finished Inner Layer Copper\n((?:[\d.]+ ?oz(?: / )?)+)",
          lambda m: [float(v) for v in re.findall(r"[\d.]+", m.group(1))],
-         "oz", None),
+         "oz", None,
+         {"position": "inner", "min_layers": 4, "max_layers": None}),
         ("inner_copper_default_oz", "copper",
          r"Finished copper weight of inner layer is ([\d.]+)oz by default",
          lambda m: float(m.group(1)), "oz",
-         lambda m: "stated default"),
-        ("drill_diameter_multilayer_mm", "drill",
-         r"Multilayer: ([\d.]+) " + dash + r" ([\d.]+) ?mm",
-         lambda m: {"min": float(m.group(1)), "max": float(m.group(2))},
-         "mm", None),
-        ("via_multilayer_mm", "via",
-         r"Multilayer: ([\d.]+) ?mm hole size / ([\d.]+) ?mm via diameter",
-         lambda m: {"hole": float(m.group(1)), "diameter": float(m.group(2))},
-         "mm", None),
+         lambda m: "stated default",
+         {"position": "inner", "min_layers": 4, "max_layers": None}),
     )
 
     matched = 0
-    for identity, category, pattern, extract, units, conditions in probes:
+    for identity, category, pattern, extract, units, conditions, applies \
+            in probes:
         found = re.search(pattern, text)
         if not found:
             catalog["not_extracted"].append({
@@ -488,7 +498,8 @@ def _parse_capabilities(html, catalog):
         catalog["capabilities"][identity] = model.capability(
             source, identity, extract(found), units=units,
             conditions=conditions(found) if conditions else None,
-            excerpt=found.group(0)[:160], category=category)
+            excerpt=found.group(0)[:160], category=category,
+            applies=applies)
     if matched < 5:
         raise ParseError(
             "capabilities page: only {} of {} anchored probes matched; the "
@@ -498,6 +509,78 @@ def _parse_capabilities(html, catalog):
     _parse_traces_table(text, catalog)
     _parse_trace_coils(text, catalog)
     _parse_layer_counts(text, catalog)
+    _parse_drills_and_vias(text, catalog)
+
+
+#: The page's board classes, as it words them, with the layer counts each
+#: covers. "Multilayer" sits beside explicit 1-layer and 2-layer rows and
+#: the discrete offered counts have no 3, so it starts at 4.
+_BOARD_CLASSES = (
+    ("1-layer", 1, 1),
+    ("2-layer", 2, 2),
+    ("Multilayer", 4, None),
+)
+
+
+def _parse_drills_and_vias(text, catalog):
+    """The per-board-class drill and via rules, scoped as published.
+
+    The page states drill diameter ranges and via hole-size/diameter pairs
+    separately for 1-layer, 2-layer and multilayer boards; they are
+    normalized separately, one record per class with the class in
+    `applies`, so a selector can only ever consume the rule published for
+    the board in front of it. "Hole size" and "via diameter" are the
+    page's own two quantities and stay two fields; nothing collapses them.
+    """
+    source = "capabilities"
+    emitted = 0
+    for label, low, high in _BOARD_CLASSES:
+        drill = re.search(
+            r"{}: ([\d.]+) [-\u2013] ([\d.]+) ?mm".format(label), text)
+        if drill:
+            identity = "drill_diameter {} (capabilities)".format(
+                label.lower())
+            catalog["capabilities"][identity] = model.capability(
+                source, identity,
+                {"min": float(drill.group(1)), "max": float(drill.group(2))},
+                units="mm",
+                conditions="drilled hole diameter range for {} "
+                           "boards".format(label.lower()),
+                excerpt=drill.group(0)[:160], category="drill",
+                applies={"min_layers": low, "max_layers": high})
+            emitted += 1
+        else:
+            catalog["not_extracted"].append({
+                "source": source,
+                "field": "drill_diameter {}".format(label.lower()),
+                "reason": "drill row not found where last published"})
+        via = re.search(
+            r"{}(?: \(([^)]+)\))?: ([\d.]+) ?mm hole size / ([\d.]+) ?mm "
+            r"via diameter".format(label), text)
+        if via:
+            identity = "via {} (capabilities)".format(label.lower())
+            conditions = ("via hole size and via diameter minima for {} "
+                          "boards".format(label.lower()))
+            if via.group(1):
+                conditions += "; the page adds: {}".format(via.group(1))
+            catalog["capabilities"][identity] = model.capability(
+                source, identity,
+                {"hole": float(via.group(2)),
+                 "diameter": float(via.group(3))},
+                units="mm", conditions=conditions,
+                excerpt=via.group(0)[:160], category="via",
+                applies={"min_layers": low, "max_layers": high})
+            emitted += 1
+        else:
+            catalog["not_extracted"].append({
+                "source": source, "field": "via {}".format(label.lower()),
+                "reason": "via row not found where last published"})
+    if emitted < 5:
+        raise ParseError(
+            "capabilities page: only {} of 6 per-class drill/via rules "
+            "parsed; the drilling section has changed shape and a catalog "
+            "without its scoping would let one board class borrow "
+            "another's limits".format(emitted))
 
 
 _IMPEDANCE_LAYERS = re.compile(
@@ -970,6 +1053,85 @@ def _parse_impedance_calculator(html, catalog):
                 emitted_cores, emitted_prepregs))
 
 
+
+# ---------------------------------------------------------------------------
+# thickness resource page: the layer-count restrictions the global list hides
+# ---------------------------------------------------------------------------
+
+def _parse_thickness_options(html, catalog):
+    """The per-thickness layer-count restrictions, as published.
+
+    The capabilities page states one global FR-4 thickness list; this page
+    states which of those thicknesses are NOT available for which layer
+    counts ("0.6mm ... not available for 1-layer, 4-layer, or 6-layer
+    PCBs"). Restrictions are normalized as their own records so ordinary
+    feasibility can subtract them from the global list - a pair the
+    fabricator forbids must not pass because each half exists somewhere.
+    The page's own semantics are list-minus-stated-restrictions; nothing
+    here invents a restriction the page does not state, and nothing reads
+    the list as narrower than the page says.
+    """
+    source = "thickness-options"
+    text = "\n".join(_text_lines(html))
+
+    stated = re.search(
+        r"We offer the following thickness options: ((?:[\d.]+ ?mm, )+"
+        r"[\d.]+ ?mm)", text)
+    if not stated:
+        raise ParseError(
+            "thickness page: the stated options list is gone; without it "
+            "the restriction statements have no list to restrict")
+    values = [float(v) for v in re.findall(r"[\d.]+", stated.group(1))]
+    catalog["capabilities"]["fr4_thickness_options_mm (thickness-options)"] \
+        = model.capability(
+            source, "fr4_thickness_options_mm (thickness-options)",
+            values, units="mm",
+            conditions="the same stated FR-4 thickness list, from the "
+                       "thickness resource page; corroborates the "
+                       "capabilities page",
+            excerpt=stated.group(0)[:160], category="board")
+
+    emitted = 0
+    for thickness, pattern in (
+            (0.4, r"For 0\.4 ?mm thickness boards, ([^.]+\.)?[^.]*?not "
+                  r"available for ((?:[\d]+-layer(?:,? (?:or )?)?)+) "
+                  r"PCBs"),
+            (0.6, r"Boards with 0\.6 ?mm thickness[^.]*\.[^.]*?not "
+                  r"available for ((?:[\d]+-layer(?:,? (?:or )?)?)+) "
+                  r"PCBs")):
+        found = re.search(pattern, text)
+        if not found:
+            catalog["not_extracted"].append({
+                "source": source,
+                "field": "thickness_restriction {}mm".format(thickness),
+                "reason": "restriction statement not found where last "
+                          "published"})
+            continue
+        counts = [int(v) for v in re.findall(r"(\d+)-layer",
+                                             found.group(0))]
+        if not counts:
+            raise ParseError(
+                "thickness page: a restriction sentence matched but named "
+                "no layer counts; refusing a restriction that cannot be "
+                "applied")
+        identity = "thickness_restriction {}mm".format(thickness)
+        catalog["capabilities"][identity] = model.capability(
+            source, identity,
+            {"thickness_mm": thickness,
+             "excluded_layer_counts": sorted(set(counts))},
+            units="mm",
+            conditions="stated as not available for these layer counts; "
+                       "full sentence: {}".format(found.group(0)[:120]),
+            excerpt=found.group(0)[:160],
+            category="board-thickness-restriction")
+        emitted += 1
+    if emitted < 2:
+        raise ParseError(
+            "thickness page: only {} of 2 known restriction statements "
+            "parsed; a catalog without them would re-widen pairs the "
+            "fabricator forbids".format(emitted))
+
+
 # ---------------------------------------------------------------------------
 # copper-weight guide: the oz bridge and its design-rule table
 # ---------------------------------------------------------------------------
@@ -998,21 +1160,34 @@ def _parse_copper_weight(html, catalog):
             excerpt=found.group(0)[:160], category="definition")
 
     # -- available weights per layer position ------------------------------
-    for identity, anchor, conditions in (
+    for identity, anchor, conditions, applies, availability in (
             ("outer_copper_fr4_standard_oz", "1oz, 2oz (standard)",
-             "FR-4 outer layer, standard options"),
+             "FR-4 outer layer, standard options",
+             {"position": "outer", "min_layers": 1, "max_layers": None},
+             None),
             ("outer_copper_fr4_2layer_heavy_oz", "2.5oz, 3.5oz, 4.5oz",
-             "FR-4 outer layer, 2-layer boards only, special high-current"),
+             "FR-4 outer layer, 2-layer boards only, special high-current",
+             {"position": "outer", "min_layers": 2, "max_layers": 2},
+             None),
             ("inner_copper_fr4_oz", "0.5oz (default), 1oz, 2oz",
              "FR-4 inner layer; availability depends on total layers and "
-             "overall thickness (specifics not published)")):
+             "overall thickness (specifics not published)",
+             {"position": "inner", "min_layers": 4, "max_layers": None},
+             "conditional")):
         for line in lines:
             if line.startswith(anchor):
                 values = [_oz_token(v) for v in _OZ_LIST.findall(line)]
-                catalog["capabilities"][identity] = model.capability(
+                record = model.capability(
                     source, identity, values, units="oz",
                     conditions=conditions, excerpt=line[:160],
-                    category="copper")
+                    category="copper", applies=applies)
+                if availability is not None:
+                    # The page itself says which factors availability
+                    # depends on without publishing the mapping; the flag
+                    # carries that statement so a selector can refuse to
+                    # read the bare list as proof of any particular tuple.
+                    record["availability"] = availability
+                catalog["capabilities"][identity] = record
                 break
         else:
             catalog["not_extracted"].append({
@@ -1138,6 +1313,8 @@ def parse(raw_sources):
         catalog)
     _parse_capabilities(
         raw_sources["capabilities"].decode("utf-8", "ignore"), catalog)
+    _parse_thickness_options(
+        raw_sources["thickness-options"].decode("utf-8", "ignore"), catalog)
     _parse_impedance(
         raw_sources["impedance"].decode("utf-8", "ignore"), catalog)
     return model.validate_catalog(catalog)

@@ -71,6 +71,16 @@ class SelectionError(Exception):
 
 
 def _require_number(requirements, key, required=False):
+    """One numeric requirement, validated to death at the boundary.
+
+    Every numeric requirement here is a physical dimension or a copper
+    weight: a finite, strictly positive number. Everything else refuses -
+    booleans (which Python would happily compare as 0 and 1), strings
+    (even numeric-looking ones; the schema is JSON numbers), NaN (which
+    silently fails BOTH sides of every comparison, so a NaN dimension
+    would sail past pass and fail checks alike), infinities, zeros and
+    negatives. A malformed requirement must never become a skipped one.
+    """
     value = requirements.get(key)
     if value is None:
         if required:
@@ -80,6 +90,15 @@ def _require_number(requirements, key, required=False):
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise SelectionError("{!r} is {!r}, not a number".format(key, value))
+    if value != value or value in (float("inf"), float("-inf")):
+        raise SelectionError(
+            "{!r} is {!r}, which is not a finite number; NaN and infinity "
+            "compare as nothing and would skip every check".format(
+                key, value))
+    if value <= 0:
+        raise SelectionError(
+            "{!r} is {!r}; a physical requirement must be strictly "
+            "positive".format(key, value))
     return value
 
 
@@ -106,7 +125,20 @@ def select(catalog, requirements):
             "requirements must state copper_layers as a positive integer")
     thickness = _require_number(requirements, "board_thickness_mm",
                                 required=True)
-    impedance = bool(requirements.get("impedance_control", False))
+    impedance = requirements.get("impedance_control", False)
+    if impedance is None:
+        impedance = False
+    if not isinstance(impedance, bool):
+        # bool("false") is True; 1 is not a decision. The requirement is a
+        # JSON boolean or absent (absent means no impedance requirement),
+        # and anything else is a malformed input, not a lenient no.
+        raise SelectionError(
+            "impedance_control is {!r}; it must be true, false, or absent "
+            "(absent means no impedance requirement)".format(impedance))
+    material = requirements.get("material", "FR4")
+    if not isinstance(material, str) or not material:
+        raise SelectionError(
+            "material is {!r}, not a material name".format(material))
 
     capabilities = catalog.get("capabilities", {})
     rejections = []
@@ -157,7 +189,6 @@ def select(catalog, requirements):
                         layers, low, high, layer_range["source"]))
 
     # -- board thickness, coupled to the layer count and mode --------------
-    material = requirements.get("material", "FR4")
     if material != "FR4":
         rejections.append({
             "requirement": "material",
@@ -197,9 +228,18 @@ def select(catalog, requirements):
         if thickness_options is not None:
             heavy = capabilities.get("fr4_thickness_2p5mm_plus")
             if thickness in thickness_options["value"]:
-                explanations.append(
-                    "{} mm is a stated standard FR-4 thickness "
-                    "[{}]".format(thickness, thickness_options["source"]))
+                problem = _thickness_restriction(capabilities, thickness,
+                                                 layers)
+                if problem is not None:
+                    rejections.append({
+                        "requirement": "board_thickness_mm",
+                        "issue": problem})
+                else:
+                    explanations.append(
+                        "{} mm is a stated standard FR-4 thickness with no "
+                        "stated restriction for {} layers "
+                        "[{}]".format(thickness, layers,
+                                      thickness_options["source"]))
             elif heavy is not None and \
                     thickness >= heavy["value"]["min"]:
                 minimum_layers = (heavy.get("applies") or {}).get(
@@ -225,21 +265,22 @@ def select(catalog, requirements):
     # The trace/space limits and the stackup tables are both conditioned on
     # copper weight, so the profile's weights are fixed before anything that
     # depends on them is judged: one configuration, judged coherently.
-    section = "{}L".format(layers)
-    outer_options = capabilities.get(section + " outer_copper_options") \
-        or capabilities.get("outer_copper_multilayer_oz")
-    inner_options = capabilities.get(section + " inner_copper_options") \
-        or capabilities.get("inner_copper_oz")
+    # Only records whose stated scope covers THIS board class are consulted
+    # - a 2-layer board never borrows the multilayer option list and a
+    # 1-layer board never borrows anyone's, because "an option exists for
+    # some other class" proves nothing about this one.
     inner_default = capabilities.get("inner_copper_default_oz")
 
     outer_oz = _pick_weight(
         "outer", _require_number(requirements, "outer_copper_oz"),
-        outer_options, None, rejections, explanations)
+        _copper_records(capabilities, "outer", layers), None,
+        rejections, explanations)
     inner_oz = None
     if layers > 2:
         inner_oz = _pick_weight(
             "inner", _require_number(requirements, "inner_copper_oz"),
-            inner_options, inner_default, rejections, explanations)
+            _copper_records(capabilities, "inner", layers), inner_default,
+            rejections, explanations)
     elif requirements.get("inner_copper_oz") is not None:
         rejections.append({
             "requirement": "inner_copper_oz",
@@ -299,51 +340,52 @@ def select(catalog, requirements):
                         track, space, minimum_track, minimum_space,
                         which_weight(weight), which, layers, cited))
 
-    # -- drill and via -----------------------------------------------------
-    # The published limits are conditioned on multilayer boards. A stated
-    # requirement the catalog holds no limit for is unverifiable, and an
-    # unverifiable requirement rejects - it must never be quietly skipped
-    # because the board's layer count falls outside the limit's scope.
+    # -- drill and via, from the board class's own published rules ---------
+    # The page states these separately for 1-layer, 2-layer and multilayer
+    # boards, and the selector consults only the record whose stated scope
+    # covers this board - never a neighbouring class's rule. A record that
+    # does not carry the expected published quantities refuses rather than
+    # guesses which of its numbers means what.
     drill = _require_number(requirements, "min_drill_mm")
     if drill is not None:
-        if layers < 2:
+        record, problem = _scoped_rule(capabilities, "drill", layers,
+                                       ("min", "max"))
+        if problem is not None:
+            rejections.append({"requirement": "min_drill_mm",
+                               "issue": problem})
+        elif drill < record["value"]["min"]:
             rejections.append({
                 "requirement": "min_drill_mm",
-                "issue": "the published drill limits are stated for "
-                         "multilayer boards; no limit for a {}-layer board "
-                         "is in the approved catalog, and unknown is not "
-                         "supported".format(layers)})
+                "issue": "the design drills {} mm; the stated minimum for "
+                         "this board class is {} mm [{}]".format(
+                             drill, record["value"]["min"],
+                             record["source"])})
         else:
-            drill_capability = capability("drill_diameter_multilayer_mm",
-                                          "min_drill_mm")
-            if drill_capability is not None:
-                if drill < drill_capability["value"]["min"]:
-                    rejections.append({
-                        "requirement": "min_drill_mm",
-                        "issue": "the design drills {} mm; the stated "
-                                 "minimum is {} mm".format(
-                                     drill,
-                                     drill_capability["value"]["min"])})
+            explanations.append(
+                "the {} mm minimum drill clears the stated {}-{} mm "
+                "drilled-hole range for this board class [{}]".format(
+                    drill, record["value"]["min"], record["value"]["max"],
+                    record["source"]))
     via = _require_number(requirements, "min_via_diameter_mm")
     if via is not None:
-        if layers < 2:
+        record, problem = _scoped_rule(capabilities, "via", layers,
+                                       ("hole", "diameter"))
+        if problem is not None:
+            rejections.append({"requirement": "min_via_diameter_mm",
+                               "issue": problem})
+        elif via < record["value"]["diameter"]:
             rejections.append({
                 "requirement": "min_via_diameter_mm",
-                "issue": "the published via limits are stated for "
-                         "multilayer boards; no limit for a {}-layer board "
-                         "is in the approved catalog, and unknown is not "
-                         "supported".format(layers)})
+                "issue": "the design uses {} mm vias; the stated minimum "
+                         "via diameter for this board class is {} mm "
+                         "[{}]".format(via, record["value"]["diameter"],
+                                       record["source"])})
         else:
-            via_capability = capability("via_multilayer_mm",
-                                        "min_via_diameter_mm")
-            if via_capability is not None:
-                if via < via_capability["value"]["diameter"]:
-                    rejections.append({
-                        "requirement": "min_via_diameter_mm",
-                        "issue": "the design uses {} mm vias; the stated "
-                                 "minimum diameter is {} mm".format(
-                                     via,
-                                     via_capability["value"]["diameter"])})
+            explanations.append(
+                "the {} mm minimum via diameter clears the stated {} mm "
+                "minimum for this board class ({}) [{}]".format(
+                    via, record["value"]["diameter"],
+                    record.get("conditions"), record["source"]))
 
     profile = {"copper_layers": layers, "board_thickness_mm": thickness,
                "impedance_control": impedance,
@@ -446,41 +488,181 @@ def _trace_limits(capabilities, weight, layer_count):
     return applicable
 
 
-def _pick_weight(which, required, options, stated_default, rejections,
+def _copper_records(capabilities, position, layers):
+    """Every copper option record whose stated scope covers this board."""
+    records = []
+    for identity in sorted(capabilities):
+        record = capabilities[identity]
+        if record.get("category") not in ("copper", "stackup-options"):
+            continue
+        applies = record.get("applies") or {}
+        if applies.get("position") != position:
+            continue
+        low = applies.get("min_layers") or 1
+        high = applies.get("max_layers")
+        if layers < low or (high is not None and layers > high):
+            continue
+        records.append(record)
+    return records
+
+
+def _pick_weight(which, required, records, stated_default, rejections,
                  explanations):
-    """One copper weight: the requirement, checked; else the least."""
-    if options is None:
+    """One copper weight, from records scoped to this board class.
+
+    A value counts as offered when a covering record with UNCONDITIONAL
+    availability lists it. A record the fabricator itself qualifies with
+    "availability depends on <unpublished factors>" poisons everything but
+    the stated default: it announces that the bare list is not the whole
+    truth, so a non-default weight backed only by such lists - or listed
+    beside them - is unknown, and unknown is not supported.
+    """
+    if not records:
         if required is not None:
             rejections.append({
                 "requirement": which + "_copper_oz",
-                "issue": "no {} copper options are in the approved catalog, "
-                         "so {} oz cannot be verified as "
-                         "offered".format(which, required)})
+                "issue": "no {} copper option record in the approved "
+                         "catalog covers this board class, so {} oz cannot "
+                         "be verified as offered; an option stated for "
+                         "another class is not borrowed".format(
+                             which, "{:g}".format(required))})
         return None
-    offered = options["value"]
+    unconditional = [r for r in records
+                     if r.get("availability") != "conditional"]
+    conditional = [r for r in records
+                   if r.get("availability") == "conditional"]
+    offered = sorted({v for r in unconditional
+                      for v in (r["value"] if isinstance(r["value"], list)
+                                else [r["value"]])})
+    default_value = stated_default["value"] if stated_default else None
     if required is not None:
+        if conditional and required != default_value:
+            caveat = conditional[0]
+            rejections.append({
+                "requirement": which + "_copper_oz",
+                "issue": "the fabricator states that {} copper "
+                         "availability is conditional ({} [{}]); a "
+                         "non-default weight of {} oz cannot be proven "
+                         "from an option list the fabricator itself "
+                         "qualifies, and unknown is not supported".format(
+                             which, caveat.get("conditions"),
+                             caveat["source"], "{:g}".format(required))})
+            return None
         if required not in offered:
             rejections.append({
                 "requirement": which + "_copper_oz",
-                "issue": "{} oz {} copper is not among the offered options "
-                         "{}".format(required, which, offered)})
+                "issue": "{} oz {} copper is not among the options offered "
+                         "for this board class ({})".format(
+                             "{:g}".format(required), which, offered)})
             return None
+        cited = ", ".join(sorted({r["source"] for r in unconditional
+                                  if required in (
+                                      r["value"]
+                                      if isinstance(r["value"], list)
+                                      else [r["value"]])}))
         explanations.append(
-            "{} oz {} copper is an offered option [{}]".format(
-                required, which, options["source"]))
+            "{} oz {} copper is an offered option for this board class "
+            "[{}]".format("{:g}".format(required), which, cited))
         return required
-    if stated_default is not None and stated_default["value"] in offered:
+    if stated_default is not None and default_value in {
+            v for r in records for v in (
+                r["value"] if isinstance(r["value"], list)
+                else [r["value"]])}:
         explanations.append(
             "{} copper defaults to {} oz, the fabricator's stated default "
-            "[{}]".format(which, stated_default["value"],
-                          stated_default["source"]))
-        return stated_default["value"]
+            "[{}]".format(which, default_value, stated_default["source"]))
+        return default_value
+    if not offered:
+        rejections.append({
+            "requirement": which + "_copper_oz",
+            "issue": "every {} copper option record covering this board "
+                     "class carries the fabricator's own availability "
+                     "caveat and no stated default applies; nothing can "
+                     "be chosen from a list the fabricator "
+                     "qualifies".format(which)})
+        return None
     chosen = min(offered)
     explanations.append(
         "{} copper defaults to {} oz, the lightest offered option - a "
         "generic lowest-complexity preference of this selector, not a "
         "fabricator statement".format(which, chosen))
     return chosen
+
+
+def _scoped_rule(capabilities, category, layers, expected_keys):
+    """The one record of `category` whose stated scope covers this board.
+
+    Returns (record, None) or (None, refusal text). No record covering the
+    class means the capability is unknown for it; a covering record whose
+    value does not carry the expected published quantities means the
+    published terminology no longer maps to this requirement, and both
+    refuse rather than borrow or guess. Multiple covering records take
+    the strictest reading per quantity.
+    """
+    covering = []
+    for identity in sorted(capabilities):
+        record = capabilities[identity]
+        if record.get("category") != category:
+            continue
+        applies = record.get("applies") or {}
+        low = applies.get("min_layers") or 1
+        high = applies.get("max_layers")
+        if layers < low or (high is not None and layers > high):
+            continue
+        covering.append(record)
+    if not covering:
+        return None, ("no published {} rule covers a {}-layer board; "
+                      "unknown is not supported and another class's rule "
+                      "is not borrowed".format(category, layers))
+    for record in covering:
+        value = record.get("value")
+        if not isinstance(value, dict) or any(
+                not isinstance(value.get(key), (int, float))
+                for key in expected_keys):
+            return None, (
+                "the published {} rule covering this board class does not "
+                "carry the quantities this requirement needs ({}); the "
+                "page's terminology no longer maps safely and guessing "
+                "which number means what is refused".format(
+                    category, ", ".join(expected_keys)))
+    if len(covering) == 1:
+        return covering[0], None
+    strictest = dict(covering[0])
+    strictest["value"] = {key: max(r["value"][key] for r in covering)
+                          for key in expected_keys}
+    strictest["source"] = ", ".join(sorted({r["source"]
+                                            for r in covering}))
+    return strictest, None
+
+
+def _thickness_restriction(capabilities, thickness, layers):
+    """The stated restriction forbidding this pair, if one exists.
+
+    Returns the rejection text, or None when no stated restriction names
+    this thickness and layer count. A restriction record that cannot be
+    read as its published shape refuses the pair outright - a restriction
+    half-understood must not be a restriction skipped.
+    """
+    for identity in sorted(capabilities):
+        record = capabilities[identity]
+        if record.get("category") != "board-thickness-restriction":
+            continue
+        value = record.get("value")
+        if not isinstance(value, dict) \
+                or not isinstance(value.get("thickness_mm"), (int, float)) \
+                or not isinstance(value.get("excluded_layer_counts"), list):
+            return ("a thickness-restriction record ({}) cannot be read "
+                    "as its published shape; a restriction that cannot be "
+                    "applied refuses the pair rather than being "
+                    "skipped".format(identity))
+        if abs(value["thickness_mm"] - thickness) > 1e-9:
+            continue
+        if layers in value["excluded_layer_counts"]:
+            return ("{} mm is stated as not available for {}-layer boards "
+                    "({}) [{}]".format(thickness, layers,
+                                       record.get("conditions"),
+                                       record["source"]))
+    return None
 
 
 def _stackups(catalog, layers, thickness, impedance, outer_oz, inner_oz,

@@ -133,5 +133,67 @@
       }
     ],
     "to_normalized_sha256": "fd6b92a3449cd4ae5586b20e3bc2e459bacce87afaa87569a0419bcdf0ec284d"
+  },
+  {
+    "change_summary": [
+      "capability-added: drill_diameter 1-layer (capabilities)",
+      "capability-added: drill_diameter 2-layer (capabilities)",
+      "capability-added: drill_diameter multilayer (capabilities)",
+      "capability-added: fr4_thickness_options_mm (thickness-options)",
+      "capability-added: thickness_restriction 0.4mm",
+      "capability-added: thickness_restriction 0.6mm",
+      "capability-added: via 1-layer (capabilities)",
+      "capability-added: via 2-layer (capabilities)",
+      "capability-added: via multilayer (capabilities)",
+      "capability-removed: drill_diameter_multilayer_mm",
+      "capability-removed: via_multilayer_mm",
+      "capability-changed: 4L inner_copper_options",
+      "capability-changed: 4L inner_copper_options",
+      "capability-changed: 4L inner_copper_options",
+      "capability-changed: 4L outer_copper_options",
+      "capability-changed: 4L outer_copper_options",
+      "capability-changed: 4L outer_copper_options",
+      "capability-changed: 4L thickness_options",
+      "capability-changed: 4L thickness_options",
+      "capability-changed: 6L inner_copper_options"
+    ],
+    "from_normalized_sha256": "fd6b92a3449cd4ae5586b20e3bc2e459bacce87afaa87569a0419bcdf0ec284d",
+    "initial": false,
+    "note": "Parser v4, with the official thickness resource page (jlcpcb.com/resources/pcb-thickness) as a fifth source. Hand-reviewed: 9 additions (per-board-class drill and via rules read from the capabilities page's own 1-layer/2-layer/Multilayer rows; the stated 0.4mm and 0.6mm layer-count restrictions; a corroborating thickness list), 2 removals (the old unscoped drill/via records those class rows replace), 33 changes = machine-readable applies scopes on every copper option record plus the availability-conditional flag on the guide's inner-copper row, restating its own stated caveat. No fabricator value changed.",
+    "parser": {
+      "id": "pcbqa.fabricators.jlcpcb",
+      "version": "4"
+    },
+    "promoted_utc": "2026-08-25T15:52:35.037311+00:00",
+    "retrieved_utc": "2026-08-25T15:52:10.479160+00:00",
+    "semantic_changes": 44,
+    "sources": [
+      {
+        "id": "impedance",
+        "sha256_raw": "efedd89db8e3c5c87ca08e8151184f5e78a0d29641f8ceb99d9ef844b2d144cf",
+        "url": "https://jlcpcb.com/impedance"
+      },
+      {
+        "id": "capabilities",
+        "sha256_raw": "1fc1f7527e4f1a0080c9c190a7e43dc9d8a93cdc5273c794cec6e241353cf7a2",
+        "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
+      },
+      {
+        "id": "copper-weight",
+        "sha256_raw": "cdedf7a4ed28900c1e6d5f29e6322e42b40a18bb783c3646e54fca5e5722e94c",
+        "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
+      },
+      {
+        "id": "impedance-calculator",
+        "sha256_raw": "5aef22212cf7006799250c19ae21980eba1b42fb46694e93f49c04439a5c984b",
+        "url": "https://jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator"
+      },
+      {
+        "id": "thickness-options",
+        "sha256_raw": "2e8efb6ee24e3c9a47b854b00c19c5b1424a8cd2fb0e41735e80eaeaa2e17c1f",
+        "url": "https://jlcpcb.com/resources/pcb-thickness"
+      }
+    ],
+    "to_normalized_sha256": "7777d68d13ec2ab99cd9b847a9d0afc96f5c10fb95ade20bab2d0134194726c8"
   }
 ]

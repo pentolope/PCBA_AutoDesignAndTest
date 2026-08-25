@@ -50,7 +50,9 @@ def _raw_sources():
             "capabilities": _fixture_bytes("capabilities.fixture.html"),
             "copper-weight": _fixture_bytes("copper-weight.fixture.html"),
             "impedance-calculator":
-                _fixture_bytes("impedance-calculator.fixture.html")}
+                _fixture_bytes("impedance-calculator.fixture.html"),
+            "thickness-options":
+                _fixture_bytes("thickness-options.fixture.html")}
 
 
 def _fetcher(raw=None, fail=()):
@@ -794,19 +796,17 @@ class SelectionIsRequirementDriven(unittest.TestCase):
         self.assertIn("0.16", rejection["issue"])
         self.assertIn("2 oz outer", rejection["issue"])
 
-    def test_required_one_oz_inner_cannot_select_a_half_oz_construction(
-            self):
-        """The published constructions all describe the 0.5 oz-inner
-        build. A profile at 1 oz inner is orderable - but no published
-        construction describes it, so no stackup may be claimed."""
+    def test_required_one_oz_inner_is_unknown_not_orderable(self):
+        """The fabricator lists 1 oz inner copper - and states in the same
+        breath that inner availability depends on unpublished factors. A
+        list the fabricator itself qualifies proves nothing about this
+        build, so the profile is unknown and unknown is not feasible."""
         result = selection.select(self.catalog,
                                   _requirements(inner_copper_oz=1.0))
-        self.assertTrue(result["feasible"], result["rejections"])
-        self.assertIsNone(result["stackup"])
-        self.assertEqual(result["stackup_candidates"], [])
-        self.assertTrue(any("different copper build" in e
-                            for e in result["explanations"]),
-                        result["explanations"])
+        self.assertFalse(result["feasible"])
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "inner_copper_oz"][0]
+        self.assertIn("conditional", rejection["issue"])
 
     def test_required_two_oz_outer_cannot_select_a_one_oz_construction(
             self):
@@ -835,7 +835,8 @@ class SelectionIsRequirementDriven(unittest.TestCase):
 
     def test_unknown_capability_never_becomes_supported(self):
         catalog = copy.deepcopy(self.catalog)
-        del catalog["capabilities"]["drill_diameter_multilayer_mm"]
+        del catalog["capabilities"]["drill_diameter multilayer "
+                                    "(capabilities)"]
         result = selection.select(catalog, _requirements())
         self.assertFalse(result["feasible"])
         self.assertTrue(any("unknown is not supported" in r["issue"]
@@ -963,12 +964,19 @@ class ExportedStackupsCarryTheirProvenance(unittest.TestCase):
                 self.approved, _requirements(), ["F.Cu", "B.Cu"])
 
     def test_export_cannot_bypass_profile_compatibility(self):
-        """The 1 oz-inner profile is orderable, but no construction
-        describes it - and naming the 0.5 oz-inner construction by id
-        must not dress the board in it anyway."""
+        """Two bypass routes, both closed: an infeasible profile refuses
+        outright however plausible the named construction, and a feasible
+        profile with no matching construction refuses a construction id
+        published for a different build."""
         with self.assertRaises(selection.SelectionError) as caught:
             selection.export_physical_stackup(
                 self.approved, _requirements(inner_copper_oz=1.0),
+                ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"],
+                stackup_id="JLC-4L-no-requirement")
+        self.assertIn("feasible", str(caught.exception))
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                self.approved, _requirements(board_thickness_mm=0.8),
                 ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"],
                 stackup_id="JLC-4L-no-requirement")
         self.assertIn("did not publish", str(caught.exception))
@@ -1145,18 +1153,51 @@ class FeasibilityIsAboutCombinations(unittest.TestCase):
                      if r["requirement"] == "board_thickness_mm"][0]
         self.assertIn("not for this combination", rejection["issue"])
 
-    def test_a_stated_requirement_outside_a_limits_scope_rejects(self):
-        """A 1-layer board is an offered count, and the catalog's drill
-        and via limits are stated for multilayer boards only; a stated
-        drill requirement must reject as unverifiable, never be skipped
-        because the limit's scope excludes the board."""
-        result = selection.select(
+    def test_each_board_class_is_judged_on_its_own_drill_rules(self):
+        """0.2 mm drills pass the multilayer rule (0.15 mm floor) and fail
+        the 1-layer rule (0.3 mm floor); 0.45 mm vias pass multilayer
+        (0.25) and fail 1-layer (0.5). Neither class may borrow the
+        other's rule in either direction."""
+        multilayer = selection.select(
+            self.catalog, _requirements(min_drill_mm=0.2))
+        self.assertFalse(any(r["requirement"] == "min_drill_mm"
+                             for r in multilayer["rejections"]))
+        single = selection.select(
             self.catalog, _requirements(copper_layers=1,
-                                        inner_copper_oz=None))
-        self.assertFalse(result["feasible"])
-        requirements_hit = {r["requirement"] for r in result["rejections"]}
-        self.assertIn("min_drill_mm", requirements_hit)
-        self.assertIn("min_via_diameter_mm", requirements_hit)
+                                        inner_copper_oz=None,
+                                        min_drill_mm=0.2))
+        drill_rejections = [r for r in single["rejections"]
+                            if r["requirement"] == "min_drill_mm"]
+        self.assertTrue(drill_rejections)
+        self.assertIn("0.3", drill_rejections[0]["issue"])
+        via_rejections = [r for r in single["rejections"]
+                          if r["requirement"] == "min_via_diameter_mm"]
+        self.assertTrue(via_rejections)
+        self.assertIn("0.5", via_rejections[0]["issue"])
+
+    def test_two_layer_drill_and_via_use_two_layer_evidence(self):
+        result = selection.select(
+            self.catalog, _requirements(copper_layers=2,
+                                        inner_copper_oz=None,
+                                        min_drill_mm=0.2))
+        self.assertFalse(any(r["requirement"] in ("min_drill_mm",
+                                                  "min_via_diameter_mm")
+                             for r in result["rejections"]),
+                         result["rejections"])
+        cited = " ".join(result["explanations"])
+        self.assertIn("0.15-6.3 mm", cited)
+
+    def test_unreadable_scoped_rule_terminology_refuses(self):
+        """A via record whose value lost the published quantities must
+        refuse rather than guess which number means what."""
+        catalog = copy.deepcopy(self.catalog)
+        catalog["capabilities"]["via multilayer (capabilities)"][
+            "value"] = {"size": 0.25}
+        result = selection.select(catalog, _requirements())
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "min_via_diameter_mm"][0]
+        self.assertIn("terminology no longer maps safely",
+                      rejection["issue"])
 
     def test_unknown_layer_thickness_compatibility_refuses(self):
         catalog = copy.deepcopy(self.catalog)
@@ -1404,6 +1445,236 @@ class InterruptedTransitionsAreRecoverable(unittest.TestCase):
                          changed["normalized_sha256"])
         self.assertEqual(approved["replaced_normalized_sha256"], before)
         self.assertTrue(approved["approved_utc"])
+
+
+# ---------------------------------------------------------------------------
+# stated restrictions beat global lists; scopes never borrow
+# ---------------------------------------------------------------------------
+
+class StatedRestrictionsBeatGlobalLists(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = jlcpcb.parse(_raw_sources())
+
+    def test_a_globally_listed_thickness_respects_its_restriction(self):
+        """0.6 mm is in the global FR-4 list and stated as not available
+        for 4-layer boards; the pair rejects on the statement."""
+        result = selection.select(
+            self.catalog, _requirements(board_thickness_mm=0.6))
+        self.assertFalse(result["feasible"])
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "board_thickness_mm"][0]
+        self.assertIn("not available for 4-layer", rejection["issue"])
+
+    def test_the_same_thickness_passes_where_no_restriction_names_it(self):
+        """0.6 mm at 8 layers: the restriction names 1, 4 and 6 only."""
+        result = selection.select(
+            self.catalog, _requirements(copper_layers=8,
+                                        board_thickness_mm=0.6))
+        self.assertFalse(any(r["requirement"] == "board_thickness_mm"
+                             for r in result["rejections"]),
+                         result["rejections"])
+
+    def test_an_unreadable_restriction_record_refuses_the_pair(self):
+        catalog = copy.deepcopy(self.catalog)
+        catalog["capabilities"]["thickness_restriction 0.6mm"][
+            "value"] = {"mm": 0.6}
+        result = selection.select(
+            catalog, _requirements(board_thickness_mm=0.6,
+                                   copper_layers=8))
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "board_thickness_mm"][0]
+        self.assertIn("cannot be read", rejection["issue"])
+
+    def test_impedance_and_ordinary_thickness_rules_stay_distinct(self):
+        """0.8 mm: fine for an ordinary 4-layer board (global list, no
+        restriction), stated for 4-layer impedance sections too - but
+        1.0 mm at 6 layers shows the split: ordinary passes, impedance
+        rejects because the 6-layer section states 1.2-2.0 only."""
+        ordinary = selection.select(
+            self.catalog, _requirements(copper_layers=6,
+                                        board_thickness_mm=1.0))
+        self.assertFalse(any(r["requirement"] == "board_thickness_mm"
+                             for r in ordinary["rejections"]))
+        impedance = selection.select(
+            self.catalog, _requirements(copper_layers=6,
+                                        board_thickness_mm=1.0,
+                                        impedance_control=True))
+        self.assertTrue(any(r["requirement"] == "board_thickness_mm"
+                            for r in impedance["rejections"]))
+
+    def test_two_layer_heavy_copper_is_offered_on_its_own_evidence(self):
+        result = selection.select(
+            self.catalog, _requirements(copper_layers=2,
+                                        inner_copper_oz=None,
+                                        outer_copper_oz=3.5,
+                                        min_track_mm=0.3,
+                                        min_space_mm=0.3))
+        self.assertTrue(result["feasible"], result["rejections"])
+        self.assertEqual(result["profile"]["outer_copper_oz"], 3.5)
+
+    def test_two_layer_does_not_offer_unlisted_weights(self):
+        result = selection.select(
+            self.catalog, _requirements(copper_layers=2,
+                                        inner_copper_oz=None,
+                                        outer_copper_oz=5.0,
+                                        min_track_mm=0.3,
+                                        min_space_mm=0.3))
+        self.assertFalse(result["feasible"])
+        self.assertTrue(any("not among the options offered for this "
+                            "board class" in r["issue"]
+                            for r in result["rejections"]))
+
+    def test_multilayer_does_not_borrow_two_layer_heavy_copper(self):
+        result = selection.select(
+            self.catalog, _requirements(outer_copper_oz=3.5,
+                                        min_track_mm=0.3,
+                                        min_space_mm=0.3))
+        self.assertFalse(result["feasible"])
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "outer_copper_oz"][0]
+        self.assertIn("this board class", rejection["issue"])
+
+    def test_one_layer_copper_rests_on_records_that_cover_one_layer(self):
+        """The guide's FR-4 outer row covers every layer count; the
+        2-layer and multilayer capability rows do not cover 1. A 1-layer
+        board must resolve 1 oz from the guide record alone - visible in
+        the citation - and never from the class rows."""
+        result = selection.select(
+            self.catalog, _requirements(copper_layers=1,
+                                        inner_copper_oz=None,
+                                        min_via_diameter_mm=0.5))
+        self.assertTrue(result["feasible"], result["rejections"])
+        cited = [e for e in result["explanations"]
+                 if "outer copper is an offered option" in e][0]
+        self.assertIn("copper-weight", cited)
+        self.assertNotIn("impedance", cited)
+
+    def test_conditional_availability_does_not_prove_nondefault_inner(self):
+        """The fabricator itself says inner-copper availability depends on
+        unpublished factors; 1 oz inner is listed but cannot be proven
+        for any particular build, so it is unknown, not offered."""
+        result = selection.select(
+            self.catalog, _requirements(inner_copper_oz=1.0))
+        self.assertFalse(result["feasible"])
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "inner_copper_oz"][0]
+        self.assertIn("conditional", rejection["issue"])
+        self.assertIn("unknown is not supported", rejection["issue"])
+
+    def test_the_stated_default_inner_weight_remains_established(self):
+        result = selection.select(self.catalog, _requirements())
+        self.assertTrue(result["feasible"], result["rejections"])
+        self.assertEqual(result["profile"]["inner_copper_oz"], 0.5)
+
+
+# ---------------------------------------------------------------------------
+# the input boundary fails closed
+# ---------------------------------------------------------------------------
+
+class RequirementsFailClosedAtTheBoundary(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = jlcpcb.parse(_raw_sources())
+
+    NUMERIC_KEYS = ("board_thickness_mm", "min_track_mm", "min_space_mm",
+                    "min_drill_mm", "min_via_diameter_mm",
+                    "outer_copper_oz", "inner_copper_oz")
+
+    def _refuses(self, **overrides):
+        with self.assertRaises(selection.SelectionError):
+            selection.select(self.catalog, _requirements(**overrides))
+
+    def test_nan_never_slips_past_both_sides_of_a_comparison(self):
+        for key in self.NUMERIC_KEYS:
+            self._refuses(**{key: float("nan")})
+
+    def test_infinities_refuse(self):
+        for key in self.NUMERIC_KEYS:
+            self._refuses(**{key: float("inf")})
+            self._refuses(**{key: float("-inf")})
+
+    def test_zero_and_negative_dimensions_refuse(self):
+        for key in self.NUMERIC_KEYS:
+            self._refuses(**{key: 0})
+            self._refuses(**{key: -1.6})
+
+    def test_booleans_are_not_numbers(self):
+        for key in self.NUMERIC_KEYS:
+            self._refuses(**{key: True})
+
+    def test_numeric_strings_are_not_numbers(self):
+        for key in self.NUMERIC_KEYS:
+            self._refuses(**{key: "1.6"})
+
+    def test_impedance_control_is_a_boolean_or_absent(self):
+        for bad in ("false", "true", 0, 1, "no"):
+            self._refuses(impedance_control=bad)
+        requirements = _requirements()
+        del requirements["impedance_control"]
+        result = selection.select(self.catalog, requirements)
+        self.assertTrue(result["feasible"], result["rejections"])
+        result = selection.select(self.catalog,
+                                  _requirements(impedance_control=None))
+        self.assertTrue(result["feasible"], result["rejections"])
+
+    def test_material_must_be_a_name(self):
+        self._refuses(material=42)
+        self._refuses(material="")
+
+
+# ---------------------------------------------------------------------------
+# a verification is only worth the acquisition it can prove
+# ---------------------------------------------------------------------------
+
+class VerificationIsBoundToARealAcquisition(unittest.TestCase):
+
+    def _verified_store(self, tag):
+        store = _approved_store(tag)
+        FreshnessIsVerificationAge._age_approved(store, 40)
+        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
+                                             fetcher=_fetcher())
+        store.record_verification(snapshot)
+        assert store.freshness()["state"] == "current"
+        return store
+
+    def test_a_real_matching_verification_still_renews(self):
+        store = self._verified_store("realver")
+        self.assertEqual(store.freshness()["state"], "current")
+
+    def test_a_well_formed_forged_ledger_earns_nothing(self):
+        """Right digest, today's dates, plausible shape - but no complete
+        acquisition with that retrieval time exists, so it proves
+        nothing."""
+        store = self._verified_store("forge")
+        _rewrite_json(store.verification_path, lambda d: (
+            d.__setitem__("observed_retrieved_utc",
+                          "2026-08-25T00:00:00+00:00"),
+            d.__setitem__("verified_utc", "2026-08-25T00:00:01+00:00")))
+        self.assertEqual(store.freshness()["state"], "stale")
+
+    def test_an_altered_source_hash_earns_nothing(self):
+        store = self._verified_store("altver")
+
+        def corrupt(document):
+            document["sources"][0]["sha256_raw"] = "0" * 64
+        _rewrite_json(store.verification_path, corrupt)
+        self.assertEqual(store.freshness()["state"], "stale")
+
+    def test_a_vanished_backing_observation_earns_nothing(self):
+        store = self._verified_store("vanver")
+        os.unlink(store.observed_path)
+        if os.path.isfile(store.previous_path):
+            os.unlink(store.previous_path)
+        self.assertEqual(store.freshness()["state"], "stale")
+
+    def test_a_changed_parser_identity_earns_nothing(self):
+        store = self._verified_store("parver")
+        _rewrite_json(store.verification_path, lambda d: d["parser"]
+                      .__setitem__("version", "999"))
+        self.assertEqual(store.freshness()["state"], "stale")
 
 
 # ---------------------------------------------------------------------------

@@ -67,7 +67,7 @@ SNAPSHOT_SCHEMA_VERSION = 3
 #: store knowing any fabricator's names.
 KNOWN_SNAPSHOT_SCHEMAS = (1, 2, 3)
 
-VERIFICATION_SCHEMA_VERSION = 1
+VERIFICATION_SCHEMA_VERSION = 2
 
 OUTCOME_COMPLETE = "complete"
 OUTCOME_INCOMPLETE = "incomplete"
@@ -336,15 +336,25 @@ class CatalogStore:
                                    self.observed_evidence)
 
     def verification(self):
-        """The verification ledger, validated - or None, never a guess.
+        """The verification ledger, validated and PROVEN - or None.
 
         The ledger can renew freshness, which makes it operationally
         trust-relevant even though it can never alter approved semantics.
-        Any structural or semantic problem - unreadable JSON, an unknown
-        schema, missing fields, unparseable or reversed timestamps -
-        makes the ledger worth nothing rather than worth anything:
-        freshness falls back to the approved evidence age, which can only
-        make the catalog look older, never fresher.
+        Any structural problem - unreadable JSON, an unknown schema,
+        missing fields, unparseable or reversed timestamps - makes it
+        worth nothing. And a well-formed record earns nothing either
+        unless the store can still PROVE the acquisition it describes: a
+        complete observation must exist right now (as latest or its
+        one-deep history) whose retrieval time, parser identity, source
+        hash set and normalized digest all equal what the ledger claims -
+        which, because observations verify their own evidence bytes on
+        load, chains the ledger to actual raw source bytes on disk. A
+        hand-written record with the right shape and today's dates points
+        at no such acquisition and renews nothing; freshness falls back
+        to the approved evidence age, which can only make the catalog
+        look older, never fresher. A verification whose acquisition has
+        aged out of the one-deep history stops renewing too - deliberate:
+        a claim the store can no longer prove is a claim it stops making.
         """
         if not os.path.isfile(self.verification_path):
             return None
@@ -358,9 +368,13 @@ class CatalogStore:
         if record.get("schema_version") != VERIFICATION_SCHEMA_VERSION:
             return None
         for field in ("verified_utc", "approved_normalized_sha256",
-                      "observed_retrieved_utc", "parser"):
+                      "observed_retrieved_utc", "parser", "sources"):
             if not record.get(field):
                 return None
+        if not isinstance(record["sources"], list) or any(
+                not isinstance(s, dict) or not s.get("id")
+                or not s.get("sha256_raw") for s in record["sources"]):
+            return None
         if not isinstance(record["parser"], dict) \
                 or not record["parser"].get("id"):
             return None
@@ -372,7 +386,36 @@ class CatalogStore:
         if verified < retrieved:
             # A verification cannot predate the acquisition it verified.
             return None
+        if self._backing_observation(record) is None:
+            return None
         return record
+
+    def _backing_observation(self, record):
+        """The real acquisition a verification record describes, or None."""
+        claimed = {s["id"]: s["sha256_raw"] for s in record["sources"]}
+        for loader in (self.observed, self.previous_observed):
+            try:
+                snapshot = loader()
+            except StoreError:
+                continue
+            if snapshot is None:
+                continue
+            if snapshot.get("outcome") != OUTCOME_COMPLETE:
+                continue
+            if snapshot.get("normalized_sha256") != record[
+                    "approved_normalized_sha256"]:
+                continue
+            if snapshot.get("retrieved_utc") != record[
+                    "observed_retrieved_utc"]:
+                continue
+            if snapshot.get("parser") != record["parser"]:
+                continue
+            actual = {s.get("id"): s.get("sha256_raw")
+                      for s in snapshot.get("sources", [])}
+            if actual != claimed:
+                continue
+            return snapshot
+        return None
 
     # -- freshness ---------------------------------------------------------
     def freshness(self, max_age_days=FRESHNESS_DAYS_DEFAULT, now=None):
