@@ -3729,6 +3729,41 @@ class GeometryUncertaintyAndHardLimits(unittest.TestCase):
         return fixture.gates(only={"TIMING.INTERCONNECT_DELAY"})[
             "TIMING.INTERCONNECT_DELAY"]
 
+    def test_the_flag_names_omissions_not_the_intervals_lower_end(self):
+        """`delay_is_lower_bound` says "a nonnegative contribution was
+        omitted, so the truth's upper side exceeds the modelled sum". It
+        does NOT say the nominal is the interval's lower endpoint -
+        `delay_lower_ps` is, and geometric uncertainty can place it below
+        the nominal with the flag in either state. Two paths pin the
+        contract from both sides: an ambiguous tee whose lower endpoint
+        sits below its nominal with NO omission (flag false), and a
+        via-omitting path whose flag is true while its lower endpoint
+        equals its nominal (nothing geometric in play). The endpoints,
+        not the flag, are what the gates compare against limits.
+        """
+        def mutate(document, _project):
+            document["timing"]["interfaces"] = {
+                "tee": {"description": "x",
+                        "routes": _route([{"kind": "copper", "net": "SIG_T",
+                                           "from": "D3.1", "to": "L4.1"}],
+                                         "tee")},
+                "cut": {"description": "x",
+                        "routes": _route([{"kind": "copper", "net": "SIG_V",
+                                           "from": "D2.1", "to": "L3.1"}],
+                                         "layer_change")}}
+            document["timing"]["propagation"]["via_delay_model"] = {
+                "model": propagation.VIA_NONE,
+                "justification": "fixture: deliberate unbounded omission"}
+        fixture = make(mutate=mutate, tag="flagmeaning")
+        tee = _find(fixture, "tee")["delay"]
+        self.assertFalse(tee["delay_is_lower_bound"])
+        self.assertGreater(tee["geometric_uncertainty_ps"], 0.0)
+        self.assertLess(tee["delay_lower_ps"], tee["delay_ps"])
+        cut = _find(fixture, "layer_change")["delay"]
+        self.assertTrue(cut["delay_is_lower_bound"])
+        self.assertIsNone(cut["delay_upper_ps"])
+        self.assertEqual(cut["delay_lower_ps"], cut["delay_ps"])
+
     def test_delay_uncertainty_uses_the_paths_own_velocity(self):
         fixture = make(mutate=lambda d, _p: d["timing"].update(
             {"interfaces": {"tee": {

@@ -25,7 +25,23 @@ from __future__ import annotations
 import hashlib
 import json
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+#: Catalog schema versions this code knows how to read. A snapshot written by
+#: a newer toolkit is refused, not half-understood: the reader either knows
+#: what every field means or it does not read the file.
+KNOWN_SCHEMA_VERSIONS = (1, 2)
+
+#: How closely a published construction's summed layer thickness must agree
+#: with a nominal board thickness before the two are treated as describing
+#: the same build. Across every construction JLCPCB publishes for a 1.6 mm
+#: nominal, the layer sums observed span 1.4462-1.6504 mm - the finished
+#: board adds plating and solder mask over the raw stack, and the published
+#: tables round per layer - so the window has to admit a deviation of about
+#: 0.16 mm. It stays useful because consumers require the window to single
+#: out exactly ONE stated nominal; a sum that two options could claim is no
+#: claim at all.
+NOMINAL_TOLERANCE_MM = 0.2
 
 # Layer roles inside a normalized stackup.
 COPPER = "copper"
@@ -55,8 +71,11 @@ def canonical_json(document):
 #: They stay in the snapshot - the excerpt is why a reviewer can trust a
 #: value - but they must not move the semantic identity: a page redesign
 #: that re-words the sentence around an unchanged number is not a change
-#: to what the fabricator manufactures.
-NON_SEMANTIC_FIELDS = ("excerpt", "excerpt_sha256")
+#: to what the fabricator manufactures. The `*_basis` strings are the
+#: parser explaining where an applicability value came from - provenance
+#: prose, same class as an excerpt: the VALUES they explain stay semantic.
+NON_SEMANTIC_FIELDS = ("excerpt", "excerpt_sha256", "outer_basis",
+                       "inner_basis", "thickness_basis")
 
 
 def semantic_view(value):
@@ -92,13 +111,19 @@ def empty_catalog(fabricator):
 
 
 def capability(source, name, value, units=None, conditions=None, excerpt=None,
-               category=None):
+               category=None, applies=None):
     """One stated manufacturing capability or option set.
 
     `value` may be a number, a string, a list of options, or a
     ``{"min":..,"max":..}`` range - whatever the source actually states.
     `excerpt` is the matched source text, kept because the value alone cannot
     show a reviewer that the extraction read what it claims to have read.
+
+    `applies`, when present, is the machine-readable form of the record's
+    stated conditions - e.g. which copper weights and layer counts a
+    trace/space limit is published for - so a selector matches conditions
+    structurally instead of parsing prose. It restates `conditions`; it never
+    adds scope the source did not state.
     """
     record = {"source": source, "name": name, "value": value}
     if units is not None:
@@ -109,6 +134,8 @@ def capability(source, name, value, units=None, conditions=None, excerpt=None,
         record["excerpt"] = excerpt
     if category is not None:
         record["category"] = category
+    if applies is not None:
+        record["applies"] = applies
     return record
 
 
@@ -149,10 +176,13 @@ def validate_catalog(catalog):
     if not isinstance(catalog, dict):
         raise CatalogError("catalog is {}, not an object".format(
             type(catalog).__name__))
-    if catalog.get("schema_version") != SCHEMA_VERSION:
+    if catalog.get("schema_version") not in KNOWN_SCHEMA_VERSIONS:
         raise CatalogError(
-            "catalog schema_version {!r}; this validator implements "
-            "{}".format(catalog.get("schema_version"), SCHEMA_VERSION))
+            "catalog schema_version {!r} is not one this code understands "
+            "({}); refusing to half-read a document written under unknown "
+            "rules".format(catalog.get("schema_version"),
+                           ", ".join(str(v) for v in
+                                     KNOWN_SCHEMA_VERSIONS)))
     if not catalog.get("fabricator"):
         raise CatalogError("catalog names no fabricator")
     for section in ("capabilities", "materials", "stackups"):
@@ -185,6 +215,22 @@ def validate_catalog(catalog):
                 raise CatalogError(
                     "stackup {} states thickness {!r}, which is not a "
                     "positive length".format(identity, thickness))
+        applicability = stackup.get("applicability")
+        if applicability is not None:
+            if not isinstance(applicability, dict):
+                raise CatalogError(
+                    "stackup {} applicability is not an object".format(
+                        identity))
+            for field in ("nominal_thickness_mm", "outer_copper_weight_oz",
+                          "inner_copper_weight_oz"):
+                value = applicability.get(field)
+                if value is not None and (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or value <= 0):
+                    raise CatalogError(
+                        "stackup {} applicability {} is {!r}, not a "
+                        "positive number".format(identity, field, value))
     if not isinstance(catalog.get("not_extracted"), list):
         raise CatalogError("catalog not_extracted is not a list")
     return catalog

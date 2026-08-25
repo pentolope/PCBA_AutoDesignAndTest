@@ -49,12 +49,20 @@ def _flatten(prefix, value, out):
 
 def _record_changes(kind, subject, approved, observed, ignore=(),
                     prefix=""):
-    """Field-level changes between two records of the same identity."""
+    """Field-level changes between two records of the same identity.
+
+    Both records pass through `model.semantic_view` first, so the
+    evidence/presentation fields excluded from the semantic digest are
+    excluded here identically - at every nesting depth, not just the top
+    level. The two views of "what counts as a change" cannot drift apart.
+    """
     flat_approved, flat_observed = {}, {}
-    _flatten("", {k: v for k, v in approved.items() if k not in ignore},
-             flat_approved)
-    _flatten("", {k: v for k, v in observed.items() if k not in ignore},
-             flat_observed)
+    _flatten("", model.semantic_view(
+        {k: v for k, v in approved.items() if k not in ignore}),
+        flat_approved)
+    _flatten("", model.semantic_view(
+        {k: v for k, v in observed.items() if k not in ignore}),
+        flat_observed)
     changes = []
     for field in sorted(set(flat_approved) | set(flat_observed)):
         before = flat_approved.get(field)

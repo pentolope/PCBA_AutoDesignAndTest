@@ -1,6 +1,5 @@
 {
-  "approved_utc": "2026-08-24T23:47:06.369127+00:00",
-  "complete": true,
+  "approved_utc": "2026-08-25T04:12:39.422837+00:00",
   "errors": [],
   "fabricator": "jlcpcb",
   "kind": "approved",
@@ -95,6 +94,15 @@
           "min": 0.4
         }
       },
+      "copper_weight_equivalence_um_per_oz": {
+        "category": "definition",
+        "conditions": "fabricator-stated definition",
+        "excerpt": "1oz copper = copper thickness of 35 \u00b5m",
+        "name": "copper_weight_equivalence_um_per_oz",
+        "source": "copper-weight",
+        "units": "um/oz",
+        "value": 35.0
+      },
       "drill_diameter_multilayer_mm": {
         "category": "drill",
         "excerpt": "Multilayer: 0.15 \u2013 6.3 mm",
@@ -132,6 +140,19 @@
         "units": "oz",
         "value": 0.5
       },
+      "inner_copper_fr4_oz": {
+        "category": "copper",
+        "conditions": "FR-4 inner layer; availability depends on total layers and overall thickness (specifics not published)",
+        "excerpt": "0.5oz (default), 1oz, 2oz",
+        "name": "inner_copper_fr4_oz",
+        "source": "copper-weight",
+        "units": "oz",
+        "value": [
+          0.5,
+          1.0,
+          2.0
+        ]
+      },
       "inner_copper_oz": {
         "category": "copper",
         "excerpt": "Finished Inner Layer Copper\n0.5 oz / 1 oz / 2 oz",
@@ -154,18 +175,6 @@
           "min": 1
         }
       },
-      "min_trace_space_masked_1oz_mm": {
-        "category": "trace",
-        "conditions": "covered by solder mask, 1 oz copper",
-        "excerpt": "Minimum trace width/clearance: 0.15/0.15mm,  when traces are covered by solder mask (1oz)",
-        "name": "min_trace_space_masked_1oz_mm",
-        "source": "capabilities",
-        "units": "mm",
-        "value": {
-          "space": 0.15,
-          "track": 0.15
-        }
-      },
       "outer_copper_2layer_oz": {
         "category": "copper",
         "excerpt": "2-layer: 1 oz / 2 oz / 2.5 oz / 3.5 oz / 4.5oz\nMulti-layer",
@@ -180,6 +189,31 @@
           4.5
         ]
       },
+      "outer_copper_fr4_2layer_heavy_oz": {
+        "category": "copper",
+        "conditions": "FR-4 outer layer, 2-layer boards only, special high-current",
+        "excerpt": "2.5oz, 3.5oz, 4.5oz",
+        "name": "outer_copper_fr4_2layer_heavy_oz",
+        "source": "copper-weight",
+        "units": "oz",
+        "value": [
+          2.5,
+          3.5,
+          4.5
+        ]
+      },
+      "outer_copper_fr4_standard_oz": {
+        "category": "copper",
+        "conditions": "FR-4 outer layer, standard options",
+        "excerpt": "1oz, 2oz (standard)",
+        "name": "outer_copper_fr4_standard_oz",
+        "source": "copper-weight",
+        "units": "oz",
+        "value": [
+          1.0,
+          2.0
+        ]
+      },
       "outer_copper_multilayer_oz": {
         "category": "copper",
         "excerpt": "Multi-layer: 1 oz / 2 oz",
@@ -190,6 +224,278 @@
           1.0,
           2.0
         ]
+      },
+      "trace_coils_masked_1oz": {
+        "category": "trace-coils",
+        "conditions": "trace coils, covered by solder mask, 1 oz copper",
+        "excerpt": "Minimum trace width/clearance: 0.15/0.15mm,  when traces are covered by solder mask (1oz)",
+        "name": "trace_coils_masked_1oz",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.15,
+          "track": 0.15
+        }
+      },
+      "trace_coils_unmasked_1oz": {
+        "category": "trace-coils",
+        "conditions": "trace coils, not covered by solder mask, 1 oz copper, ENIG only",
+        "excerpt": "Minimum trace width/clearance: 0.25/0.25mm,  when traces are NOT covered by solder mask (1oz)",
+        "name": "trace_coils_unmasked_1oz",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.25,
+          "track": 0.25
+        }
+      },
+      "trace_space 0.5-1.0oz >=4-layers-fr4 (copper-weight)": {
+        "applies": {
+          "copper_weights_oz": [
+            0.5,
+            1.0
+          ],
+          "max_layers": null,
+          "min_layers": 4
+        },
+        "category": "trace",
+        "conditions": "0.5/1.0 oz finished copper, >=4 layers FR4 (track and space stated as one figure)",
+        "excerpt": "0.5oz or 1oz | \u2265 4 layers FR4 | 0.09 mm (3.5 mil); 3 mil available with extra cost",
+        "name": "trace_space 0.5-1.0oz >=4-layers-fr4 (copper-weight)",
+        "source": "copper-weight",
+        "units": "mm",
+        "value": {
+          "space": 0.09,
+          "track": 0.09
+        }
+      },
+      "trace_space 1.0oz 1-2-layers-fr4 (copper-weight)": {
+        "applies": {
+          "copper_weights_oz": [
+            1.0
+          ],
+          "max_layers": 2,
+          "min_layers": 1
+        },
+        "category": "trace",
+        "conditions": "1.0 oz finished copper, 1-2 layers FR4 (track and space stated as one figure)",
+        "excerpt": "1oz | 1\u20132 layers FR4 | 0.10 mm (4 mil)",
+        "name": "trace_space 1.0oz 1-2-layers-fr4 (copper-weight)",
+        "source": "copper-weight",
+        "units": "mm",
+        "value": {
+          "space": 0.1,
+          "track": 0.1
+        }
+      },
+      "trace_space 1.0oz 1-and-2-layer (capabilities)": {
+        "applies": {
+          "copper_weights_oz": [
+            1.0
+          ],
+          "max_layers": 2,
+          "min_layers": 1
+        },
+        "category": "trace",
+        "conditions": "1.0 oz finished copper, 1- and 2-layer",
+        "excerpt": "1- and 2-layer: 0.10 / 0.10 mm (4 / 4 mil)",
+        "name": "trace_space 1.0oz 1-and-2-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.1,
+          "track": 0.1
+        }
+      },
+      "trace_space 1.0oz multilayer (capabilities)": {
+        "applies": {
+          "copper_weights_oz": [
+            1.0
+          ],
+          "max_layers": null,
+          "min_layers": 4
+        },
+        "category": "trace",
+        "conditions": "1.0 oz finished copper, Multilayer",
+        "excerpt": "Multilayer: 0.09 / 0.09 mm (3.5 / 3.5 mil). 3 mil is acceptable in BGA fan-outs.",
+        "name": "trace_space 1.0oz multilayer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.09,
+          "track": 0.09
+        }
+      },
+      "trace_space 2.0oz 2-layer (capabilities)": {
+        "applies": {
+          "copper_weights_oz": [
+            2.0
+          ],
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "trace",
+        "conditions": "2.0 oz finished copper, 2-layer",
+        "excerpt": "2-layer: 0.16 / 0.16 mm (6.5 / 6.5 mil)",
+        "name": "trace_space 2.0oz 2-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.16,
+          "track": 0.16
+        }
+      },
+      "trace_space 2.0oz any-layer-fr4 (copper-weight)": {
+        "applies": {
+          "copper_weights_oz": [
+            2.0
+          ],
+          "max_layers": null,
+          "min_layers": 1
+        },
+        "category": "trace",
+        "conditions": "2.0 oz finished copper, any layer FR4 (track and space stated as one figure)",
+        "excerpt": "2oz | Any layer FR4 | 0.16 mm (6.5 mil)",
+        "name": "trace_space 2.0oz any-layer-fr4 (copper-weight)",
+        "source": "copper-weight",
+        "units": "mm",
+        "value": {
+          "space": 0.16,
+          "track": 0.16
+        }
+      },
+      "trace_space 2.0oz multilayer (capabilities)": {
+        "applies": {
+          "copper_weights_oz": [
+            2.0
+          ],
+          "max_layers": null,
+          "min_layers": 4
+        },
+        "category": "trace",
+        "conditions": "2.0 oz finished copper, Multilayer",
+        "excerpt": "Multilayer: 0.15 / 0.15 mm (6 / 6 mil)",
+        "name": "trace_space 2.0oz multilayer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.15,
+          "track": 0.15
+        }
+      },
+      "trace_space 2.5oz 2-layer (capabilities)": {
+        "applies": {
+          "copper_weights_oz": [
+            2.5
+          ],
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "trace",
+        "conditions": "2.5 oz finished copper, 2 layer",
+        "excerpt": "2 layer: 0.2/0.2mm(8mil/8mil)",
+        "name": "trace_space 2.5oz 2-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.2,
+          "track": 0.2
+        }
+      },
+      "trace_space 2.5oz 2-layer-fr4 (copper-weight)": {
+        "applies": {
+          "copper_weights_oz": [
+            2.5
+          ],
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "trace",
+        "conditions": "2.5 oz finished copper, 2-layer FR4 (track and space stated as one figure)",
+        "excerpt": "2.5oz | 2-layer FR4 | 0.20 mm (8 mil)",
+        "name": "trace_space 2.5oz 2-layer-fr4 (copper-weight)",
+        "source": "copper-weight",
+        "units": "mm",
+        "value": {
+          "space": 0.2,
+          "track": 0.2
+        }
+      },
+      "trace_space 3.5oz 2-layer (capabilities)": {
+        "applies": {
+          "copper_weights_oz": [
+            3.5
+          ],
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "trace",
+        "conditions": "3.5 oz finished copper, 2 layer",
+        "excerpt": "2 layer: 0.25/0.25mm(10mil/10mil)",
+        "name": "trace_space 3.5oz 2-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.25,
+          "track": 0.25
+        }
+      },
+      "trace_space 3.5oz 2-layer-fr4 (copper-weight)": {
+        "applies": {
+          "copper_weights_oz": [
+            3.5
+          ],
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "trace",
+        "conditions": "3.5 oz finished copper, 2-layer FR4 (track and space stated as one figure)",
+        "excerpt": "3.5oz | 2-layer FR4 | 0.25 mm (10 mil)",
+        "name": "trace_space 3.5oz 2-layer-fr4 (copper-weight)",
+        "source": "copper-weight",
+        "units": "mm",
+        "value": {
+          "space": 0.25,
+          "track": 0.25
+        }
+      },
+      "trace_space 4.5oz 2-layer (capabilities)": {
+        "applies": {
+          "copper_weights_oz": [
+            4.5
+          ],
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "trace",
+        "conditions": "4.5 oz finished copper, 2 layer",
+        "excerpt": "2 layer: 0.3/0.3mm(12mil/12mil)",
+        "name": "trace_space 4.5oz 2-layer (capabilities)",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "space": 0.3,
+          "track": 0.3
+        }
+      },
+      "trace_space 4.5oz 2-layer-fr4 (copper-weight)": {
+        "applies": {
+          "copper_weights_oz": [
+            4.5
+          ],
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "category": "trace",
+        "conditions": "4.5 oz finished copper, 2-layer FR4 (track and space stated as one figure)",
+        "excerpt": "4.5oz | 2-layer FR4 | 0.30 mm (12 mil)",
+        "name": "trace_space 4.5oz 2-layer-fr4 (copper-weight)",
+        "source": "copper-weight",
+        "units": "mm",
+        "value": {
+          "space": 0.3,
+          "track": 0.3
+        }
       },
       "via_multilayer_mm": {
         "category": "via",
@@ -241,10 +547,36 @@
         "source": "impedance"
       }
     },
-    "not_extracted": [],
-    "schema_version": 1,
+    "not_extracted": [
+      {
+        "field": "design rule '0.33oz' / 'FPC'",
+        "reason": "outside this adapter's rigid-FR-4 scope, or an unrecognised PCB type; not normalized",
+        "source": "copper-weight"
+      },
+      {
+        "field": "design rule '0.5oz' / 'FPC'",
+        "reason": "outside this adapter's rigid-FR-4 scope, or an unrecognised PCB type; not normalized",
+        "source": "copper-weight"
+      },
+      {
+        "field": "design rule '1oz' / 'FPC'",
+        "reason": "outside this adapter's rigid-FR-4 scope, or an unrecognised PCB type; not normalized",
+        "source": "copper-weight"
+      }
+    ],
+    "schema_version": 2,
     "stackups": {
       "JLC-4L-no-requirement": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "layer sum 1.5862 mm, nearest stated section thickness option; the page does not state this construction's nominal directly"
+        },
         "default_when_no_impedance_requirement": true,
         "excerpt_sha256": "822b9999100bea59974157d0f8032072d6e82312f6d04dc58257e8b814b21fbc",
         "layer_count_section": 4,
@@ -294,6 +626,16 @@
         "source": "impedance"
       },
       "JLC-6L-no-requirement": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "layer sum 1.546 mm, nearest stated section thickness option; the page does not state this construction's nominal directly"
+        },
         "default_when_no_impedance_requirement": true,
         "excerpt_sha256": "df0d6b968ae95cecaa3f01c3461f67a0e7feeec03c35b84bb25958a1cbcaf6e2",
         "layer_count_section": 6,
@@ -366,6 +708,16 @@
         "source": "impedance"
       },
       "JLC04161H-1080": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5182 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "6ed76ff5aa8dedcab7b00d5ecf8ab70c762178fc99c7510873913de29a4ef129",
         "layer_count_section": 4,
@@ -415,6 +767,16 @@
         "source": "impedance"
       },
       "JLC04161H-1080A": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.4862 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "692dbccad34870675dab41e155c146778a6f8cfd9f581874c6685bb347dfe3ed",
         "layer_count_section": 4,
@@ -478,6 +840,16 @@
         "source": "impedance"
       },
       "JLC04161H-2116": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5982 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "fb1360ae39402348abe09d076f1ba024821db2572b9bfb6206c5b9d106be26ae",
         "layer_count_section": 4,
@@ -527,6 +899,16 @@
         "source": "impedance"
       },
       "JLC04161H-2116A": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.6172 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "ccf4ae02261f587f54bbe168870653c21b5e5799825cf7e56c2a83e07844045e",
         "layer_count_section": 4,
@@ -604,6 +986,16 @@
         "source": "impedance"
       },
       "JLC04161H-2116B": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.6342 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "96b2b0414f2aafa8a05b12e2482ecb69cb8c885b479d213476e6bbd186395b69",
         "layer_count_section": 4,
@@ -667,6 +1059,16 @@
         "source": "impedance"
       },
       "JLC04161H-2116C": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5662 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "9163a724242d3665be410e7188cf32e7e48a59d95276751cd34bc292e1067a74",
         "layer_count_section": 4,
@@ -730,6 +1132,16 @@
         "source": "impedance"
       },
       "JLC04161H-2116D": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.4692 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "e9b2639006b9837de541bbbd710f89c71bc716d3c2dde5aef62b0560aa342669",
         "layer_count_section": 4,
@@ -793,6 +1205,16 @@
         "source": "impedance"
       },
       "JLC04161H-2116E": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.4462 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "0cc98336583ff13f45ffbb8252f2eebee5743118eb0f8586ea0242d244cc3bca",
         "layer_count_section": 4,
@@ -856,6 +1278,16 @@
         "source": "impedance"
       },
       "JLC04161H-3313": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5642 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "f437a586258a9aa93ca076f5f94294b8410e6fec64263aa37f31314b4af90991",
         "layer_count_section": 4,
@@ -905,6 +1337,16 @@
         "source": "impedance"
       },
       "JLC04161H-3313A": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5782 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "40bcd7f147270d52ceaa86f9b54d989f70558e0bbc993161c83a7acfa12aaaae",
         "layer_count_section": 4,
@@ -968,6 +1410,16 @@
         "source": "impedance"
       },
       "JLC04161H-7628": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5862 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "822b9999100bea59974157d0f8032072d6e82312f6d04dc58257e8b814b21fbc",
         "layer_count_section": 4,
@@ -1017,6 +1469,16 @@
         "source": "impedance"
       },
       "JLC04161H-7628A": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5542 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "10e52205816b6e49a026cd4b2a2ebdebe54062141ef2fa357bba1139ec33eb3c",
         "layer_count_section": 4,
@@ -1080,6 +1542,16 @@
         "source": "impedance"
       },
       "JLC04161H-7628B": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.6052 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "811cf8bddf2af18debfdc50d6c7d1eb3f44a0a94817723b2c64393e13a09c8a7",
         "layer_count_section": 4,
@@ -1157,6 +1629,16 @@
         "source": "impedance"
       },
       "JLC04161H-7628C": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5432 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "a53fdfa1ba8593b9ad00375a0c6d144d6501dabe68bae5d6161ba200aa87496a",
         "layer_count_section": 4,
@@ -1234,6 +1716,16 @@
         "source": "impedance"
       },
       "JLC04161H-7628E": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.5572 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "386c6bd200176975370bb50e01e64be48a0b85d9d4498fbf42b632d85b20ab5f",
         "layer_count_section": 4,
@@ -1297,6 +1789,16 @@
         "source": "impedance"
       },
       "JLC04161H-7628F": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.6432 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "91ee8b2d86d1b34e44d2dd9c72006f755f298d0eb3561e18d766cc6b15c408fa",
         "layer_count_section": 4,
@@ -1374,6 +1876,16 @@
         "source": "impedance"
       },
       "JLC04161H-7628G": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC04161), corroborated by the 1.6252 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "05ef000731bebd0e07cccb730cb5117f291092b3c9c2b003dd66ecefa77d2311",
         "layer_count_section": 4,
@@ -1451,6 +1963,16 @@
         "source": "impedance"
       },
       "JLC06161H-1080": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.594 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "d4892a88eb628190e9cc623118cd57c32f656fe475a3616aef762ef755d449ed",
         "layer_count_section": 6,
@@ -1523,6 +2045,16 @@
         "source": "impedance"
       },
       "JLC06161H-1080A": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.583 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "f748843bc1f514a668266312ed14a2ab3944f7f5c0beb39318fae37e04874db8",
         "layer_count_section": 6,
@@ -1595,6 +2127,16 @@
         "source": "impedance"
       },
       "JLC06161H-1080B": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.6044 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "bfd69c150c015766a7fd717dd1ca20a449343b3c7417abc6f6c7ad27eaca945b",
         "layer_count_section": 6,
@@ -1680,6 +2222,16 @@
         "source": "impedance"
       },
       "JLC06161H-2116": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5944 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "2d0560c5de59ea7dfbb81d29202886ef27f66aaa2ed733d2b38b37d22d29eab9",
         "layer_count_section": 6,
@@ -1773,6 +2325,16 @@
         "source": "impedance"
       },
       "JLC06161H-2116A": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5564 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "912b4208606a420ab864355e073d122f42715850140adb6e00659f14b1760ef2",
         "layer_count_section": 6,
@@ -1858,6 +2420,16 @@
         "source": "impedance"
       },
       "JLC06161H-2116B": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5164 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "b9d898902035ec7585d1e5944e9d8256be45be56b1e9dec59f63d7283d806c5e",
         "layer_count_section": 6,
@@ -1937,6 +2509,16 @@
         "source": "impedance"
       },
       "JLC06161H-3313": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5384 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "49ba17bbac986d4c94c0fabc2ee322cda4616e91c9f1396b6abd329a9198d01d",
         "layer_count_section": 6,
@@ -2009,6 +2591,16 @@
         "source": "impedance"
       },
       "JLC06161H-3313C": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.4524 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "136ed5303bfe6b35cf65253e6b60c7dc833a4222c0ece15f5322218908a18b2a",
         "layer_count_section": 6,
@@ -2102,6 +2694,16 @@
         "source": "impedance"
       },
       "JLC06161H-3313D": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5424 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "d32e122a3ac0d578418980695f8f9c2c80bde37df018990259dee211c9e138f3",
         "layer_count_section": 6,
@@ -2202,6 +2804,16 @@
         "source": "impedance"
       },
       "JLC06161H-3313E": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.6504 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "cce0ea9e877b88a38ee559cdb7485890b776b2d553e8b20b5c20b2ad609a6cfa",
         "layer_count_section": 6,
@@ -2287,6 +2899,16 @@
         "source": "impedance"
       },
       "JLC06161H-7628": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5544 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "bf2bdf9a81894750d375c3e4131d316d4bd83c906120cb2cc5fb6f0f368a641f",
         "layer_count_section": 6,
@@ -2359,6 +2981,16 @@
         "source": "impedance"
       },
       "JLC06161H-7628A": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5884 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "61b238fdd8f325b082113c9d0a337a9adee67b1f67095954fbc7a7fe61368946",
         "layer_count_section": 6,
@@ -2466,6 +3098,16 @@
         "source": "impedance"
       },
       "JLC06161H-7628B": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5724 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "04177f71410be81073c4dea7d282e92e66d45238c405f25bcffcc6397964f824",
         "layer_count_section": 6,
@@ -2559,6 +3201,16 @@
         "source": "impedance"
       },
       "JLC06161H-7628D": {
+        "applicability": {
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_copper_thickness_mm": 0.0152,
+          "inner_copper_weight_oz": 0.5,
+          "nominal_thickness_mm": 1.6,
+          "outer_basis": "stated 0.035 mm outer copper at the stated 35.0 um/oz equivalence [copper-weight]",
+          "outer_copper_thickness_mm": 0.035,
+          "outer_copper_weight_oz": 1.0,
+          "thickness_basis": "name-encoded (JLC06161), corroborated by the 1.5804 mm layer sum"
+        },
         "default_when_no_impedance_requirement": false,
         "excerpt_sha256": "3c789cbfe3dea446448f0ee1308f326052be5e0b044193f39d5baa17b7d8ceb4",
         "layer_count_section": 6,
@@ -2646,28 +3298,36 @@
       }
     }
   },
-  "normalized_sha256": "e92df834668837d223d2a1a5a611022f68b8d89d01a1d37539abc5e751a3b3a9",
+  "normalized_sha256": "c01eac2fc111764513aa30bebd60f379cf220be9511569b322efe24efff25b04",
+  "outcome": "complete",
   "parser": {
     "id": "pcbqa.fabricators.jlcpcb",
-    "version": "1"
+    "version": "2"
   },
-  "replaced_normalized_sha256": null,
-  "retrieved_utc": "2026-08-24T23:46:43.118085+00:00",
-  "schema_version": 1,
+  "replaced_normalized_sha256": "e92df834668837d223d2a1a5a611022f68b8d89d01a1d37539abc5e751a3b3a9",
+  "retrieved_utc": "2026-08-25T04:11:41.341837+00:00",
+  "schema_version": 2,
   "sources": [
     {
       "bytes": 297343,
       "id": "impedance",
       "kind": "official-stackup-page",
-      "sha256_raw": "74e6884aad8457b80638c7403f15a77f4338591992c075bffdf1dfae81d8fee0",
+      "sha256_raw": "a64ebd66e7b0db953c5bd5fa2f0ffd2e03eec983f16c01c15d9107d3c6b5bef8",
       "url": "https://jlcpcb.com/impedance"
     },
     {
-      "bytes": 138184,
+      "bytes": 137786,
       "id": "capabilities",
       "kind": "official-capabilities-page",
-      "sha256_raw": "6907f24ad947f5248298f86c058df537494b7e3af59bf934bb624d8dc25793d3",
+      "sha256_raw": "8c34f8347d5975e50870ee533c4afbbe6b62c5e2471634d32a266b77732cc1ea",
       "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
+    },
+    {
+      "bytes": 113214,
+      "id": "copper-weight",
+      "kind": "official-help-article",
+      "sha256_raw": "c068ad6c2a703eba68eb8ca6bf3ab267698f307c2f429ea74c505a88f09704b2",
+      "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
     }
   ]
 }

@@ -333,9 +333,14 @@ VIA_RESULT_FIELDS = ("from_layer", "to_layer", "model", "vertical_length_mm",
 #: Per path: the totals, how good they are, and what stopped them.
 #: `delay_ps` is None when some portion could not be evaluated at all;
 #: `delay_is_lower_bound` is True when every portion was evaluable but at
-#: least one contributes an unknown positive amount. A backend that cannot
-#: honour that distinction cannot be plugged in here, which is deliberate:
-#: it is the distinction the gates make their decisions on.
+#: least one omitted a known-nonnegative contribution, so the truth's upper
+#: side exceeds the modelled sum by an unknown (or separately bounded)
+#: amount. What the flag does NOT claim: that `delay_ps` is the interval's
+#: lower endpoint. `delay_lower_ps` is - geometric length uncertainty can
+#: place the true delay BELOW the modelled nominal even while the flag is
+#: true, and the interval endpoints, not this flag, are what the gates
+#: compare against limits. The flag names the presence of omissions; a
+#: backend that cannot honour that distinction cannot be plugged in here.
 PATH_RESULT_FIELDS = ("path", "source", "destination", "delay_ps",
                       "delay_lower_ps", "delay_upper_ps",
                       "delay_is_lower_bound", "omitted_bound_ps",
@@ -556,6 +561,18 @@ class ReferenceAssumption:
     `assumed_unreferenced_total_mm` on the path record and every use in
     `assumptions`, and nothing marked `ASSUMED_TRANSMISSION_LINE` ever
     reads as physically established geometry.
+
+    A stated limitation, deliberate until a spatial model exists: the
+    geometry walk sums missing-reference length per plane and never
+    records where along the run each gap sits, so this assumption cannot
+    tell the intended local condition (say, a via's antipad ring) from an
+    unrelated void on the same plane that happens to fit inside the same
+    bound. The declaration therefore authorizes a TOTAL, and a declarer
+    must size ``up_to_mm`` to the intended condition alone - tight, not
+    comfortable - and say in ``justification`` where that number comes
+    from, because the justification is the only provenance a reviewer
+    gets. Distinguishing gaps by position would need per-gap intervals
+    carried out of the geometry walk; nothing here fakes that today.
     """
 
     __slots__ = ("up_to_mm", "justification", "reference_layers",

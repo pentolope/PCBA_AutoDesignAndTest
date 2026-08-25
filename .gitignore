@@ -18,3 +18,4 @@ out/
 # Latest fabricator observations: fetched, unreviewed, trusted for nothing.
 # Only promoted (approved) catalogs and their evidence are committed.
 profiles/*/observed/
+profiles/*/catalog/verification.json

@@ -6,12 +6,13 @@ one thing - fetch the adapter's declared official sources, parse them, and
 record the result as the *observed* snapshot - and is built so its failures
 are inert:
 
-  * a fetch failure or timeout records an incomplete observation with the
-    per-source error, and an incomplete observation can never be promoted;
-  * a parse failure (page redesign, implausibly small result, unexpected
-    unit) refuses before anything normalized is written, and the raw bytes
-    that defeated the parser are still saved as observed evidence so the
-    failure is reproducible;
+  * a fetch failure or timeout records an INCOMPLETE attempt with the
+    per-source error; a parse failure (page redesign, implausibly small
+    result, unexpected unit) records a PARSE-FAILED attempt carrying the
+    exact raw bytes that defeated the parser. Either way the attempt
+    becomes the newest observed state - superseding any older successful
+    observation as "latest", so a failed acquisition can never leave an
+    old observation looking current - and neither can ever be promoted;
   * nothing here reads, writes, or even opens the approved snapshot.
 
 Every acquisition records the source URLs, retrieval time, raw byte digests
@@ -21,9 +22,6 @@ remain four distinguishable histories.
 """
 
 from __future__ import annotations
-
-import hashlib
-import os
 
 from . import adapter as _adapter
 from . import model, store as _store
@@ -54,9 +52,9 @@ def acquire(fabricator, root, timeout=DEFAULT_TIMEOUT_S, fetcher=None):
     `fetcher` is injectable (url -> bytes) so every failure mode is testable
     without a network and without depending on the fabricator being up.
 
-    Returns (snapshot, parse_error): the snapshot is always written when at
-    least the fetches were attempted; `parse_error` is the string that
-    explains why no normalized catalog could be produced, when it could not.
+    Returns (snapshot, problem): every attempt writes a snapshot as the
+    newest observed state; `problem` is the string explaining why no
+    usable catalog came out of it, or None on a complete acquisition.
     """
     adapter = _adapter(fabricator)
     catalog_store = _store.CatalogStore(root, fabricator)
@@ -75,31 +73,30 @@ def acquire(fabricator, root, timeout=DEFAULT_TIMEOUT_S, fetcher=None):
                        "version": adapter.PARSER_VERSION}
 
     if errors:
-        # Preserve whatever was fetched as evidence, mark the observation
+        # Preserve whatever was fetched as evidence, record the attempt as
         # incomplete, and do not attempt a partial parse: a catalog built
         # from part of the sources would silently shrink the offer.
         snapshot = catalog_store.record_observation(
-            model.empty_catalog(fabricator), raw_sources, parser_identity,
-            adapter.SOURCES, complete=False, errors=errors)
+            None, raw_sources, parser_identity, adapter.SOURCES,
+            outcome=_store.OUTCOME_INCOMPLETE, errors=errors)
         return snapshot, "acquisition incomplete: {} source(s) failed".format(
             len(errors))
 
     try:
         normalized = adapter.parse(raw_sources)
     except model.CatalogError as exc:
-        # The raw evidence still lands in observed/, so the parse failure is
-        # reproducible from the exact bytes that caused it.
-        for spec in adapter.SOURCES:
-            raw = raw_sources.get(spec["id"])
-            if raw is not None:
-                digest = hashlib.sha256(raw).hexdigest()
-                _store._atomic_write_bytes(
-                    os.path.join(catalog_store.observed_evidence,
-                                 "{}-{}.raw".format(spec["id"], digest[:12])),
-                    raw)
-        return None, "parse failed: {}".format(exc)
+        # The attempt is recorded as the newest observed state, carrying
+        # the exact bytes that defeated the parser: "the current source
+        # cannot be interpreted" is a fact about NOW, and it must not leave
+        # an older successful observation looking like the latest.
+        snapshot = catalog_store.record_observation(
+            None, raw_sources, parser_identity, adapter.SOURCES,
+            outcome=_store.OUTCOME_PARSE_FAILED,
+            errors=[{"source": "<parse>",
+                     "error": "{}: {}".format(type(exc).__name__, exc)}])
+        return snapshot, "parse failed: {}".format(exc)
 
     snapshot = catalog_store.record_observation(
         normalized, raw_sources, parser_identity, adapter.SOURCES,
-        complete=True)
+        outcome=_store.OUTCOME_COMPLETE)
     return snapshot, None

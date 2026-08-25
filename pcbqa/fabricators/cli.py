@@ -4,9 +4,14 @@ The only doorway to the network in this toolkit is `fab refresh`. Everything
 else here reads state that is already on disk, and nothing under `validate`
 or `release` calls any of it.
 
-    fab refresh          fetch official sources -> observed snapshot
-    fab status           freshness of approved data; pending observations
-    fab diff             semantic changes: approved vs observed
+    fab refresh          fetch official sources -> newest observed attempt;
+                         an identical result renews freshness, a differing
+                         one asks for review, a failure supersedes nothing
+                         approved but becomes the newest known source state
+    fab ensure           refresh only when the approved knowledge is no
+                         longer current; the polite scheduled entry point
+    fab status           trust state of approved data; everything pending
+    fab diff             semantic changes: approved vs newest observation
     fab promote          make the reviewed observation the approved state
     fab select           choose a fabrication profile for a requirements file
     fab export-stackup   write a board physical-stackup supplement from an
@@ -52,6 +57,13 @@ def main(argv):
     refresh.add_argument("--timeout", type=int,
                          default=_acquire.DEFAULT_TIMEOUT_S)
 
+    ensure = commands.add_parser("ensure")
+    _common(ensure)
+    ensure.add_argument("--timeout", type=int,
+                        default=_acquire.DEFAULT_TIMEOUT_S)
+    ensure.add_argument("--max-age-days", type=float,
+                        default=FRESHNESS_DAYS_DEFAULT)
+
     status = commands.add_parser("status")
     _common(status)
     status.add_argument("--max-age-days", type=float,
@@ -93,6 +105,8 @@ def main(argv):
 def _dispatch(arguments, store):
     if arguments.command == "refresh":
         return _cmd_refresh(arguments, store)
+    if arguments.command == "ensure":
+        return _cmd_ensure(arguments, store)
     if arguments.command == "status":
         return _cmd_status(arguments, store)
     if arguments.command == "diff":
@@ -110,8 +124,10 @@ def _cmd_refresh(arguments, store):
     snapshot, problem = _acquire.acquire(arguments.fabricator, store.root,
                                          timeout=arguments.timeout)
     if problem:
-        print("refresh did not produce a usable observation: " + problem)
-        print("the approved catalog is untouched")
+        print("the acquisition attempt is now the newest observed state, "
+              "and it is not usable: " + problem)
+        print("the approved catalog is untouched; the raw evidence of the "
+              "failure is preserved for reproduction")
         return 1
     print("observed snapshot recorded: normalized {}".format(
         snapshot["normalized_sha256"][:16]))
@@ -120,12 +136,23 @@ def _cmd_refresh(arguments, store):
         print("no approved baseline exists yet; review the observation and "
               "promote it with --initial")
         return 0
+    if approved["parser"] != snapshot["parser"]:
+        print("NOTE: this observation was made by parser {} v{}; the "
+              "approved catalog was made by {} v{}. Differences below may "
+              "reflect the extractor, not the fabricator.".format(
+                  snapshot["parser"].get("id"),
+                  snapshot["parser"].get("version"),
+                  approved["parser"].get("id"),
+                  approved["parser"].get("version")))
     changes = _diff.semantic_diff(approved["normalized"],
                                   snapshot["normalized"])
     if not changes:
-        print("semantically identical to the approved catalog "
-              "({}); no review needed".format(
-                  approved["normalized_sha256"][:16]))
+        record = store.record_verification(snapshot)
+        print("semantically identical to the approved catalog ({}); "
+              "freshness renewed - the approved semantics are verified "
+              "current as of {}".format(
+                  approved["normalized_sha256"][:16],
+                  record["verified_utc"]))
         return 0
     print("REVIEW REQUIRED: {} semantic change(s) against the approved "
           "catalog. The approved data is unchanged. `fab diff` shows the "
@@ -133,40 +160,58 @@ def _cmd_refresh(arguments, store):
     return 0
 
 
+def _cmd_ensure(arguments, store):
+    freshness = store.freshness(max_age_days=arguments.max_age_days)
+    if freshness["state"] == "current" and not freshness["attention"]:
+        print("approved knowledge is current ({} days old, limit {}); "
+              "no network access needed".format(
+                  freshness.get("age_days"), arguments.max_age_days))
+        return 0
+    print("state: {} - {}".format(freshness["state"],
+                                  freshness.get("detail")))
+    for item in freshness["attention"]:
+        print("  attention: {}".format(item))
+    if freshness["state"] == "no-baseline":
+        print("run `fab refresh` and promote an initial baseline; `ensure` "
+              "does not create trust on its own")
+        return 1
+    return _cmd_refresh(arguments, store)
+
+
 def _cmd_status(arguments, store):
     freshness = store.freshness(max_age_days=arguments.max_age_days)
     print("approved: {}".format(freshness["state"]))
-    for key in ("age_days", "retrieved_utc", "detail"):
+    for key in ("age_days", "evidence_utc", "verified_utc",
+                "renewed_by_verification_utc", "detail"):
         if key in freshness:
             print("  {}: {}".format(key, freshness[key]))
-    approved = store.approved()
+    try:
+        approved = store.approved()
+    except StoreError as exc:
+        print("  UNUSABLE: {}".format(exc))
+        return 1
     if approved is not None:
         print("  normalized: {}".format(approved["normalized_sha256"][:16]))
         print("  parser: {} v{}".format(approved["parser"].get("id"),
                                         approved["parser"].get("version")))
+    for item in freshness["attention"]:
+        print("ATTENTION: {}".format(item))
     try:
         observed = store.observed()
     except StoreError as exc:
-        print("observed: UNUSABLE ({})".format(exc))
+        print("newest attempt: UNUSABLE ({})".format(exc))
         return 1
     if observed is None:
-        print("observed: none recorded")
+        print("newest attempt: none recorded")
         return 0
-    print("observed: {} retrieved {}{}".format(
-        observed["normalized_sha256"][:16], observed["retrieved_utc"],
-        "" if observed.get("complete") else "  [INCOMPLETE]"))
-    if approved is not None and observed.get("complete"):
+    digest = observed.get("normalized_sha256")
+    print("newest attempt: {} retrieved {}  [{}]".format(
+        digest[:16] if digest else "-", observed["retrieved_utc"],
+        observed["outcome"].upper()))
+    if approved is not None and observed["outcome"] == "complete":
         changes = _diff.semantic_diff(approved["normalized"],
                                       observed["normalized"])
         print("pending semantic change(s): {}".format(len(changes)))
-        if approved["parser"] != observed["parser"]:
-            print("  NOTE: parser identity differs between approved ({} "
-                  "v{}) and observed ({} v{}); differences may reflect the "
-                  "extractor, not the fabricator".format(
-                      approved["parser"].get("id"),
-                      approved["parser"].get("version"),
-                      observed["parser"].get("id"),
-                      observed["parser"].get("version")))
     return 0
 
 
@@ -176,9 +221,9 @@ def _cmd_diff(store):
     if observed is None:
         print("no observed snapshot; run `fab refresh` first")
         return 1
-    if not observed.get("complete"):
-        print("the observed snapshot is incomplete and cannot be compared "
-              "meaningfully; its errors:")
+    if observed["outcome"] != "complete":
+        print("the newest acquisition attempt is {} and cannot be compared "
+              "meaningfully; its errors:".format(observed["outcome"]))
         for error in observed.get("errors", []):
             print("  {}: {}".format(error.get("source"), error.get("error")))
         return 1
@@ -201,7 +246,7 @@ def _cmd_promote(arguments, store):
     observed = store.observed()
     changes = []
     if approved is not None and observed is not None \
-            and observed.get("complete"):
+            and observed.get("outcome") == "complete":
         changes = _diff.semantic_diff(approved["normalized"],
                                       observed["normalized"])
     promoted = store.promote(arguments.observed, changes,
@@ -228,6 +273,10 @@ def _cmd_select(arguments, store):
     freshness = store.freshness()
     result["approved_normalized_sha256"] = approved["normalized_sha256"]
     result["approved_freshness"] = freshness
+    for item in freshness["attention"]:
+        print("ATTENTION: {}".format(item))
+    if freshness["state"] == "stale":
+        print("ATTENTION: {}".format(freshness.get("detail")))
     print(json.dumps(result, indent=2))
     return 0 if result["feasible"] else 1
 

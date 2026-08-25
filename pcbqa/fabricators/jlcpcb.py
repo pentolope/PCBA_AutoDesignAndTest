@@ -1,6 +1,6 @@
 """The JLCPCB adapter: official sources, and parsers held to what they read.
 
-Two official pages carry the knowledge this adapter extracts:
+Three official pages carry the knowledge this adapter extracts:
 
   * ``impedance`` - https://jlcpcb.com/impedance - the published multilayer
     stackups, layer by layer with material and thickness, one section per
@@ -10,8 +10,15 @@ Two official pages carry the knowledge this adapter extracts:
     prepreg dielectric-constant table and the core dielectric constant.
   * ``capabilities`` - https://jlcpcb.com/capabilities/pcb-capabilities - the
     manufacturing capability statements: layer counts, FR-4 thickness
-    options, copper weights and their stated default, trace/space, drill and
-    via limits.
+    options, copper weights and their stated default, the copper-weight- and
+    layer-class-conditioned trace/space table, the separate trace-coil
+    limits, drill and via limits.
+  * ``copper-weight`` - https://jlcpcb.com/help/article/jlcpcb-copper-weight
+    - JLCPCB's own copper-weight guide: the stated 1 oz = 35 um equivalence,
+    the available weights per layer position, and a second copper-weight-
+    conditioned trace/space table. This is the official bridge between the
+    ounce-denominated options and the millimetre-denominated construction
+    tables; without it no such conversion would be performed at all.
 
 Both are server-rendered HTML with the data in the page itself; nothing here
 executes scripts or guesses at XHR endpoints. The parsers are deliberately
@@ -26,9 +33,17 @@ distinguishable facts forever after.
 
 Honestly stated limitations of these sources:
 
-  * the published stackup tables describe the 1.6 mm construction; other
-    nominal thicknesses are listed as options but their constructions are not
-    published on this page, and none is inferred;
+  * every published construction describes exactly one copper build - 0.035
+    mm outer and 0.0152 mm inner copper, cores annotated "H/HOZ" - and one
+    nominal thickness (1.6 mm, encoded in the JLCnnttXH names); options at
+    other weights and thicknesses are orderable but their constructions are
+    not published, and none is inferred. Where a stackup's applicability is
+    an interpretation of the fabricator's own notation rather than a bare
+    verbatim value, the record says so in a `basis` string;
+  * the two trace/space tables (capabilities page and copper-weight guide)
+    do not fully agree - 2 oz multilayer reads 0.15 mm on one and 0.16 mm on
+    the other. Both statements are normalized with their sources; consumers
+    are expected to take the stricter;
   * prepreg and core dielectric constants are stated without a frequency;
   * surcharge/price structure is not published on these pages, so
     "standard" here means what JLCPCB itself labels default or lists as the
@@ -46,13 +61,15 @@ FABRICATOR = "jlcpcb"
 
 #: Bump when extraction logic changes meaning. A changed parser version with
 #: unchanged raw sources explains a changed normalized catalog by itself.
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 SOURCES = (
     {"id": "impedance", "kind": "official-stackup-page",
      "url": "https://jlcpcb.com/impedance"},
     {"id": "capabilities", "kind": "official-capabilities-page",
      "url": "https://jlcpcb.com/capabilities/pcb-capabilities"},
+    {"id": "copper-weight", "kind": "official-help-article",
+     "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"},
 )
 
 
@@ -289,12 +306,115 @@ def _parse_section_stackups(body, layer_count, catalog):
             raise ParseError(
                 "stackup {} parses to {} copper layers inside the {}-layer "
                 "section".format(identity, copper, layer_count))
+        stackup["applicability"] = _applicability(
+            identity, name, stackup, catalog)
         if identity in catalog["stackups"]:
             raise ParseError(
                 "two stackups parse to the identity {}; duplicate process "
                 "identifiers cannot be told apart and are refused".format(
                     identity))
         catalog["stackups"][identity] = stackup
+
+
+_NAME_CODE = re.compile(r"^JLC(\d{2})(\d{2})")
+
+
+def _applicability(identity, name, stackup, catalog):
+    """What build a published construction describes, from its own table.
+
+    Everything here is either a verbatim value from the construction's rows,
+    an arithmetic combination of two official statements, or an
+    interpretation of the fabricator's own notation - and each field says
+    which, in its `basis` string, so a reviewer can weigh the claim. Nothing
+    is taken from general PCB knowledge: if the official bridge for a
+    conversion is missing, the converted field is absent, not guessed.
+    """
+    layers = stackup["layers"]
+    coppers = [l for l in layers if l["role"] == model.COPPER]
+    outer = {coppers[0]["thickness_mm"], coppers[-1]["thickness_mm"]}
+    inner = {l["thickness_mm"] for l in coppers[1:-1]}
+    if len(outer) != 1 or len(inner) > 1:
+        raise ParseError(
+            "stackup {} states mixed copper thicknesses (outer {}, inner "
+            "{}); every published construction so far is uniform, and a new "
+            "shape must be reviewed, not averaged".format(
+                identity, sorted(outer), sorted(inner)))
+    applicability = {
+        "outer_copper_thickness_mm": outer.pop(),
+        "outer_basis": "stated in the construction table",
+    }
+    if inner:
+        applicability["inner_copper_thickness_mm"] = inner.pop()
+
+    # Outer weight: the construction's stated thickness at the fabricator's
+    # own stated oz equivalence. Only an exact hit on a half-ounce multiple
+    # is accepted; anything else stays a thickness without a weight.
+    equivalence = catalog["capabilities"].get(
+        "copper_weight_equivalence_um_per_oz")
+    if equivalence is not None:
+        um_per_oz = equivalence["value"]
+        computed = (applicability["outer_copper_thickness_mm"] * 1000.0
+                    / um_per_oz)
+        if abs(computed - round(computed * 2) / 2) < 1e-6:
+            applicability["outer_copper_weight_oz"] = round(computed * 2) / 2
+            applicability["outer_basis"] = (
+                "stated {} mm outer copper at the stated {} um/oz "
+                "equivalence [copper-weight]".format(
+                    applicability["outer_copper_thickness_mm"], um_per_oz))
+
+    # Inner weight: the core rows carry the fabricator's own cladding
+    # notation - "H/HOZ", half-oz/half-oz - which is an oz statement, not a
+    # thickness to convert. The finished inner thickness (0.0152 mm) is less
+    # than a nominal half-ounce foil, so converting it through the
+    # equivalence would contradict the fabricator's own labelling; the
+    # labelling wins and the reading is recorded as an interpretation.
+    annotations = {l.get("annotation") for l in layers if l.get("annotation")}
+    if any("H/H" in annotation for annotation in annotations):
+        applicability["inner_copper_weight_oz"] = 0.5
+        applicability["inner_basis"] = (
+            "core cladding notation 'H/H OZ' read as half-oz/half-oz, "
+            "corroborated by the stated 0.5 oz inner default "
+            "[copper-weight, capabilities]")
+
+    # Nominal thickness: named constructions encode it (JLC 04 16 1H -> 4
+    # layers, 1.6 mm), and the reading is only accepted when the summed
+    # layers corroborate it; a name that contradicts its own table refuses.
+    total = model.stackup_total_mm(stackup)
+    code = _NAME_CODE.match(name)
+    if code:
+        nominal = int(code.group(2)) / 10.0
+        if total is None or abs(total - nominal) > model.NOMINAL_TOLERANCE_MM:
+            raise ParseError(
+                "stackup {} encodes {} mm in its name but its layers sum to "
+                "{} mm; the naming interpretation no longer holds and must "
+                "be re-reviewed".format(identity, nominal, total))
+        applicability["nominal_thickness_mm"] = nominal
+        applicability["thickness_basis"] = (
+            "name-encoded ({}), corroborated by the {} mm layer "
+            "sum".format(name[:8], total))
+    else:
+        # The default construction carries no code; the layer sum against
+        # the section's stated thickness options is the only tie available,
+        # and it is labelled as the derivation it is.
+        options = catalog["capabilities"].get(
+            "{}L thickness_options".format(stackup["layer_count_section"]))
+        nominal = None
+        if options is not None and total is not None:
+            near = [v for v in options["value"]
+                    if abs(v - total) <= model.NOMINAL_TOLERANCE_MM]
+            if len(near) == 1:
+                nominal = near[0]
+        if nominal is not None:
+            applicability["nominal_thickness_mm"] = nominal
+            applicability["thickness_basis"] = (
+                "layer sum {} mm, nearest stated section thickness option; "
+                "the page does not state this construction's nominal "
+                "directly".format(total))
+        else:
+            applicability["thickness_basis"] = (
+                "no stated nominal, and the {} mm layer sum does not single "
+                "out one stated thickness option".format(total))
+    return applicability
 
 
 # ---------------------------------------------------------------------------
@@ -334,11 +454,6 @@ def _parse_capabilities(html, catalog):
          r"Finished copper weight of inner layer is ([\d.]+)oz by default",
          lambda m: float(m.group(1)), "oz",
          lambda m: "stated default"),
-        ("min_trace_space_masked_1oz_mm", "trace",
-         r"Minimum trace width/clearance: ([\d.]+)/([\d.]+) ?mm,\s*when "
-         r"traces are covered by solder mask \(1oz\)",
-         lambda m: {"track": float(m.group(1)), "space": float(m.group(2))},
-         "mm", lambda m: "covered by solder mask, 1 oz copper"),
         ("drill_diameter_multilayer_mm", "drill",
          r"Multilayer: ([\d.]+) " + dash + r" ([\d.]+) ?mm",
          lambda m: {"min": float(m.group(1)), "max": float(m.group(2))},
@@ -369,6 +484,269 @@ def _parse_capabilities(html, catalog):
             "page has been restructured and this parse cannot be "
             "trusted".format(matched, len(probes)))
 
+    _parse_traces_table(text, catalog)
+    _parse_trace_coils(text, catalog)
+
+
+#: One clause of a trace/space statement: an optional layer-class prefix,
+#: then "track / space mm". The published clause prefixes and what they
+#: mean in layer counts; a prefix not in this table is an unknown class and
+#: the clause is recorded as unread rather than guessed into scope.
+_TRACE_CLASSES = {
+    "1- and 2-layer": (1, 2),
+    "2-layer": (2, 2),
+    "2 layer": (2, 2),
+    "multilayer": (4, None),
+}
+
+_TRACE_ROW = re.compile(
+    r"Min\. track width and spacing \(([\d.]+) ?oz\)")
+_TRACE_CLAUSE = re.compile(
+    r"^(?:([A-Za-z0-9&\- ]+?)\s*:\s*)?"
+    r"([\d.]+)\s*/\s*([\d.]+)\s*mm", re.IGNORECASE)
+
+
+def _parse_traces_table(text, catalog):
+    """The copper-weight-conditioned trace/space rows of the Traces table.
+
+    Each published row names a copper weight; its cells subdivide by layer
+    class. One capability record is emitted per (weight, layer-class)
+    clause, with the machine-readable scope in `applies`, so a selector can
+    ask "what limit is published for THIS weight at THIS layer count" and
+    get either a stated answer or nothing - never a neighbouring rule.
+
+    A row's headline cell (a bare value with no layer-class prefix) is
+    skipped whenever classed clauses exist: the fabricator's own
+    subdivision is the stronger statement, and letting the headline stand
+    beside it would double-publish the coarse number over the fine one.
+    """
+    source = "capabilities"
+    lines = text.split("\n")
+    rows = [(index, _TRACE_ROW.match(line))
+            for index, line in enumerate(lines)
+            if _TRACE_ROW.match(line)]
+    emitted = 0
+    for index, row in rows:
+        weight = float(row.group(1))
+        clauses = []
+        for line in lines[index + 1:index + 8]:
+            if _TRACE_ROW.match(line) or line.startswith(
+                    "Track width tolerance"):
+                break
+            clause = _TRACE_CLAUSE.match(line)
+            if clause:
+                clauses.append((clause.group(1), float(clause.group(2)),
+                                float(clause.group(3)), line))
+            elif clauses:
+                # The row's cells are contiguous; the first non-clause line
+                # after any clause ends the row, so a stray later line can
+                # never be swept into the wrong copper weight.
+                break
+        classed = [c for c in clauses if c[0]]
+        chosen = classed if classed else clauses
+        for prefix, track, space, line in chosen:
+            if prefix is None:
+                span = (1, None)
+                label = "any layer count"
+            else:
+                span = _TRACE_CLASSES.get(prefix.strip().lower())
+                if span is None:
+                    catalog["not_extracted"].append({
+                        "source": source,
+                        "field": "trace/space {} oz clause".format(weight),
+                        "reason": "unrecognised layer-class prefix "
+                                  "{!r}".format(prefix)})
+                    continue
+                label = prefix.strip()
+            identity = "trace_space {}oz {} (capabilities)".format(
+                weight, re.sub(r"[^a-z0-9.]+", "-", label.lower()))
+            catalog["capabilities"][identity] = model.capability(
+                source, identity,
+                {"track": track, "space": space}, units="mm",
+                conditions="{} oz finished copper, {}".format(weight, label),
+                excerpt=line[:160], category="trace",
+                applies={"copper_weights_oz": [weight],
+                         "min_layers": span[0], "max_layers": span[1]})
+            emitted += 1
+    if emitted < 4:
+        raise ParseError(
+            "capabilities page: only {} conditioned trace/space clauses "
+            "parsed from the Traces table; the table has changed shape and "
+            "a catalog without it would quietly widen or lose the published "
+            "limits".format(emitted))
+
+
+def _parse_trace_coils(text, catalog):
+    """The trace-coil limits, normalized as the special case they are.
+
+    These sit under the "Trace coils" feature on the capabilities page and
+    historically read like a general trace/space statement. They are not
+    one: they describe coil patterns specifically, and they are stored
+    under a category no general-routing selector consults, so the special
+    rule can never stand in for board manufacturability.
+    """
+    source = "capabilities"
+    for identity, pattern, conditions in (
+            ("trace_coils_masked_1oz",
+             r"Minimum trace width/clearance: ([\d.]+)/([\d.]+) ?mm,\s*"
+             r"when traces are covered by solder mask \(1oz\)",
+             "trace coils, covered by solder mask, 1 oz copper"),
+            ("trace_coils_unmasked_1oz",
+             r"Minimum trace width/clearance: ([\d.]+)/([\d.]+) ?mm,\s*"
+             r"when traces are NOT covered by solder mask \(1oz\)",
+             "trace coils, not covered by solder mask, 1 oz copper, "
+             "ENIG only")):
+        found = re.search(pattern, text)
+        if not found:
+            catalog["not_extracted"].append({
+                "source": source, "field": identity,
+                "reason": "trace-coil statement not found where last "
+                          "published"})
+            continue
+        catalog["capabilities"][identity] = model.capability(
+            source, identity,
+            {"track": float(found.group(1)), "space": float(found.group(2))},
+            units="mm", conditions=conditions,
+            excerpt=found.group(0)[:160], category="trace-coils")
+
+
+# ---------------------------------------------------------------------------
+# copper-weight guide: the oz bridge and its design-rule table
+# ---------------------------------------------------------------------------
+
+_OZ_LIST = re.compile(r"([\d./]+)\s*oz")
+
+
+def _parse_copper_weight(html, catalog):
+    source = "copper-weight"
+    lines = _text_lines(html)
+    text = "\n".join(lines)
+
+    # -- the stated oz <-> um equivalence ----------------------------------
+    found = re.search(
+        r"1\s*oz copper = copper thickness of (\d+) ?[\u00b5\u03bcu]m",
+        text)
+    if not found:
+        raise ParseError(
+            "copper-weight guide: the stated oz/um equivalence is gone; "
+            "without it no thickness-to-weight bridge exists and the parse "
+            "cannot stand")
+    catalog["capabilities"]["copper_weight_equivalence_um_per_oz"] =         model.capability(
+            source, "copper_weight_equivalence_um_per_oz",
+            float(found.group(1)), units="um/oz",
+            conditions="fabricator-stated definition",
+            excerpt=found.group(0)[:160], category="definition")
+
+    # -- available weights per layer position ------------------------------
+    for identity, anchor, conditions in (
+            ("outer_copper_fr4_standard_oz", "1oz, 2oz (standard)",
+             "FR-4 outer layer, standard options"),
+            ("outer_copper_fr4_2layer_heavy_oz", "2.5oz, 3.5oz, 4.5oz",
+             "FR-4 outer layer, 2-layer boards only, special high-current"),
+            ("inner_copper_fr4_oz", "0.5oz (default), 1oz, 2oz",
+             "FR-4 inner layer; availability depends on total layers and "
+             "overall thickness (specifics not published)")):
+        for line in lines:
+            if line.startswith(anchor):
+                values = [_oz_token(v) for v in _OZ_LIST.findall(line)]
+                catalog["capabilities"][identity] = model.capability(
+                    source, identity, values, units="oz",
+                    conditions=conditions, excerpt=line[:160],
+                    category="copper")
+                break
+        else:
+            catalog["not_extracted"].append({
+                "source": source, "field": identity,
+                "reason": "available-weights row not found where last "
+                          "published"})
+
+    # -- the design-rule table (FR-4 rows only) ----------------------------
+    marker = next((index for index, line in enumerate(lines)
+                   if line.startswith("Design Rules")), None)
+    if marker is None:
+        raise ParseError(
+            "copper-weight guide: the design-rules table marker is gone")
+    emitted = 0
+    index = marker
+    while index + 2 < len(lines):
+        weight_cell = lines[index]
+        type_cell = lines[index + 1]
+        value_cell = lines[index + 2]
+        row = _design_rule_row(weight_cell, type_cell, value_cell)
+        if row is None:
+            index += 1
+            continue
+        weights, span, label, track = row
+        if weights is None:
+            # An FPC row or an unrecognised type: present on the page,
+            # deliberately not normalized (rigid FR-4 only), and said so.
+            catalog["not_extracted"].append({
+                "source": source,
+                "field": "design rule {!r} / {!r}".format(weight_cell,
+                                                          type_cell),
+                "reason": "outside this adapter's rigid-FR-4 scope, or an "
+                          "unrecognised PCB type; not normalized"})
+            index += 3
+            continue
+        identity = "trace_space {} {} (copper-weight)".format(
+            "-".join(str(w) for w in weights) + "oz",
+            re.sub(r"[^a-z0-9.>=]+", "-", label.lower()))
+        catalog["capabilities"][identity] = model.capability(
+            source, identity, {"track": track, "space": track},
+            units="mm",
+            conditions="{} oz finished copper, {} (track and space "
+                       "stated as one figure)".format(
+                           "/".join(str(w) for w in weights), label),
+            excerpt="{} | {} | {}".format(weight_cell, type_cell,
+                                          value_cell)[:160],
+            category="trace",
+            applies={"copper_weights_oz": weights,
+                     "min_layers": span[0], "max_layers": span[1]})
+        emitted += 1
+        index += 3
+    if emitted < 4:
+        raise ParseError(
+            "copper-weight guide: only {} FR-4 design-rule rows parsed; "
+            "the table has changed shape".format(emitted))
+
+
+_FR4_TYPES = {
+    "1-2 layers fr4": (1, 2, "1-2 layers FR4"),
+    "2-layer fr4": (2, 2, "2-layer FR4"),
+    "any layer fr4": (1, None, "any layer FR4"),
+    "4 layers fr4": (4, None, ">=4 layers FR4"),
+}
+
+
+def _design_rule_row(weight_cell, type_cell, value_cell):
+    """One table row -> (weights, layer span, label, track_mm) or None.
+
+    Returns None when the three lines are not a rule row at all; returns
+    (None, ...) when they are a row this adapter deliberately does not
+    normalize (FPC), so the caller can record that honestly.
+    """
+    weights = [_oz_token(v) for v in _OZ_LIST.findall(weight_cell)]
+    if not weights or _OZ_LIST.sub("", weight_cell).strip(" or,") != "":
+        return None
+    value = re.match(r"([\d.]+) ?mm", value_cell)
+    if not value:
+        return None
+    normalized_type = type_cell.lower()
+    normalized_type = normalized_type.replace("\u2013", "-")
+    normalized_type = re.sub(r"[\u2265]", "", normalized_type)
+    normalized_type = re.sub(r"\s+", " ", normalized_type).strip()
+    span = _FR4_TYPES.get(normalized_type)
+    if span is None:
+        return (None, None, type_cell, None)
+    return weights, (span[0], span[1]), span[2], float(value.group(1))
+
+
+def _oz_token(token):
+    if "/" in token:
+        parts = token.split("/")
+        return round(float(parts[0]) / float(parts[1]), 4)
+    return float(token)
+
 
 # ---------------------------------------------------------------------------
 # entry point
@@ -388,8 +766,13 @@ def parse(raw_sources):
                 "the evidence would silently shrink the offer".format(
                     spec["id"]))
     catalog = model.empty_catalog(FABRICATOR)
-    _parse_impedance(
-        raw_sources["impedance"].decode("utf-8", "ignore"), catalog)
+    # The copper-weight guide first: it carries the oz equivalence the
+    # stackup applicability derivation cites, and the capabilities page
+    # before the impedance page so section option lists can corroborate.
+    _parse_copper_weight(
+        raw_sources["copper-weight"].decode("utf-8", "ignore"), catalog)
     _parse_capabilities(
         raw_sources["capabilities"].decode("utf-8", "ignore"), catalog)
+    _parse_impedance(
+        raw_sources["impedance"].decode("utf-8", "ignore"), catalog)
     return model.validate_catalog(catalog)

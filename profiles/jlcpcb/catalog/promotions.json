@@ -24,5 +24,57 @@
       }
     ],
     "to_normalized_sha256": "e92df834668837d223d2a1a5a611022f68b8d89d01a1d37539abc5e751a3b3a9"
+  },
+  {
+    "change_summary": [
+      "capability-added: copper_weight_equivalence_um_per_oz",
+      "capability-added: inner_copper_fr4_oz",
+      "capability-added: outer_copper_fr4_2layer_heavy_oz",
+      "capability-added: outer_copper_fr4_standard_oz",
+      "capability-added: trace_coils_masked_1oz",
+      "capability-added: trace_coils_unmasked_1oz",
+      "capability-added: trace_space 0.5-1.0oz >=4-layers-fr4 (copper-weight)",
+      "capability-added: trace_space 1.0oz 1-2-layers-fr4 (copper-weight)",
+      "capability-added: trace_space 1.0oz 1-and-2-layer (capabilities)",
+      "capability-added: trace_space 1.0oz multilayer (capabilities)",
+      "capability-added: trace_space 2.0oz 2-layer (capabilities)",
+      "capability-added: trace_space 2.0oz any-layer-fr4 (copper-weight)",
+      "capability-added: trace_space 2.0oz multilayer (capabilities)",
+      "capability-added: trace_space 2.5oz 2-layer (capabilities)",
+      "capability-added: trace_space 2.5oz 2-layer-fr4 (copper-weight)",
+      "capability-added: trace_space 3.5oz 2-layer (capabilities)",
+      "capability-added: trace_space 3.5oz 2-layer-fr4 (copper-weight)",
+      "capability-added: trace_space 4.5oz 2-layer (capabilities)",
+      "capability-added: trace_space 4.5oz 2-layer-fr4 (copper-weight)",
+      "capability-removed: min_trace_space_masked_1oz_mm"
+    ],
+    "from_normalized_sha256": "e92df834668837d223d2a1a5a611022f68b8d89d01a1d37539abc5e751a3b3a9",
+    "initial": false,
+    "note": "Parser v2 upgrade, hand-reviewed. All 185 changes are extractor-shape changes, none is fabricator data drift: 165 = five new applicability fields (nominal thickness, outer/inner copper thickness and weight) on each of 33 stackups; 19 additions = the official 35um/oz equivalence and per-position weight options from the new copper-weight source (jlcpcb.com/help/article/jlcpcb-copper-weight, added this pass), 13 copper-weight- and layer-class-conditioned trace/space records from both the capabilities Traces table and the copper-weight design-rules table, and the two trace-coil limits now normalized as the special case they are; 1 removal = min_trace_space_masked_1oz_mm, which v1 had wrongly read as the general limit when the page states it for trace coils. Every pre-existing dielectric constant, stackup layer and capability value is unchanged.",
+    "parser": {
+      "id": "pcbqa.fabricators.jlcpcb",
+      "version": "2"
+    },
+    "promoted_utc": "2026-08-25T04:12:39.422837+00:00",
+    "retrieved_utc": "2026-08-25T04:11:41.341837+00:00",
+    "semantic_changes": 185,
+    "sources": [
+      {
+        "id": "impedance",
+        "sha256_raw": "a64ebd66e7b0db953c5bd5fa2f0ffd2e03eec983f16c01c15d9107d3c6b5bef8",
+        "url": "https://jlcpcb.com/impedance"
+      },
+      {
+        "id": "capabilities",
+        "sha256_raw": "8c34f8347d5975e50870ee533c4afbbe6b62c5e2471634d32a266b77732cc1ea",
+        "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
+      },
+      {
+        "id": "copper-weight",
+        "sha256_raw": "c068ad6c2a703eba68eb8ca6bf3ab267698f307c2f429ea74c505a88f09704b2",
+        "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
+      }
+    ],
+    "to_normalized_sha256": "c01eac2fc111764513aa30bebd60f379cf220be9511569b322efe24efff25b04"
   }
 ]
