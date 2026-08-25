@@ -175,7 +175,8 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         self.assertFalse(result["manufacturing"]["established"])
         control = result["fabrication_control"]
         self.assertFalse(control["impedance_control_selected"])
-        self.assertFalse(control["requested_impedance_established"])
+        self.assertFalse(
+            control["target_eligible_for_controlled_fabrication"])
         self.assertIn("nothing here establishes", control["note"])
 
     def test_differential_refuses_as_unsupported_at_any_target(self):
@@ -364,9 +365,10 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
                          impedance.MODEL_VERSION)
 
     def test_cli_exit_status_tracks_feasibility(self):
-        """Exit 0 is a FEASIBLE design solution; anything else - here an
-        unreachable target - exits nonzero, so a script can trust the
-        status without parsing JSON."""
+        """Exit 0 means geometry_feasible - an unambiguous analytic
+        root at a manufacturable width; anything else, here an
+        unreachable target, exits nonzero. Control state never rides
+        in the exit code."""
         import json as json_module
         import subprocess
         import tempfile
@@ -397,21 +399,36 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         self.assertFalse(document["geometry_feasible"])
         self.assertIsNone(document["numeric_solution"])
 
-    def test_a_controlled_solution_carries_the_established_state(self):
+    def test_a_controlled_solution_is_eligible_but_never_bound(self):
+        """Selecting the controlled process makes a feasible target
+        ELIGIBLE for controlled fabrication. It does not bind the
+        target to any board- or order-side specification - the target
+        came from this solver request, and no such binding exists in
+        the toolkit - so that fact reads false, never inferred."""
         result = impedance.solve(self.snapshot, _request(
             requirements=_requirements(impedance_control=True),
             stackup="JLC04161H-7628"))
         self.assertTrue(result["geometry_feasible"])
         control = result["fabrication_control"]
         self.assertTrue(control["impedance_control_selected"])
-        self.assertTrue(control["requested_impedance_established"])
+        self.assertTrue(
+            control["target_eligible_for_controlled_fabrication"])
+        self.assertFalse(
+            control["target_bound_to_fabrication_specification"])
+        self.assertIn("nothing here proves the target has been "
+                      "specified to the fabricator", control["note"])
+        self.assertNotIn("requested_impedance_established", control)
 
     def test_an_uncontrolled_root_never_reads_as_established(self):
         result = impedance.solve(self.snapshot, _request())
         self.assertTrue(result["geometry_feasible"])
-        self.assertFalse(result["fabrication_control"][
-            "requested_impedance_established"])
+        control = result["fabrication_control"]
+        self.assertFalse(
+            control["target_eligible_for_controlled_fabrication"])
+        self.assertFalse(
+            control["target_bound_to_fabrication_specification"])
         self.assertNotIn("feasible", result)
+        self.assertNotIn("requested_impedance_established", control)
 
     def test_the_solver_module_performs_no_network_access(self):
         with open(os.path.join(HERE, "pcbqa", "fabricators",
@@ -730,6 +747,86 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
             impedance.solve(_snapshot(), _request(
                 width_search_mm={"min": 0.005, "max": 2.0}))
         self.assertIn("narrow the domain", str(caught.exception))
+
+    def test_the_exact_stripline_seam_target_is_not_lost(self):
+        """The seam point belongs to the wide branch, per the production
+        inequality; a target equal to Z at the exact seam resolves to a
+        root at the seam instead of falling into an inter-interval
+        crack."""
+        context = self._stripline_context(0.03)
+        seam = 0.35 * (1.0 - 0.03)
+        target, _e = impedance._impedance_at(context, seam)
+        wide_value, _e = impedance.stripline_z0(
+            4.2, seam, 1.0, 0.03, _force_branch="wide")
+        self.assertEqual(target, wide_value)
+        roots, _diag = impedance._solve_width(context, 0.1, 0.8, target)
+        self.assertGreaterEqual(len(roots), 1)
+        self.assertTrue(any(abs(width - seam) < 1e-6
+                            for width, _z, _eps in roots))
+
+    def test_the_exact_microstrip_seam_target_is_not_lost(self):
+        """The Hammerstad u=1 point belongs to the narrow branch
+        (u <= 1 -> narrow); a target equal to Z there resolves."""
+        context = {"topology": impedance.MICROSTRIP,
+                   "height_mm": 0.2104, "epsilon_r": 4.4,
+                   "conductor_thickness_mm": 0.04064,
+                   "trapezoid_delta_mm": 0.0}
+        seams = impedance._seam_positions(context, 0.05, 2.0)
+        self.assertEqual(len(seams), 1)
+        seam, owner = seams[0]
+        self.assertEqual(owner, "left")
+        target, _e = impedance._impedance_at(context, seam)
+        roots, _diag = impedance._solve_width(context, 0.05, 2.0, target)
+        self.assertGreaterEqual(len(roots), 1)
+        self.assertTrue(any(abs(width - seam) < 1e-6
+                            for width, _z, _eps in roots))
+
+    def test_a_seam_target_with_a_second_root_reports_both(self):
+        """At near-zero thickness the upward seam step means the exact
+        wide-branch seam value is ALSO reached strictly inside the
+        narrow branch; both roots must come back, including the one at
+        the seam itself."""
+        context = self._stripline_context(1e-9)
+        seam = 0.35 * (1.0 - 1e-9)
+        target, _e = impedance._impedance_at(context, seam)
+        roots, _diag = impedance._solve_width(context, 0.1, 0.8, target)
+        self.assertEqual(len(roots), 2)
+        self.assertLess(roots[0][0], seam)
+        self.assertAlmostEqual(roots[1][0], seam, places=6)
+
+    def test_nearby_but_distinct_roots_are_never_merged(self):
+        """Multiplicity is mathematical identity, not width proximity:
+        no merging logic exists any more, so two distinct roots survive
+        at ANY separation. Here the narrow-branch root sits 2e-5 mm
+        inside its branch and the wide-branch root ~0.03 mm past the
+        seam; both come back, ordered, distinct."""
+        context = self._stripline_context(1e-9)
+        seam = 0.35 * (1.0 - 1e-9)
+        narrow_value, _e = impedance.stripline_z0(
+            4.2, seam - 2e-5, 1.0, 1e-9, _force_branch="narrow")
+        roots, _diag = impedance._solve_width(context, 0.1, 0.8,
+                                              narrow_value)
+        self.assertEqual(len(roots), 2)
+        gap = roots[1][0] - roots[0][0]
+        self.assertGreater(gap, 0)
+        self.assertLess(gap, 0.1)
+        self.assertAlmostEqual(roots[0][0], seam - 2e-5, places=6)
+
+    def test_no_point_of_the_domain_is_deleted(self):
+        """Ownership splits the domain exactly: a target just below the
+        narrow branch's one-sided limit clears the ambiguity band, so
+        exactly one root exists - on the wide branch, just past the
+        seam - and it is found, not lost in an epsilon crack between
+        intervals."""
+        context = self._stripline_context(0.03)
+        seam = 0.35 * (1.0 - 0.03)
+        narrow_limit, _e = impedance.stripline_z0(
+            4.2, seam, 1.0, 0.03, _force_branch="narrow")
+        roots, _diag = impedance._solve_width(context, 0.1, 0.8,
+                                              narrow_limit - 1e-3)
+        self.assertEqual(len(roots), 1)
+        self.assertGreater(roots[0][0], seam)
+        self.assertLess(roots[0][0] - seam, 0.05)
 
     def test_gapless_result_values_never_carry_nan(self):
         snapshot = _snapshot()

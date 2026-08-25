@@ -61,8 +61,15 @@ from .. import propagation
 #: analytically, each branch interval is solved separately under its own
 #: (provable) monotonicity, and a target that a seam makes ambiguous or
 #: unreachable is reported as exactly that instead of being bisected
-#: across an unproven interval.
-MODEL_VERSION = "3"
+#: across an unproven interval. Version 4 made seam ownership exact
+#: (each seam point belongs to precisely the branch the production
+#: inequality gives it, and each interval is solved under branch-forced
+#: evaluation with half-open acceptance on the non-owner side), removed
+#: the heuristic width-distance root merging that could have collapsed
+#: two genuinely distinct roots, and stopped the result claiming a
+#: requested target is a fabrication requirement when nothing binds it
+#: to any board- or order-side specification.
+MODEL_VERSION = "4"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -94,7 +101,8 @@ class ImpedanceError(Exception):
 # closed forms
 # ---------------------------------------------------------------------------
 
-def microstrip_z0(epsilon_r, width_mm, height_mm, conductor_mm):
+def microstrip_z0(epsilon_r, width_mm, height_mm, conductor_mm,
+                  _force_branch=None):
     """Hammerstad Z0 for a bare microstrip of finite conductor thickness.
 
     The effective width and effective permittivity come from the same
@@ -112,7 +120,9 @@ def microstrip_z0(epsilon_r, width_mm, height_mm, conductor_mm):
         raise propagation.Unsupported(
             "microstrip w_eff/h = {:.4f} lies outside the 0.1-20 validity "
             "window of the Hammerstad impedance form".format(u))
-    if u <= 1.0:
+    narrow = u <= 1.0 if _force_branch is None \
+        else _force_branch == "narrow"
+    if narrow:
         z_air = 60.0 * math.log(8.0 / u + u / 4.0)
         return z_air / math.sqrt(epsilon_effective), epsilon_effective
     z_air = (FREE_SPACE_ETA_OHM
@@ -120,7 +130,8 @@ def microstrip_z0(epsilon_r, width_mm, height_mm, conductor_mm):
     return z_air / math.sqrt(epsilon_effective), epsilon_effective
 
 
-def stripline_z0(epsilon_r, width_mm, plate_gap_mm, conductor_mm):
+def stripline_z0(epsilon_r, width_mm, plate_gap_mm, conductor_mm,
+                 _force_branch=None):
     """Symmetric-stripline Z0 with finite conductor thickness.
 
     `plate_gap_mm` is b: the span between the two reference planes.
@@ -174,7 +185,9 @@ def stripline_z0(epsilon_r, width_mm, plate_gap_mm, conductor_mm):
         raise propagation.Unsupported(
             "stripline w/b = {:.3f} is outside the implemented validity "
             "window".format(w / b))
-    if w / (b - t) < 0.35:
+    narrow = (w / (b - t) < 0.35) if _force_branch is None \
+        else _force_branch == "narrow"
+    if narrow:
         z0 = (60.0 / math.sqrt(epsilon_r)) * math.log(
             4.0 * b / (0.67 * math.pi * (0.8 * w + t)))
         return z0, epsilon_r
@@ -555,7 +568,17 @@ def resolve_context(approved_snapshot, requirements, stackup_id,
 # the solve
 # ---------------------------------------------------------------------------
 
-def _impedance_at(context, width_mm):
+def _impedance_at(context, width_mm, _force_branch=None):
+    """Z at one base width. `_force_branch` is solver-internal.
+
+    When set ("narrow"/"wide") the piecewise top-level form is evaluated
+    under that branch regardless of which side of the seam the width
+    falls on - this is how the inverse works each branch over the
+    CLOSURE of its own domain, so the open side of a seam is priced as
+    the branch's continuous limit instead of leaking into the
+    neighbouring branch. Public callers never pass it: the unforced
+    evaluation is exactly the production piecewise formula.
+    """
     mean_width = width_mm - context["trapezoid_delta_mm"] / 2.0
     if mean_width <= 0:
         raise propagation.Unsupported(
@@ -564,10 +587,12 @@ def _impedance_at(context, width_mm):
     if context["topology"] == MICROSTRIP:
         return microstrip_z0(context["epsilon_r"], mean_width,
                              context["height_mm"],
-                             context["conductor_thickness_mm"])
+                             context["conductor_thickness_mm"],
+                             _force_branch=_force_branch)
     return stripline_z0(context["epsilon_r"], mean_width,
                         context["span_mm"],
-                        context["conductor_thickness_mm"])
+                        context["conductor_thickness_mm"],
+                        _force_branch=_force_branch)
 
 
 def _solve(approved_snapshot, request):
@@ -672,26 +697,34 @@ def _solve(approved_snapshot, request):
     }, manufacturing=checks, ambiguous=None, failure=None)
 
 
-#: Width inset used to evaluate one side of a formula seam without
-#: touching the other branch.
-_SEAM_EPSILON_MM = 1e-9
-
-
 def _seam_positions(context, low, high):
-    """Every piecewise-formula boundary inside the search domain.
+    """The top-level branch boundaries inside the domain, with owners.
 
-    These are located analytically from the model's own definitions - the
-    stripline branch split at w_mean = 0.35*(b - t), the microstrip
-    Hammerstad split at w_eff = h - and mapped back to base-width space
-    through the trapezoid delta. Sampling is not used: a seam is a fact
-    of the formula, not something to hope a sample lands on.
+    Stated precisely: every impedance-model branch boundary CAPABLE OF
+    CHANGING THE INVERSE is represented here - the stripline narrow/wide
+    split at w_mean = 0.35*(b - t) and the microstrip Hammerstad split
+    at w_eff = h, mapped to base-width space through the trapezoid
+    delta. Lower-level helpers are also piecewise (the Wheeler
+    thickness-correction switch, the effective-permittivity sub-terms),
+    but they are continuous and the composition stays strictly monotone
+    across them, so they create no inverse branches and are deliberately
+    not partitioned.
+
+    Each seam carries the owner the production inequality gives it: the
+    stripline formula reads `< 0.35 -> narrow, else wide`, so the exact
+    seam point belongs to the WIDE branch; the microstrip formula reads
+    `u <= 1 -> narrow`, so its seam point belongs to the NARROW branch.
+    Sampling is not used: a seam is a fact of the formula.
+
+    Returns [(base_width, owner)] with owner "left" (the lower-width
+    branch owns the point) or "right".
     """
     delta = context["trapezoid_delta_mm"]
     seams = []
     if context["topology"] == STRIPLINE:
         b = context["span_mm"]
         t = context["conductor_thickness_mm"]
-        seams.append(0.35 * (b - t) + delta / 2.0)
+        seams.append((0.35 * (b - t) + delta / 2.0, "right"))
     else:
         h = context["height_mm"]
         t = context["conductor_thickness_mm"]
@@ -709,37 +742,51 @@ def _seam_positions(context, low, high):
                     a = middle
                 if c - a < 1e-12:
                     break
-            seams.append((a + c) / 2.0 + delta / 2.0)
-    return sorted(s for s in seams
-                  if low + _SEAM_EPSILON_MM < s < high - _SEAM_EPSILON_MM)
+            seams.append(((a + c) / 2.0 + delta / 2.0, "left"))
+    return sorted((s, owner) for s, owner in seams if low < s < high)
 
 
 def _solve_width(context, low, high, target):
     """Roots of Z(width) = target, one branch interval at a time.
 
-    The domain is partitioned at every formula seam. Within one interval
-    a single closed-form branch applies, and each implemented branch is
-    strictly decreasing in width on its whole domain - provable from the
-    forms themselves (the narrow stripline and both Hammerstad branches
-    are logarithms of strictly decreasing arguments over strictly
-    increasing effective width; the wide stripline is a reciprocal of a
-    strictly increasing denominator) - so endpoint bracketing plus
-    bisection is exact there, and the endpoints are still checked as a
-    guard against a future branch that breaks the theorem. Roots from
-    adjacent intervals that coincide (a continuous seam) are merged;
-    genuinely distinct roots are all returned, and the caller decides
-    what multiplicity means. Nothing bisects across a seam.
+    The domain is partitioned at every top-level branch seam, and each
+    interval is solved under BRANCH-FORCED evaluation over the closure
+    of its branch's domain: the branch that owns the seam point (per the
+    production inequality) treats it as a closed endpoint; the
+    neighbouring branch prices it as its continuous one-sided limit and
+    accepts a root there only strictly inside its own territory. No
+    point of the domain is deleted, no point is owned twice, and a
+    target equal to Z(seam) resolves on the owner branch - while a
+    second root on the neighbouring branch, however close in width, is
+    reported alongside it, because two roots are only ever one root
+    when they are the same point, not when they are near each other.
+
+    Within one interval a single closed-form branch applies, and each
+    implemented branch is strictly decreasing in width on its whole
+    domain - provable from the forms themselves (logarithms of strictly
+    decreasing arguments over strictly increasing effective width; a
+    reciprocal of a strictly increasing denominator) - so endpoint
+    bracketing plus bisection is exact there, and the endpoints are
+    still checked as a guard against a future branch that breaks the
+    theorem.
     """
     seams = _seam_positions(context, low, high)
-    edges = [low] + seams + [high]
+    intervals = []
+    cursor, cursor_closed = low, True
+    branches = ["narrow", "wide"]
+    for index, (seam, owner) in enumerate(seams):
+        intervals.append((cursor, cursor_closed, seam, owner == "left",
+                          branches[min(index, 1)]))
+        cursor, cursor_closed = seam, owner == "right"
+    intervals.append((cursor, cursor_closed, high, True,
+                      branches[min(len(seams), 1)]))
+
     roots = []
     spans = []
-    for index in range(len(edges) - 1):
-        a = edges[index] + (_SEAM_EPSILON_MM if index else 0.0)
-        b = edges[index + 1] - (0.0 if index == len(edges) - 2
-                                else _SEAM_EPSILON_MM)
-        z_a, _e = _impedance_at(context, a)
-        z_b, _e = _impedance_at(context, b)
+    for a, a_closed, b, b_closed, branch in intervals:
+        force = branch if seams else None
+        z_a, _e = _impedance_at(context, a, _force_branch=force)
+        z_b, _e = _impedance_at(context, b, _force_branch=force)
         spans.append("[{:.4f}, {:.4f}] mm spans {:.2f} down to "
                      "{:.2f} ohm".format(a, b, z_a, z_b))
         if not z_a > z_b:
@@ -748,26 +795,29 @@ def _solve_width(context, low, high, target):
                 "[{:.4f}, {:.4f}] mm (Z {:.3f} -> {:.3f}); the model's "
                 "per-branch monotonicity assumption is violated and no "
                 "root there would be trustworthy".format(a, b, z_a, z_b))
-        if not z_b <= target <= z_a:
+        if target > z_a or target < z_b:
+            continue
+        if target == z_a and not a_closed:
+            # The branch's one-sided limit, not a point it owns.
+            continue
+        if target == z_b and not b_closed:
             continue
         left, right = a, b
         for _iteration in range(200):
             middle = (left + right) / 2.0
-            z_middle, _eps = _impedance_at(context, middle)
+            z_middle, _eps = _impedance_at(context, middle,
+                                           _force_branch=force)
             if abs(z_middle - target) < 1e-9 or (right - left) < 1e-12:
                 break
             if z_middle > target:
                 left = middle
             else:
                 right = middle
-        z_root, eps_root = _impedance_at(context, middle)
+        z_root, eps_root = _impedance_at(context, middle,
+                                         _force_branch=force)
         roots.append((middle, z_root, eps_root))
-    merged = []
-    for root in sorted(roots):
-        if merged and abs(root[0] - merged[-1][0]) < 1e-4:
-            continue
-        merged.append(root)
-    return merged, "; ".join(spans)
+    return sorted(roots), "; ".join(spans)
+
 
 
 def _manufacturing(capabilities, context, width):
@@ -836,11 +886,17 @@ def _result(context, request, range_record, numeric, manufacturing,
         "geometry_feasible": geometry_feasible,
         "fabrication_control": {
             "impedance_control_selected": controlled,
-            "requested_impedance_established":
+            "target_eligible_for_controlled_fabrication":
                 geometry_feasible and controlled,
-            "note": ("the profile selects controlled impedance, so a "
-                     "feasible geometry carries the target as a "
-                     "fabrication requirement"
+            "target_bound_to_fabrication_specification": False,
+            "note": ("the profile selects the controlled-impedance "
+                     "process and this target sits inside its stated "
+                     "range with a manufacturable geometry, so it is "
+                     "ELIGIBLE for controlled fabrication - but the "
+                     "target came from this solver request, and no "
+                     "board- or order-side impedance specification "
+                     "binds it yet; nothing here proves the target has "
+                     "been specified to the fabricator"
                      if controlled else
                      "the profile does not select controlled impedance: "
                      "a feasible geometry is an analytic nominal "
