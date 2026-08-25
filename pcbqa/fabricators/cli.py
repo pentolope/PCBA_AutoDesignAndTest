@@ -344,11 +344,18 @@ def _cmd_impedance(arguments, store):
     for item in freshness["attention"]:
         print("ATTENTION: {}".format(item))
     result["approved_freshness"] = freshness
+    control = result.get("fabrication_control") or {}
+    if not control.get("impedance_control_selected"):
+        print("NOTE: this profile does not select controlled impedance; "
+              "a successful exit means a manufacturable geometry whose "
+              "ANALYTIC nominal meets the target - it does not mean the "
+              "fabricator will control the line to it")
     print(json.dumps(result, indent=2))
-    # Exit success means a FEASIBLE design solution: a numeric root that
-    # violates the fabricator's own routing limits is diagnostics, not
-    # success.
-    return 0 if result.get("feasible") else 1
+    # Exit 0 means geometry_feasible: an unambiguous analytic root whose
+    # width the fabricator's published limits accept. Whether the target
+    # is also a controlled fabrication requirement is a separate fact,
+    # carried in fabrication_control and never implied by the exit code.
+    return 0 if result.get("geometry_feasible") else 1
 
 
 def _cmd_export(arguments, store):

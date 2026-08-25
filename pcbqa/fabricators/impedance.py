@@ -27,8 +27,9 @@ Supported topologies, deliberately few and stated exactly:
   * symmetric stripline - an internal signal with BOTH adjacent copper
     layers declared as references, one dielectric layer to each, equal in
     stated thickness and mapped to the SAME dielectric-constant record.
-    Cohn's characterisation: an equivalent-round-conductor form for
-    narrow strips and the fringing-capacitance form for wide ones.
+    Narrow strips use the IPC-2141 closed form, wide strips Cohn's
+    fringing-capacitance form; the exact equations, sources and validity
+    limits are stated at ``stripline_z0``.
 
 Everything else refuses by name: coated (soldermask-covered) microstrip,
 asymmetric stripline, mixed-dielectric stripline, embedded microstrip,
@@ -55,8 +56,13 @@ from .. import propagation
 #: Version 2 replaced the narrow-stripline branch: version 1 carried an
 #: equivalent-diameter expansion whose 0.51*pi*(t/w)^2 term could not be
 #: pinned to any printed source, so it was replaced outright by the
-#: IPC-2141 / Wadell closed form, which can.
-MODEL_VERSION = "2"
+#: IPC-2141 / Wadell closed form, which can. Version 3 made the inverse
+#: problem branch-aware: the piecewise formula seams are located
+#: analytically, each branch interval is solved separately under its own
+#: (provable) monotonicity, and a target that a seam makes ambiguous or
+#: unreachable is reported as exactly that instead of being bisected
+#: across an unproven interval.
+MODEL_VERSION = "3"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -119,20 +125,34 @@ def stripline_z0(epsilon_r, width_mm, plate_gap_mm, conductor_mm):
 
     `plate_gap_mm` is b: the span between the two reference planes.
 
-    Narrow strips - w/(b-t) < 0.35 - use the IPC-2141 closed form as
-    printed in Wadell's Transmission Line Design Handbook and reproduced
-    in Analog Devices tutorial MT-094:
+    Narrow strips - w/(b-t) < 0.35 - implement, exactly:
 
         Z0 = 60/sqrt(er) * ln( 4*b / (0.67*pi*(0.8*w + t)) )
 
-    Wide strips use Cohn's fringing-capacitance characterisation (Cohn,
-    "Characteristic Impedance of the Shielded-Strip Transmission Line",
-    IRE MTT 1954, as reproduced by Wadell). Stated validity, enforced
-    here: w/(b-t) < 0.35 for the narrow branch, t/b < 0.25 throughout,
-    and w < b for the wide branch's derivation. Both branches reduce at
-    t -> 0 to forms the test suite checks against Cohn's EXACT
-    zero-thickness elliptic-integral solution - an independent ground
-    truth, not a mirror of this code.
+    which is the IPC-2141 / Wadell closed form. Analog Devices tutorial
+    MT-094 prints the algebraically near-equivalent Z0 = 60/sqrt(er) *
+    ln(1.9*b/(0.8*w + t)) - "near" because 4/(0.67*pi) = 1.9004, so the
+    two prints differ by 0.02% in the constant; what runs here is the
+    0.67*pi form, with no other transformation.
+
+    Wide strips implement Cohn's fringing-capacitance characterisation
+    (Cohn, "Characteristic Impedance of the Shielded-Strip Transmission
+    Line", IRE MTT 1954, as reproduced by Wadell), untransformed.
+
+    Stated validity, enforced here: w/(b-t) < 0.35 selects the narrow
+    branch, t/b <= 0.25 throughout, w < b for the wide branch's
+    derivation. Accuracy, measured not assumed: at t -> 0 against Cohn's
+    exact elliptic solution the narrow form reads 2-4.5% low (worst near
+    the branch seam) and the wide form tracks within 0.6%. At finite
+    conductor thickness NO independent exact reference is available
+    here, so the finite-thickness model error is NOT quantitatively
+    bounded; the zero-thickness characterisation is the only measured
+    anchor, and nothing here converts it into a finite-thickness claim.
+
+    The two branches meet at w = 0.35*(b-t) with a thickness-dependent
+    step: upward in width at small t/b, closing toward zero near t/b ~
+    0.03. The inverse solver treats that seam as a first-class model
+    boundary - see ``_solve_width``.
 
     Version note: the model-1 narrow branch used an equivalent-diameter
     expansion whose transcription could not be pinned to a printed
@@ -184,23 +204,48 @@ def _finite_positive(label, value):
     return float(value)
 
 
-def _target_in_published_range(capabilities, mode, target):
+def _target_range(capabilities, mode, target, enforced):
+    """The fabricator's controlled-process target range, in its scope.
+
+    For a profile that SELECTS impedance control, the published range is
+    a fabrication constraint and a target outside it refuses. For an
+    uncontrolled nominal analysis the range describes a process nobody
+    ordered: it is attached to the result as information, and the
+    analytic model's own validity governs instead.
+    """
     identity = ("impedance_range_single_ended_ohm"
                 if mode == SINGLE_ENDED
                 else "impedance_range_differential_ohm")
     record = capabilities.get(identity)
+    if enforced:
+        if record is None:
+            raise ImpedanceError(
+                "the profile selects controlled impedance but the "
+                "approved catalog states no accepted {} range; whether "
+                "{} ohm is supported cannot be established, and unknown "
+                "is not supported".format(mode, target))
+        low, high = record["value"]["min"], record["value"]["max"]
+        if not low <= target <= high:
+            raise ImpedanceError(
+                "{} ohm is outside the fabricator's stated {} "
+                "controlled-impedance range of {}-{} ohm [{}]".format(
+                    target, mode, low, high, record["source"]))
+        return {"value": record["value"], "source": record["source"],
+                "enforced": True,
+                "note": "the profile selects controlled impedance, so "
+                        "the fabricator's stated target range is a "
+                        "fabrication constraint"}
     if record is None:
-        raise ImpedanceError(
-            "the approved catalog states no accepted {} impedance range; "
-            "whether {} ohm is supported cannot be established, and "
-            "unknown is not supported".format(mode, target))
-    low, high = record["value"]["min"], record["value"]["max"]
-    if not low <= target <= high:
-        raise ImpedanceError(
-            "{} ohm is outside the fabricator's stated {} range of "
-            "{}-{} ohm [{}]".format(target, mode, low, high,
-                                    record["source"]))
-    return record
+        return {"enforced": False,
+                "note": "no published range in the approved catalog; "
+                        "uncontrolled nominal analysis is governed by "
+                        "the analytic model's validity only"}
+    return {"value": record["value"], "source": record["source"],
+            "enforced": False,
+            "note": "the stated range describes the fabricator's "
+                    "controlled-impedance process, which this profile "
+                    "does not select; it does not constrain an "
+                    "uncontrolled nominal analysis"}
 
 
 # ---------------------------------------------------------------------------
@@ -549,8 +594,6 @@ def _solve(approved_snapshot, request):
                 mode, SINGLE_ENDED, DIFFERENTIAL))
     target = _finite_positive("target_ohm", request.get("target_ohm"))
     catalog = approved_snapshot["normalized"]
-    range_record = _target_in_published_range(
-        catalog["capabilities"], mode, target)
     if mode == DIFFERENTIAL:
         raise ImpedanceError(
             "differential solving is not implemented in this pass: the "
@@ -579,52 +622,152 @@ def _solve(approved_snapshot, request):
         request.get("stackup"), request.get("copper_layer"),
         request.get("reference_copper_layers"), soldermask)
 
-    z_low, _eps = _impedance_at(context, low)
-    z_high, _eps = _impedance_at(context, high)
-    # Monotonicity is checked, not presumed: impedance must fall as width
-    # grows across the whole domain, sampled densely enough to catch a
-    # misbehaving composition of corrections.
-    samples = 17
-    previous = None
-    for step in range(samples + 1):
-        width = low + (high - low) * step / samples
-        z, _e = _impedance_at(context, width)
-        if previous is not None and z >= previous:
-            raise ImpedanceError(
-                "impedance is not strictly decreasing in width over the "
-                "search domain (Z({:.4f}) = {:.3f} >= previous {:.3f}); "
-                "the model's assumptions do not hold here and a bisection "
-                "result would be meaningless".format(width, z, previous))
-        previous = z
-    if not z_high <= target <= z_low:
+    # The fabricator's published target range describes its CONTROLLED
+    # process. A profile that selects impedance control is held to it; an
+    # uncontrolled nominal analysis is governed by the analytic model's
+    # own validity and the caller's search domain, and the range is
+    # attached as information, never as a constraint on arithmetic.
+    controlled = bool(context["profile"].get("impedance_control"))
+    range_record = _target_range(catalog["capabilities"], mode, target,
+                                 enforced=controlled)
+
+    try:
+        roots, diagnostics = _solve_width(context, low, high, target)
+    except propagation.Unsupported as exc:
+        raise ImpedanceError(
+            "the width search domain reaches geometry outside the "
+            "model's stated validity ({}); narrow the domain to where "
+            "the model is defined rather than have it extrapolate".format(
+                exc))
+
+    if len(roots) > 1:
         return _result(context, request, range_record, numeric=None,
                        manufacturing=None,
-                       failure="no width in [{} , {}] mm reaches {} ohm; "
-                               "the domain spans {:.2f} down to {:.2f} "
-                               "ohm. The nearest bound is NOT returned: "
-                               "a target outside the domain has no "
-                               "solution in it".format(
-                                   low, high, target, z_low, z_high))
+                       ambiguous=[{"width_mm": round(w, 6),
+                                   "impedance_ohm": round(z, 3)}
+                                  for w, z, _e in roots],
+                       failure="the target is reached by {} distinct "
+                               "widths because a model branch seam makes "
+                               "impedance non-monotonic in this domain "
+                               "({}); no root is silently chosen - "
+                               "narrow the search domain to the intended "
+                               "side of the seam".format(
+                                   len(roots), diagnostics))
+    if not roots:
+        return _result(context, request, range_record, numeric=None,
+                       manufacturing=None, ambiguous=None,
+                       failure="no width in [{} , {}] mm reaches {} ohm "
+                               "({}). The nearest value is NOT returned: "
+                               "a target no interval brackets has no "
+                               "solution in this domain".format(
+                                   low, high, target, diagnostics))
 
-    a, b = low, high
-    for _iteration in range(200):
-        middle = (a + b) / 2.0
-        z_middle, eps_middle = _impedance_at(context, middle)
-        if abs(z_middle - target) < 1e-6 or (b - a) < 1e-9:
-            break
-        if z_middle > target:
-            a = middle
-        else:
-            b = middle
-    width = round(middle, 6)
-    z_final, eps_final = _impedance_at(context, width)
-
+    width, z_final, eps_final = roots[0]
+    width = round(width, 6)
     checks = _manufacturing(catalog["capabilities"], context, width)
     return _result(context, request, range_record, numeric={
         "width_mm": width,
         "impedance_ohm": round(z_final, 3),
         "epsilon_effective": round(eps_final, 4),
-    }, manufacturing=checks, failure=None)
+    }, manufacturing=checks, ambiguous=None, failure=None)
+
+
+#: Width inset used to evaluate one side of a formula seam without
+#: touching the other branch.
+_SEAM_EPSILON_MM = 1e-9
+
+
+def _seam_positions(context, low, high):
+    """Every piecewise-formula boundary inside the search domain.
+
+    These are located analytically from the model's own definitions - the
+    stripline branch split at w_mean = 0.35*(b - t), the microstrip
+    Hammerstad split at w_eff = h - and mapped back to base-width space
+    through the trapezoid delta. Sampling is not used: a seam is a fact
+    of the formula, not something to hope a sample lands on.
+    """
+    delta = context["trapezoid_delta_mm"]
+    seams = []
+    if context["topology"] == STRIPLINE:
+        b = context["span_mm"]
+        t = context["conductor_thickness_mm"]
+        seams.append(0.35 * (b - t) + delta / 2.0)
+    else:
+        h = context["height_mm"]
+        t = context["conductor_thickness_mm"]
+
+        def excess(width_mean):
+            return propagation.thickness_corrected_width(
+                width_mean, h, t) - h
+        a, c = 1e-6, high + delta
+        if excess(a) < 0 < excess(c):
+            for _ in range(200):
+                middle = (a + c) / 2.0
+                if excess(middle) > 0:
+                    c = middle
+                else:
+                    a = middle
+                if c - a < 1e-12:
+                    break
+            seams.append((a + c) / 2.0 + delta / 2.0)
+    return sorted(s for s in seams
+                  if low + _SEAM_EPSILON_MM < s < high - _SEAM_EPSILON_MM)
+
+
+def _solve_width(context, low, high, target):
+    """Roots of Z(width) = target, one branch interval at a time.
+
+    The domain is partitioned at every formula seam. Within one interval
+    a single closed-form branch applies, and each implemented branch is
+    strictly decreasing in width on its whole domain - provable from the
+    forms themselves (the narrow stripline and both Hammerstad branches
+    are logarithms of strictly decreasing arguments over strictly
+    increasing effective width; the wide stripline is a reciprocal of a
+    strictly increasing denominator) - so endpoint bracketing plus
+    bisection is exact there, and the endpoints are still checked as a
+    guard against a future branch that breaks the theorem. Roots from
+    adjacent intervals that coincide (a continuous seam) are merged;
+    genuinely distinct roots are all returned, and the caller decides
+    what multiplicity means. Nothing bisects across a seam.
+    """
+    seams = _seam_positions(context, low, high)
+    edges = [low] + seams + [high]
+    roots = []
+    spans = []
+    for index in range(len(edges) - 1):
+        a = edges[index] + (_SEAM_EPSILON_MM if index else 0.0)
+        b = edges[index + 1] - (0.0 if index == len(edges) - 2
+                                else _SEAM_EPSILON_MM)
+        z_a, _e = _impedance_at(context, a)
+        z_b, _e = _impedance_at(context, b)
+        spans.append("[{:.4f}, {:.4f}] mm spans {:.2f} down to "
+                     "{:.2f} ohm".format(a, b, z_a, z_b))
+        if not z_a > z_b:
+            raise ImpedanceError(
+                "impedance does not decrease across the branch interval "
+                "[{:.4f}, {:.4f}] mm (Z {:.3f} -> {:.3f}); the model's "
+                "per-branch monotonicity assumption is violated and no "
+                "root there would be trustworthy".format(a, b, z_a, z_b))
+        if not z_b <= target <= z_a:
+            continue
+        left, right = a, b
+        for _iteration in range(200):
+            middle = (left + right) / 2.0
+            z_middle, _eps = _impedance_at(context, middle)
+            if abs(z_middle - target) < 1e-9 or (right - left) < 1e-12:
+                break
+            if z_middle > target:
+                left = middle
+            else:
+                right = middle
+        z_root, eps_root = _impedance_at(context, middle)
+        roots.append((middle, z_root, eps_root))
+    merged = []
+    for root in sorted(roots):
+        if merged and abs(root[0] - merged[-1][0]) < 1e-4:
+            continue
+        merged.append(root)
+    return merged, "; ".join(spans)
 
 
 def _manufacturing(capabilities, context, width):
@@ -653,18 +796,25 @@ def _manufacturing(capabilities, context, width):
 
 
 def _result(context, request, range_record, numeric, manufacturing,
-            failure):
-    """One result shape, with feasibility separated from arithmetic.
+            ambiguous, failure):
+    """One result shape, with every success concept its own field.
 
-    `numeric_solution` is the root of the analytic equation - useful
-    diagnostics even when unbuildable. `feasible` is the design answer:
-    true only when a numeric root exists AND the geometry survives the
-    profile's own published manufacturing limits. A caller that reads
-    only one field must read `feasible`; a width that the fabricator
-    will not route is never a successful design solution.
+    There is deliberately no single field spelled like success. The
+    concepts an autonomous caller must not conflate are separated:
+    `numeric_solution` (the analytic root, diagnostics even when
+    unbuildable), `geometry_feasible` (root exists AND the width
+    survives the profile's published routing limits - the most a
+    nominal, uncontrolled calculation can ever establish), and
+    `fabrication_control.requested_impedance_established` (true ONLY
+    when the profile also selects controlled impedance, so the target
+    became a fabrication requirement rather than an analytic estimate).
+    "0.37 mm is manufacturable and analytically ~50 ohm" and "the
+    fabricator will control this line to 50 ohm" can no longer share a
+    flag.
     """
-    feasible = bool(numeric) and bool(manufacturing) \
+    geometry_feasible = bool(numeric) and bool(manufacturing) \
         and manufacturing.get("established", False)
+    controlled = bool(context["profile"].get("impedance_control"))
     return {
         "model": {
             "identity": context["topology"],
@@ -679,11 +829,24 @@ def _result(context, request, range_record, numeric, manufacturing,
         },
         "context": {key: value for key, value in context.items()
                     if key != "notes"},
-        "target_range": {"value": range_record["value"],
-                         "source": range_record["source"]},
+        "target_range": range_record,
         "numeric_solution": numeric,
+        "ambiguous_roots": ambiguous,
         "manufacturing": manufacturing,
-        "feasible": feasible,
+        "geometry_feasible": geometry_feasible,
+        "fabrication_control": {
+            "impedance_control_selected": controlled,
+            "requested_impedance_established":
+                geometry_feasible and controlled,
+            "note": ("the profile selects controlled impedance, so a "
+                     "feasible geometry carries the target as a "
+                     "fabrication requirement"
+                     if controlled else
+                     "the profile does not select controlled impedance: "
+                     "a feasible geometry is an analytic nominal "
+                     "estimate, and nothing here establishes that the "
+                     "fabricated line meets the requested impedance"),
+        },
         "failure": failure,
     }
 

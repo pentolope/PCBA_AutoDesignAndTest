@@ -73,7 +73,7 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
     def test_a_representative_solve_carries_its_whole_context(self):
         result = impedance.solve(self.snapshot, _request())
         numeric = result["numeric_solution"]
-        self.assertTrue(result["feasible"])
+        self.assertTrue(result["geometry_feasible"])
         self.assertTrue(result["manufacturing"]["established"])
         self.assertAlmostEqual(numeric["impedance_ohm"], 50.0, places=2)
         # ~0.37 mm for 50 ohm over 0.2104 mm of er-4.4 prepreg with 1 oz
@@ -137,12 +137,49 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         second = impedance.solve(copy.deepcopy(self.snapshot), _request())
         self.assertEqual(first["numeric_solution"],
                          second["numeric_solution"])
-        self.assertEqual(first["feasible"], second["feasible"])
+        self.assertEqual(first["geometry_feasible"], second["geometry_feasible"])
 
-    def test_targets_outside_the_published_ranges_refuse(self):
-        self._refuses("outside the fabricator's stated single-ended range",
-                      target_ohm=150.0)
-        self._refuses("outside the fabricator's stated differential range",
+    def test_the_controlled_range_binds_only_controlled_profiles(self):
+        """A controlled profile is held to the fabricator's stated
+        target range; an uncontrolled nominal analysis is not - the
+        range describes a process nobody ordered, so it rides along as
+        information while the model's own validity governs."""
+        self._refuses("outside the fabricator's stated single-ended "
+                      "controlled-impedance range",
+                      requirements=_requirements(impedance_control=True),
+                      stackup="JLC04161H-7628", target_ohm=150.0)
+        result = impedance.solve(self.snapshot,
+                                 _request(target_ohm=150.0))
+        self.assertFalse(result["target_range"]["enforced"])
+        self.assertIn("does not select", result["target_range"]["note"])
+        # 150 ohm is not reachable on this stack in this domain - the
+        # honest outcome is no-solution, never a range refusal.
+        self.assertIsNone(result["numeric_solution"])
+        self.assertIn("no width", result["failure"])
+
+    def test_an_uncontrolled_nominal_can_exceed_the_controlled_range(self):
+        """91 ohm sits above the stated 20-90 controlled range.
+        Uncontrolled analysis may still compute it - the range is
+        information, not a constraint - and the result then says
+        exactly what the number is: an analytic root whose width falls
+        below the published minimum track, so the geometry is not
+        feasible and nothing claims fabrication control."""
+        result = impedance.solve(
+            self.snapshot, _request(target_ohm=91.0,
+                                    width_search_mm={"min": 0.06,
+                                                     "max": 2.0}))
+        self.assertFalse(result["target_range"]["enforced"])
+        self.assertIsNotNone(result["numeric_solution"])
+        self.assertLess(result["numeric_solution"]["width_mm"], 0.09)
+        self.assertFalse(result["geometry_feasible"])
+        self.assertFalse(result["manufacturing"]["established"])
+        control = result["fabrication_control"]
+        self.assertFalse(control["impedance_control_selected"])
+        self.assertFalse(control["requested_impedance_established"])
+        self.assertIn("nothing here establishes", control["note"])
+
+    def test_differential_refuses_as_unsupported_at_any_target(self):
+        self._refuses("differential solving is not implemented",
                       mode="differential", target_ohm=250.0)
 
     def test_differential_inside_range_is_a_named_unsupported(self):
@@ -305,7 +342,7 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         # The numeric root is preserved as diagnostics; the DESIGN answer
         # is infeasible, and that is the field a caller must key on.
         self.assertIsNotNone(result["numeric_solution"])
-        self.assertFalse(result["feasible"])
+        self.assertFalse(result["geometry_feasible"])
         self.assertFalse(result["manufacturing"]["established"])
         self.assertIn("below the strictest published minimum",
                       result["manufacturing"]["issue"])
@@ -316,7 +353,7 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
             _request(target_ohm=30.0,
                      width_search_mm={"min": 0.15, "max": 0.5}))
         self.assertIsNone(result["numeric_solution"])
-        self.assertFalse(result["feasible"])
+        self.assertFalse(result["geometry_feasible"])
         self.assertIn("NOT returned", result["failure"])
 
     def test_provenance_reaches_the_sources(self):
@@ -348,7 +385,7 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         self.assertEqual(feasible.returncode, 0, feasible.stdout[-500:])
         document = json_module.loads(
             feasible.stdout[feasible.stdout.index("{"):])
-        self.assertTrue(document["feasible"])
+        self.assertTrue(document["geometry_feasible"])
         no_solution = subprocess.run(
             [arg if arg not in ("0.1", "2.0") else
              {"0.1": "0.15", "2.0": "0.5"}[arg] for arg in base]
@@ -357,8 +394,24 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         self.assertNotEqual(no_solution.returncode, 0)
         document = json_module.loads(
             no_solution.stdout[no_solution.stdout.index("{"):])
-        self.assertFalse(document["feasible"])
+        self.assertFalse(document["geometry_feasible"])
         self.assertIsNone(document["numeric_solution"])
+
+    def test_a_controlled_solution_carries_the_established_state(self):
+        result = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628"))
+        self.assertTrue(result["geometry_feasible"])
+        control = result["fabrication_control"]
+        self.assertTrue(control["impedance_control_selected"])
+        self.assertTrue(control["requested_impedance_established"])
+
+    def test_an_uncontrolled_root_never_reads_as_established(self):
+        result = impedance.solve(self.snapshot, _request())
+        self.assertTrue(result["geometry_feasible"])
+        self.assertFalse(result["fabrication_control"][
+            "requested_impedance_established"])
+        self.assertNotIn("feasible", result)
 
     def test_the_solver_module_performs_no_network_access(self):
         with open(os.path.join(HERE, "pcbqa", "fabricators",
@@ -562,6 +615,121 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
             impedance.microstrip_z0(4.3, 25.0, 1.0, 1e-12)  # u > 20
         with self.assertRaises(propagation.Unsupported):
             impedance.microstrip_z0(4.3, 0.05, 1.0, 1e-12)  # u < 0.1
+
+    @staticmethod
+    def _stripline_context(conductor_mm, span_mm=1.0, epsilon_r=4.2):
+        """A handcrafted stripline model context for seam experiments."""
+        return {"topology": impedance.STRIPLINE,
+                "span_mm": span_mm, "epsilon_r": epsilon_r,
+                "conductor_thickness_mm": conductor_mm,
+                "trapezoid_delta_mm": 0.0}
+
+    def test_direct_evaluation_on_both_sides_of_every_seam(self):
+        """The seam locations are analytic facts; the values immediately
+        on each side are part of the model contract. At near-zero
+        thickness the stripline seam steps UP with width (the known
+        narrow-form bias); at t/b = 0.03 the step nearly closes. The
+        microstrip u=1 seam steps DOWN, preserving monotonicity."""
+        thin = self._stripline_context(1e-9)
+        seam = 0.35 * (1.0 - 1e-9)
+        below, _e = impedance._impedance_at(thin, seam - 1e-9)
+        above, _e = impedance._impedance_at(thin, seam + 1e-9)
+        self.assertGreater(above, below)
+        self.assertLess((above - below) / below, 0.05)
+        thick = self._stripline_context(0.03)
+        seam = 0.35 * (1.0 - 0.03)
+        below, _e = impedance._impedance_at(thick, seam - 1e-9)
+        above, _e = impedance._impedance_at(thick, seam + 1e-9)
+        # measured: the step closes from ~3.5% at t->0 to ~1.2% here
+        self.assertLess(abs(above - below) / below, 0.02)
+        narrow, _e = impedance.microstrip_z0(1.0 + 1e-12, 0.9999999,
+                                             1.0, 1e-12)
+        wide, _e = impedance.microstrip_z0(1.0 + 1e-12, 1.0000001,
+                                           1.0, 1e-12)
+        self.assertGreater(narrow, wide)
+
+    def test_a_target_inside_the_seam_overlap_returns_all_roots(self):
+        """At tiny thickness the upward seam step means one target is
+        reached by two widths - one on each branch. Model v2 bisected
+        across the seam and silently returned one of them; model v3
+        reports both and refuses to choose."""
+        context = self._stripline_context(1e-9)
+        seam = 0.35 * (1.0 - 1e-9)
+        below, _e = impedance._impedance_at(context, seam - 1e-9)
+        above, _e = impedance._impedance_at(context, seam + 1e-9)
+        target = (below + above) / 2.0
+        roots, _diag = impedance._solve_width(context, 0.1, 0.8, target)
+        self.assertEqual(len(roots), 2)
+        first, second = roots[0][0], roots[1][0]
+        self.assertLess(first, seam)
+        self.assertGreater(second, seam)
+        for _width, z, _eps in roots:
+            self.assertAlmostEqual(z, target, places=6)
+
+    def test_a_target_inside_a_downward_seam_gap_has_no_root(self):
+        """Where the seam steps down, the band between the two edge
+        values is unreachable: the solver reports zero roots rather
+        than converging to the seam and calling it a solution."""
+        context = self._stripline_context(0.05)
+        seam = 0.35 * (1.0 - 0.05)
+        below, _e = impedance._impedance_at(context, seam - 1e-9)
+        above, _e = impedance._impedance_at(context, seam + 1e-9)
+        if above < below:
+            target = (below + above) / 2.0
+            roots, _diag = impedance._solve_width(context, 0.1, 0.8,
+                                                  target)
+            self.assertEqual(len(roots), 0)
+
+    def test_the_full_solve_reports_ambiguity_without_choosing(self):
+        """Through the public solve: a synthetic symmetric construction
+        with near-zero inner copper puts the seam step in play, and a
+        target inside the overlap must come back as ambiguous_roots
+        with no numeric_solution."""
+        catalog = jlcpcb.parse(_raw_sources())
+        synthetic = copy.deepcopy(
+            catalog["stackups"]["JLC-4L-no-requirement"])
+        for layer in synthetic["layers"]:
+            if layer["role"] == "dielectric":
+                layer.pop("material", None)
+                layer.pop("sheet_count", None)
+                layer["form"] = "core"
+                layer["thickness_mm"] = 0.2104
+        core = dict(catalog["materials"][
+            "core NP-155F 0.2mm (impedance-calculator)"])
+        core["properties"] = dict(core["properties"],
+                                  core_thickness_mm=0.2104)
+        catalog["materials"][
+            "core NP-155F 0.2104mm (impedance-calculator)"] = core
+        catalog["stackups"]["SYN-SYM"] = synthetic
+        snapshot = {"normalized": catalog,
+                    "normalized_sha256": model.normalized_digest(catalog),
+                    "parser": {"id": "x", "version": "0"},
+                    "retrieved_utc": "2026-08-25T00:00:00+00:00",
+                    "sources": []}
+        context = impedance.resolve_context(
+            snapshot, _requirements(), "SYN-SYM", 2, [1, 3], False)
+        seam = 0.35 * (context["span_mm"]
+                       - context["conductor_thickness_mm"])
+        below, _e = impedance._impedance_at(context, seam - 1e-9)
+        above, _e = impedance._impedance_at(context, seam + 1e-9)
+        if above > below:
+            target = round((below + above) / 2.0, 4)
+            result = impedance.solve(snapshot, _request(
+                stackup="SYN-SYM", copper_layer=2,
+                reference_copper_layers=[1, 3],
+                soldermask_present=False, target_ohm=target,
+                width_search_mm={"min": 0.05, "max": 0.4}))
+            self.assertIsNone(result["numeric_solution"])
+            self.assertEqual(len(result["ambiguous_roots"]), 2)
+            self.assertFalse(result["geometry_feasible"])
+            self.assertIn("no root is silently chosen",
+                          result["failure"])
+
+    def test_a_domain_reaching_invalid_geometry_refuses_cleanly(self):
+        with self.assertRaises(impedance.ImpedanceError) as caught:
+            impedance.solve(_snapshot(), _request(
+                width_search_mm={"min": 0.005, "max": 2.0}))
+        self.assertIn("narrow the domain", str(caught.exception))
 
     def test_gapless_result_values_never_carry_nan(self):
         snapshot = _snapshot()
