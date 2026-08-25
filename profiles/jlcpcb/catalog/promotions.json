@@ -241,5 +241,48 @@
       }
     ],
     "to_normalized_sha256": "21c904a74d3f14ece2144333366be0bc37cde4b1b777590006d7d23e7277fe68"
+  },
+  {
+    "change_summary": [
+      "capability-added: impedance_tolerance_standard_percent"
+    ],
+    "from_normalized_sha256": "21c904a74d3f14ece2144333366be0bc37cde4b1b777590006d7d23e7277fe68",
+    "initial": false,
+    "note": "Parser v6, hand-reviewed: one addition - the fabricator's stated standard impedance-control tolerance (plus-minus 10 percent, from the capabilities page's Impedance Tolerance row) - normalized so impedance-solver results can quote it verbatim rather than either fabricating an interval or omitting the fabricator's own statement. No other change.",
+    "parser": {
+      "id": "pcbqa.fabricators.jlcpcb",
+      "version": "6"
+    },
+    "promoted_utc": "2026-08-25T21:09:31.770999+00:00",
+    "retrieved_utc": "2026-08-25T21:09:17.739495+00:00",
+    "semantic_changes": 1,
+    "sources": [
+      {
+        "id": "impedance",
+        "sha256_raw": "97dddf2cac68f46e176611c87ae1bf6025edc5baf310908c3744f64e987aaeea",
+        "url": "https://jlcpcb.com/impedance"
+      },
+      {
+        "id": "capabilities",
+        "sha256_raw": "4fd29df872d949784ad74a53adc1cce3c5891bae5eafc36c7b772d98231b28a2",
+        "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
+      },
+      {
+        "id": "copper-weight",
+        "sha256_raw": "dbc5a99d076dcf6c9dbbe6bb3419433fc6d510f8e1638c27e0dc7d5ed42a9a07",
+        "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
+      },
+      {
+        "id": "impedance-calculator",
+        "sha256_raw": "ee14d6f9d8c4d0827c5a0fdad85d0bbcd9e3e7ab3ae9f2ed2ee69bbbe86f5a32",
+        "url": "https://jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator"
+      },
+      {
+        "id": "thickness-options",
+        "sha256_raw": "5b40dbadcef1bb6671075ab585985bf0ac84557ab539965c2e787dfcb759fa87",
+        "url": "https://jlcpcb.com/resources/pcb-thickness"
+      }
+    ],
+    "to_normalized_sha256": "f7cd05e75e1f9d6d015276986a43c13f2e2162ded30eea61f0362f999a97918c"
   }
 ]

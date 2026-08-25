@@ -1,5 +1,5 @@
 {
-  "approved_utc": "2026-08-25T17:08:44.725546+00:00",
+  "approved_utc": "2026-08-25T21:09:31.770999+00:00",
   "declared_source_ids": [
     "impedance",
     "capabilities",
@@ -415,6 +415,15 @@
           "max": 90.0,
           "min": 20.0
         }
+      },
+      "impedance_tolerance_standard_percent": {
+        "category": "impedance",
+        "conditions": "the fabricator's stated standard impedance control tolerance; the page separately states a tighter tolerance is available upon special request",
+        "excerpt": "Impedance Tolerance\n\u00b110%",
+        "name": "impedance_tolerance_standard_percent",
+        "source": "capabilities",
+        "units": "percent",
+        "value": 10.0
       },
       "inner_copper_default_oz": {
         "applies": {
@@ -4235,49 +4244,49 @@
       }
     }
   },
-  "normalized_sha256": "21c904a74d3f14ece2144333366be0bc37cde4b1b777590006d7d23e7277fe68",
+  "normalized_sha256": "f7cd05e75e1f9d6d015276986a43c13f2e2162ded30eea61f0362f999a97918c",
   "outcome": "complete",
   "parser": {
     "id": "pcbqa.fabricators.jlcpcb",
-    "version": "5"
+    "version": "6"
   },
-  "replaced_normalized_sha256": "7777d68d13ec2ab99cd9b847a9d0afc96f5c10fb95ade20bab2d0134194726c8",
-  "retrieved_utc": "2026-08-25T17:08:26.060903+00:00",
+  "replaced_normalized_sha256": "21c904a74d3f14ece2144333366be0bc37cde4b1b777590006d7d23e7277fe68",
+  "retrieved_utc": "2026-08-25T21:09:17.739495+00:00",
   "schema_version": 3,
   "sources": [
     {
-      "bytes": 294087,
+      "bytes": 294085,
       "id": "impedance",
       "kind": "official-stackup-page",
-      "sha256_raw": "de80dd74670e6759123162dc298df4047ebf80c8a7275441f2abb3ab9f42a1b7",
+      "sha256_raw": "97dddf2cac68f46e176611c87ae1bf6025edc5baf310908c3744f64e987aaeea",
       "url": "https://jlcpcb.com/impedance"
     },
     {
-      "bytes": 134873,
+      "bytes": 134465,
       "id": "capabilities",
       "kind": "official-capabilities-page",
-      "sha256_raw": "632d4a439c5604b3c79efc171a01a2852eb749ffdd2a1e5c0e0d534024a382f9",
+      "sha256_raw": "4fd29df872d949784ad74a53adc1cce3c5891bae5eafc36c7b772d98231b28a2",
       "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
     },
     {
-      "bytes": 109942,
+      "bytes": 109950,
       "id": "copper-weight",
       "kind": "official-help-article",
-      "sha256_raw": "cc8bd6c2ea92a4747ad870448939b3b5461b3fa79ad91f94bb49be5f75081490",
+      "sha256_raw": "dbc5a99d076dcf6c9dbbe6bb3419433fc6d510f8e1638c27e0dc7d5ed42a9a07",
       "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
     },
     {
-      "bytes": 135792,
+      "bytes": 135791,
       "id": "impedance-calculator",
       "kind": "official-help-article",
-      "sha256_raw": "78d1cdc0d3141e014cd9c5a702eb2653be486805a5a5fcbce03c3718a5ad7071",
+      "sha256_raw": "ee14d6f9d8c4d0827c5a0fdad85d0bbcd9e3e7ab3ae9f2ed2ee69bbbe86f5a32",
       "url": "https://jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator"
     },
     {
-      "bytes": 94619,
+      "bytes": 95028,
       "id": "thickness-options",
       "kind": "official-resource-page",
-      "sha256_raw": "d2e849caa7230432fda7a962f5864218854a8076a9e208f67dc0cbc3320532a5",
+      "sha256_raw": "5b40dbadcef1bb6671075ab585985bf0ac84557ab539965c2e787dfcb759fa87",
       "url": "https://jlcpcb.com/resources/pcb-thickness"
     }
   ]

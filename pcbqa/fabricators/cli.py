@@ -85,6 +85,30 @@ def main(argv):
     _common(select)
     select.add_argument("requirements", help="path to a requirements JSON")
 
+    impedance = commands.add_parser("impedance")
+    _common(impedance)
+    impedance.add_argument("requirements",
+                           help="path to the board's fabrication "
+                                "requirements JSON")
+    impedance.add_argument("--stackup", required=True)
+    impedance.add_argument("--layer", type=int, required=True,
+                           help="1-based copper layer index in the "
+                                "construction, outermost first")
+    impedance.add_argument("--references", required=True,
+                           help="comma-separated 1-based copper indices "
+                                "of the declared reference plane(s)")
+    impedance.add_argument("--mode", default="single-ended",
+                           choices=["single-ended", "differential"])
+    impedance.add_argument("--target", type=float, required=True,
+                           help="target impedance in ohms")
+    impedance.add_argument("--width-min", type=float, required=True)
+    impedance.add_argument("--width-max", type=float, required=True)
+    impedance.add_argument("--soldermask", required=True,
+                           choices=["present", "absent"],
+                           help="whether the routing layer is covered by "
+                                "soldermask; the topology depends on it "
+                                "and it is not guessed")
+
     export = commands.add_parser("export-stackup")
     _common(export)
     export.add_argument("requirements",
@@ -124,6 +148,8 @@ def _dispatch(arguments, store):
         return _cmd_select(arguments, store)
     if arguments.command == "export-stackup":
         return _cmd_export(arguments, store)
+    if arguments.command == "impedance":
+        return _cmd_impedance(arguments, store)
     raise AssertionError(arguments.command)
 
 
@@ -286,6 +312,40 @@ def _cmd_select(arguments, store):
         print("ATTENTION: {}".format(freshness.get("detail")))
     print(json.dumps(result, indent=2))
     return 0 if result["feasible"] else 1
+
+
+def _cmd_impedance(arguments, store):
+    from . import impedance as _impedance
+    approved = store.approved()
+    if approved is None:
+        print("REFUSED: no approved catalog; the solver never runs "
+              "against unreviewed data")
+        return 1
+    with open(arguments.requirements, encoding="utf-8") as handle:
+        requirements = json.load(handle)
+    references = [int(value) for value in
+                  arguments.references.split(",") if value.strip()]
+    try:
+        result = _impedance.solve_with_provenance(approved, {
+            "requirements": requirements,
+            "stackup": arguments.stackup,
+            "copper_layer": arguments.layer,
+            "reference_copper_layers": references,
+            "mode": arguments.mode,
+            "target_ohm": arguments.target,
+            "width_search_mm": {"min": arguments.width_min,
+                                "max": arguments.width_max},
+            "soldermask_present": arguments.soldermask == "present",
+        })
+    except _impedance.ImpedanceError as exc:
+        print("REFUSED: {}".format(exc))
+        return 1
+    freshness = store.freshness()
+    for item in freshness["attention"]:
+        print("ATTENTION: {}".format(item))
+    result["approved_freshness"] = freshness
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("solved") else 1
 
 
 def _cmd_export(arguments, store):

@@ -61,7 +61,7 @@ FABRICATOR = "jlcpcb"
 
 #: Bump when extraction logic changes meaning. A changed parser version with
 #: unchanged raw sources explains a changed normalized catalog by itself.
-PARSER_VERSION = "5"
+PARSER_VERSION = "6"
 
 SOURCES = (
     {"id": "impedance", "kind": "official-stackup-page",
@@ -460,6 +460,13 @@ def _parse_capabilities(html, catalog):
          r"Layer count\n(\d+)-(\d+) Layers",
          lambda m: {"min": int(m.group(1)), "max": int(m.group(2))}, None,
          None, None),
+        ("impedance_tolerance_standard_percent", "impedance",
+         r"Impedance Tolerance\n\u00b1(\d+)%",
+         lambda m: float(m.group(1)), "percent",
+         lambda m: "the fabricator's stated standard impedance control "
+                   "tolerance; the page separately states a tighter "
+                   "tolerance is available upon special request",
+         None),
         ("fr4_thickness_options_mm", "board",
          r"Thickness for FR4 are: ([\d./]+) ?mm \(([^)]*)\)",
          lambda m: [float(v) for v in m.group(1).split("/")], "mm",
