@@ -87,7 +87,14 @@ def main(argv):
 
     export = commands.add_parser("export-stackup")
     _common(export)
-    export.add_argument("--stackup", required=True)
+    export.add_argument("requirements",
+                        help="path to the board's fabrication requirements "
+                             "JSON; the export re-runs selection and only "
+                             "a construction compatible with the selected "
+                             "profile can come out")
+    export.add_argument("--stackup", default=None,
+                        help="resolve a preserved candidate ambiguity; "
+                             "must be one of the selection's own candidates")
     export.add_argument("--copper-layers", required=True,
                         help="comma-separated board copper layer names, "
                              "outermost first")
@@ -288,8 +295,10 @@ def _cmd_export(arguments, store):
         return 1
     names = [name.strip() for name in arguments.copper_layers.split(",")
              if name.strip()]
-    document = _selection.export_physical_stackup(approved,
-                                                  arguments.stackup, names)
+    with open(arguments.requirements, encoding="utf-8") as handle:
+        requirements = json.load(handle)
+    document = _selection.export_physical_stackup(
+        approved, requirements, names, stackup_id=arguments.stackup)
     text = json.dumps(document, indent=2) + "\n"
     if arguments.out:
         with open(arguments.out, "w", encoding="utf-8", newline="") as handle:

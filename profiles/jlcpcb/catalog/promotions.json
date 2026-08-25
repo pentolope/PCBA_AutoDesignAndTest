@@ -76,5 +76,62 @@
       }
     ],
     "to_normalized_sha256": "c01eac2fc111764513aa30bebd60f379cf220be9511569b322efe24efff25b04"
+  },
+  {
+    "change_summary": [
+      "capability-added: controlled_impedance_layer_counts",
+      "capability-added: finished_copper_external_1oz_mil",
+      "capability-added: finished_copper_internal_0.5oz_mil",
+      "capability-added: finished_copper_internal_1oz_mil",
+      "capability-added: finished_inner_half_oz_um",
+      "capability-added: fr4_copper_layer_options",
+      "capability-added: fr4_thickness_2p5mm_plus",
+      "capability-added: impedance_calculator_external_oz",
+      "capability-added: impedance_calculator_internal_oz",
+      "capability-added: impedance_core_material 10-upL",
+      "capability-added: impedance_core_material 4-8L",
+      "capability-added: impedance_range_differential_ohm",
+      "capability-added: impedance_range_single_ended_ohm",
+      "capability-added: soldermask_between_traces_mil",
+      "capability-added: soldermask_on_copper_mil",
+      "capability-added: soldermask_on_fr4_mil",
+      "capability-added: trace_top_vs_base_width_mil",
+      "material-added: core NP-155F 0.08mm (impedance-calculator)",
+      "material-added: core NP-155F 0.13mm (impedance-calculator)",
+      "material-added: core NP-155F 0.15mm (impedance-calculator)"
+    ],
+    "from_normalized_sha256": "c01eac2fc111764513aa30bebd60f379cf220be9511569b322efe24efff25b04",
+    "initial": false,
+    "note": "Parser v3 upgrade with the official impedance-calculator guide (jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator) added as a fourth source. Hand-reviewed: all 49 changes are additions, zero modifications or removals of existing records. 32 scoped material records (NP-155F thickness-conditioned core Dk for 4-8 layer boards, S1000-2M for 10+, family-scoped prepreg Dk, soldermask Dk 3.8) all carrying context/applies/properties so none can stand in for the generic stackup-page values; 17 capabilities: the discrete controlled-impedance layer enumeration (4/6/.../32, ellipsis read as continuing by two), the derived discrete general layer set, the 2.5mm+/12+-layer thickness condition, finished-vs-nominal copper thickness statements (external 1oz=1.6mil, internal 0.5oz=0.6mil/15.2um, internal 1oz=1.2mil), calculator copper support, impedance ranges, soldermask thicknesses, and the trace trapezoid.",
+    "parser": {
+      "id": "pcbqa.fabricators.jlcpcb",
+      "version": "3"
+    },
+    "promoted_utc": "2026-08-25T13:45:27.954921+00:00",
+    "retrieved_utc": "2026-08-25T13:45:02.787549+00:00",
+    "semantic_changes": 49,
+    "sources": [
+      {
+        "id": "impedance",
+        "sha256_raw": "aea035bcdbc79d3211399f2922647f0faa3f8c76ad741777a036e92627f0fad4",
+        "url": "https://jlcpcb.com/impedance"
+      },
+      {
+        "id": "capabilities",
+        "sha256_raw": "191cec2a05f6b4ed202119c4b9e43076004e28a1b1b270178f7962069aee52b5",
+        "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
+      },
+      {
+        "id": "copper-weight",
+        "sha256_raw": "10e5f95c4b4710c18d5fe267a83254d34589364ded28b6a79a6a66e649d10e28",
+        "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
+      },
+      {
+        "id": "impedance-calculator",
+        "sha256_raw": "1e86ed5b0f36c46a21ce919f4bd8e40530d0d2aa6b99b5ec8d5750e83c03ef42",
+        "url": "https://jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator"
+      }
+    ],
+    "to_normalized_sha256": "fd6b92a3449cd4ae5586b20e3bc2e459bacce87afaa87569a0419bcdf0ec284d"
   }
 ]

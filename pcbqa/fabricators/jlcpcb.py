@@ -61,7 +61,7 @@ FABRICATOR = "jlcpcb"
 
 #: Bump when extraction logic changes meaning. A changed parser version with
 #: unchanged raw sources explains a changed normalized catalog by itself.
-PARSER_VERSION = "2"
+PARSER_VERSION = "3"
 
 SOURCES = (
     {"id": "impedance", "kind": "official-stackup-page",
@@ -70,6 +70,9 @@ SOURCES = (
      "url": "https://jlcpcb.com/capabilities/pcb-capabilities"},
     {"id": "copper-weight", "kind": "official-help-article",
      "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"},
+    {"id": "impedance-calculator", "kind": "official-help-article",
+     "url": "https://jlcpcb.com/help/article/"
+            "user-guide-to-the-jlcpcb-impedance-calculator"},
 )
 
 
@@ -371,10 +374,18 @@ def _applicability(identity, name, stackup, catalog):
     annotations = {l.get("annotation") for l in layers if l.get("annotation")}
     if any("H/H" in annotation for annotation in annotations):
         applicability["inner_copper_weight_oz"] = 0.5
-        applicability["inner_basis"] = (
-            "core cladding notation 'H/H OZ' read as half-oz/half-oz, "
-            "corroborated by the stated 0.5 oz inner default "
-            "[copper-weight, capabilities]")
+        basis = ("core cladding notation 'H/H OZ' read as half-oz/half-oz, "
+                 "corroborated by the stated 0.5 oz inner default "
+                 "[copper-weight, capabilities]")
+        finished = catalog["capabilities"].get("finished_inner_half_oz_um")
+        inner_mm = applicability.get("inner_copper_thickness_mm")
+        if finished is not None and inner_mm is not None and \
+                abs(inner_mm * 1000.0 - finished["value"]) < 0.05:
+            basis += (", and by the stated finished 0.5 oz inner thickness "
+                      "of {} um matching this construction's {} mm "
+                      "[impedance-calculator]".format(finished["value"],
+                                                      inner_mm))
+        applicability["inner_basis"] = basis
 
     # Nominal thickness: named constructions encode it (JLC 04 16 1H -> 4
     # layers, 1.6 mm), and the reading is only accepted when the summed
@@ -486,6 +497,89 @@ def _parse_capabilities(html, catalog):
 
     _parse_traces_table(text, catalog)
     _parse_trace_coils(text, catalog)
+    _parse_layer_counts(text, catalog)
+
+
+_IMPEDANCE_LAYERS = re.compile(
+    r"Controlled Impedance\n((?:\d+/)+)\.\.\./(\d+) layers")
+
+
+def _parse_layer_counts(text, catalog):
+    """The discrete copper-layer counts, from the fabricator's own words.
+
+    The page states the general capability as a range ("1-32 Layers") and
+    enumerates discrete counts only in the Controlled Impedance row:
+    "4/6/8/10/.../32 layers". The enumeration's explicit prefix must
+    ascend by two and its closing value must continue that arithmetic, or
+    the ellipsis reading is refused - an interpretation is only kept while
+    the page corroborates it.
+
+    Two records come out. The impedance list is verbatim-plus-ellipsis.
+    The general discrete set is a stated-plus-derived record: {1, 2} from
+    the rows conditioned on "1- and 2-layer" boards, the even multilayer
+    counts from the enumeration, bounded by the stated 1-32 range. No
+    statement anywhere on the official pages supports an odd count of
+    three or more, and what no statement supports is not offered here -
+    a 3- or 5-layer request must fail on the fabricator's silence, not
+    slip through a numeric range.
+    """
+    source = "capabilities"
+    found = _IMPEDANCE_LAYERS.search(text)
+    if not found:
+        raise ParseError(
+            "capabilities page: the Controlled Impedance layer enumeration "
+            "is gone; without it neither impedance availability nor the "
+            "discrete layer-count set has stated evidence")
+    explicit = [int(v) for v in found.group(1).rstrip("/").split("/")]
+    last = int(found.group(2))
+    steps = [b - a for a, b in zip(explicit, explicit[1:])]
+    if not explicit or set(steps) != {2} or (last - explicit[-1]) % 2 != 0 \
+            or last <= explicit[-1]:
+        raise ParseError(
+            "capabilities page: the Controlled Impedance enumeration {} "
+            "... {} no longer ascends by two; the ellipsis reading no "
+            "longer holds and must be re-reviewed".format(explicit, last))
+    counts = list(range(explicit[0], last + 1, 2))
+    catalog["capabilities"]["controlled_impedance_layer_counts"] = \
+        model.capability(
+            source, "controlled_impedance_layer_counts", counts,
+            conditions="layer counts for which controlled impedance is "
+                       "offered; the page enumerates {} then elides to {} "
+                       "and the elision is read as continuing by two".format(
+                           "/".join(str(v) for v in explicit), last),
+            excerpt=found.group(0)[:160].replace("\n", " | "),
+            category="layers")
+    catalog["capabilities"]["fr4_copper_layer_options"] = \
+        model.capability(
+            source, "fr4_copper_layer_options", [1, 2] + counts,
+            conditions="discrete supported copper-layer counts: 1 and 2 "
+                       "from the rows the page conditions on 1- and "
+                       "2-layer boards, the even multilayer counts from "
+                       "the Controlled Impedance enumeration, inside the "
+                       "stated 1-32 range; no official statement supports "
+                       "an odd count of three or more, so none is offered",
+            excerpt=found.group(0)[:160].replace("\n", " | "),
+            category="layers")
+
+    thick = re.search(r"2\.5 ?mm and above are for (\d+)\+ layer PCBs "
+                      r"only", text)
+    if thick:
+        catalog["capabilities"]["fr4_thickness_2p5mm_plus"] = \
+            model.capability(
+                source, "fr4_thickness_2p5mm_plus",
+                {"min": 2.5}, units="mm",
+                conditions="board thicknesses of 2.5 mm and above exist "
+                           "only for {}+ layer boards; their discrete "
+                           "values are not published".format(
+                               thick.group(1)),
+                excerpt=thick.group(0)[:160], category="board",
+                applies={"min_layers": int(thick.group(1)),
+                         "max_layers": None})
+    else:
+        catalog["not_extracted"].append({
+            "source": source, "field": "fr4_thickness_2p5mm_plus",
+            "reason": "the 2.5 mm / 12+ layer condition not found where "
+                      "last published"})
 
 
 #: One clause of a trace/space statement: an optional layer-class prefix,
@@ -608,6 +702,272 @@ def _parse_trace_coils(text, catalog):
             {"track": float(found.group(1)), "space": float(found.group(2))},
             units="mm", conditions=conditions,
             excerpt=found.group(0)[:160], category="trace-coils")
+
+
+
+# ---------------------------------------------------------------------------
+# impedance-calculator guide: the impedance model's own numbers, scoped
+# ---------------------------------------------------------------------------
+
+_TD = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
+_TR = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S)
+_MIL = re.compile(r"([\d.]+)\s*mil")
+_CORE_MM = re.compile(r"^(>\s*)?([\d.]+)\s*mm$")
+
+#: What the impedance-calculator model's records mean. They describe the
+#: numbers JLCPCB's own impedance calculation uses - deduced from test
+#: results by JLCPCB, per the page's own disclaimer - and they are NOT the
+#: generic stackup-page values. Both live in the catalog under distinct
+#: identities; a consumer chooses the scope that matches the calculation
+#: it is performing, and neither ever overrides the other.
+_CALC_CONTEXT = "impedance-calculator model"
+_CALC_NOTE = ("stated by JLCPCB as reference values deduced from its own "
+              "test results, subject to adjustment")
+
+
+def _table_rows(html, marker):
+    """Cell texts of the first <table> after `marker`, row by row."""
+    start = html.find(marker)
+    if start < 0:
+        return None
+    table_start = html.find("<table", start)
+    if table_start < 0:
+        return None
+    table_end = html.find("</table>", table_start)
+    rows = []
+    for row in _TR.findall(html[table_start:table_end]):
+        cells = []
+        for cell in _TD.findall(row):
+            cell = _TAG.sub(" ", cell).replace("&nbsp;", " ")
+            cell = cell.replace("&gt;", ">").replace("&lt;", "<")
+            cell = cell.replace("&amp;", "&")
+            cells.append(re.sub(r"\s+", " ", cell).strip())
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def _parse_impedance_calculator(html, catalog):
+    source = "impedance-calculator"
+    text = "\n".join(_text_lines(html))
+
+    # -- calculation parameters table (finished copper, soldermask) --------
+    rows = _table_rows(html, "Calculation Parameters Used")
+    if not rows:
+        raise ParseError("impedance-calculator guide: the calculation-"
+                         "parameters table is gone")
+    parameters = {row[0]: row[1] for row in rows if len(row) == 2}
+    copper_rows = (
+        ("finished_copper_external_1oz_mil",
+         "External copper thickness (1 oz)", "external", 1.0),
+        ("finished_copper_internal_0.5oz_mil",
+         "Internal copper thickness (0.5 oz)", "internal", 0.5),
+        ("finished_copper_internal_1oz_mil",
+         "Internal copper thickness (1 oz)", "internal", 1.0),
+    )
+    for identity, label, position, weight in copper_rows:
+        stated = parameters.get(label)
+        found = _MIL.match(stated or "")
+        if not found:
+            raise ParseError(
+                "impedance-calculator guide: the finished-copper parameter "
+                "{!r} is missing or unreadable; the distinction between "
+                "nominal weight and finished conductor thickness cannot be "
+                "half-recorded".format(label))
+        catalog["capabilities"][identity] = model.capability(
+            source, identity, float(found.group(1)), units="mil",
+            conditions="finished conductor thickness the impedance "
+                       "calculator uses for {} {} oz copper; distinct from "
+                       "the nominal foil weight".format(position, weight),
+            excerpt="{} | {}".format(label, stated)[:160],
+            category="copper-finished",
+            applies={"position": position, "copper_weights_oz": [weight]})
+    for identity, label in (
+            ("soldermask_on_fr4_mil", "Base soldermask thickness"),
+            ("soldermask_on_copper_mil", "Copper-surface soldermask "
+                                         "thickness"),
+            ("soldermask_between_traces_mil", "Soldermask thickness in "
+                                              "between traces")):
+        stated = parameters.get(label)
+        found = _MIL.match(stated or "")
+        if found:
+            catalog["capabilities"][identity] = model.capability(
+                source, identity, float(found.group(1)), units="mil",
+                conditions=_CALC_CONTEXT,
+                excerpt="{} | {}".format(label, stated)[:160],
+                category="soldermask")
+        else:
+            catalog["not_extracted"].append({
+                "source": source, "field": identity,
+                "reason": "parameter row not found where last published"})
+    mask_dk = parameters.get("Soldermask dielectric constant (\u03b5r)")
+    if mask_dk is None:
+        for label, stated in parameters.items():
+            if label.startswith("Soldermask dielectric constant"):
+                mask_dk = stated
+    if mask_dk is None:
+        raise ParseError("impedance-calculator guide: the soldermask "
+                         "dielectric constant is gone")
+    catalog["materials"]["soldermask (impedance-calculator)"] =         model.material(source, "soldermask", "soldermask",
+                       float(mask_dk), context=_CALC_CONTEXT,
+                       excerpt="Soldermask dielectric constant | "
+                               "{}".format(mask_dk))
+    trapezoid = parameters.get("Trace top width")
+    if trapezoid:
+        found = _MIL.search(trapezoid)
+        if found:
+            catalog["capabilities"]["trace_top_vs_base_width_mil"] =                 model.capability(
+                    source, "trace_top_vs_base_width_mil",
+                    float(found.group(1)), units="mil",
+                    conditions="finished trace top width is the base width "
+                               "minus this; the etched cross-section is a "
+                               "trapezoid, not the drawn rectangle",
+                    excerpt="Trace top width | {}".format(trapezoid)[:160],
+                    category="trace-geometry")
+
+    # -- the stated finished-vs-nominal inner copper statement -------------
+    found = re.search(
+        r"0\.5 oz copper on internal layers is ([\d.]+) ?\u03bcm thick.{0,60}?"
+        r"nominal ([\d.]+) ?\u03bcm", text, re.S)
+    if found:
+        catalog["capabilities"]["finished_inner_half_oz_um"] =             model.capability(
+                source, "finished_inner_half_oz_um",
+                float(found.group(1)), units="um",
+                conditions="finished 0.5 oz inner copper thickness; the "
+                           "nominal foil is {} um and the difference is "
+                           "production loss, per the page".format(
+                               found.group(2)),
+                excerpt=found.group(0)[:160], category="copper-finished",
+                applies={"position": "internal",
+                         "copper_weights_oz": [0.5]})
+    else:
+        catalog["not_extracted"].append({
+            "source": source, "field": "finished_inner_half_oz_um",
+            "reason": "the finished-vs-nominal statement not found where "
+                      "last published"})
+
+    # -- calculator copper-weight support ----------------------------------
+    if re.search(r"calculator only supports 0\.5 oz and 1 oz", text):
+        catalog["capabilities"]["impedance_calculator_internal_oz"] =             model.capability(
+                source, "impedance_calculator_internal_oz", [0.5, 1.0],
+                units="oz",
+                conditions="internal copper weights the impedance "
+                           "calculator supports; 2 oz requires contacting "
+                           "customer support, per the page",
+                excerpt="The calculator only supports 0.5 oz and 1 oz",
+                category="impedance")
+    if re.search(r"the calculator only supports 1 oz", text):
+        catalog["capabilities"]["impedance_calculator_external_oz"] =             model.capability(
+                source, "impedance_calculator_external_oz", [1.0],
+                units="oz",
+                conditions="external copper weight the impedance "
+                           "calculator supports, although heavier is "
+                           "manufacturable",
+                excerpt="the calculator only supports 1 oz",
+                category="impedance")
+
+    # -- accepted impedance ranges -----------------------------------------
+    found = re.search(
+        r"(\d+) to (\d+) \u03a9 for single-ended and (\d+) to (\d+) "
+        r"\u03a9 for differential", text)
+    if found:
+        catalog["capabilities"]["impedance_range_single_ended_ohm"] =             model.capability(
+                source, "impedance_range_single_ended_ohm",
+                {"min": float(found.group(1)), "max": float(found.group(2))},
+                units="ohm", conditions=_CALC_CONTEXT,
+                excerpt=found.group(0)[:160], category="impedance")
+        catalog["capabilities"]["impedance_range_differential_ohm"] =             model.capability(
+                source, "impedance_range_differential_ohm",
+                {"min": float(found.group(3)), "max": float(found.group(4))},
+                units="ohm", conditions=_CALC_CONTEXT,
+                excerpt=found.group(0)[:160], category="impedance")
+
+    # -- core material family by layer class -------------------------------
+    found = re.search(
+        r"4- to 8-layer boards are calculated assuming ([A-Za-z ]+?) "
+        r"(NP-[0-9A-Z]+) core material, and (?:[A-Za-z]+ )?([A-Z0-9-]+) "
+        r"for 10-layer boards and higher", text)
+    if not found:
+        raise ParseError(
+            "impedance-calculator guide: the material-family statement is "
+            "gone; without it the two Dk tables have no stated scope")
+    families = (
+        (found.group(2), 4, 8, "{} {}".format(found.group(1).strip(),
+                                              found.group(2))),
+        (found.group(3), 10, None, found.group(3)),
+    )
+    for name, low, high, label in families:
+        identity = "impedance_core_material {}-{}L".format(
+            low, high if high else "up")
+        catalog["capabilities"][identity] = model.capability(
+            source, identity, name, conditions="core material family the "
+            "impedance calculator assumes for this layer-count class",
+            excerpt=found.group(0)[:160], category="impedance-materials",
+            applies={"min_layers": low, "max_layers": high})
+
+    # -- the two Dk tables, each scoped to its family and layer class ------
+    emitted_cores = emitted_prepregs = 0
+    for marker, family, low, high in (
+            ("(4 to 8 layers)", found.group(2), 4, 8),
+            ("(10+ layers)", found.group(3), 10, None)):
+        rows = _table_rows(html, marker)
+        if not rows:
+            raise ParseError(
+                "impedance-calculator guide: the {} Dk table is "
+                "gone".format(family))
+        applies = {"min_layers": low, "max_layers": high}
+        for cells in rows:
+            if cells and cells[0].startswith("Core Thickness"):
+                continue
+            # A row carries a core (thickness, er) pair, a prepreg
+            # (type, resin, nominal, er) quadruple, or both side by side.
+            core = _CORE_MM.match(cells[0]) if cells else None
+            if core and len(cells) >= 2:
+                over = bool(core.group(1))
+                thickness = float(core.group(2))
+                dk = float(cells[1])
+                identity = "core {} {}{}mm (impedance-calculator)".format(
+                    family, ">" if over else "", thickness)
+                properties = ({"core_thickness_over_mm": thickness}
+                              if over else
+                              {"core_thickness_mm": thickness})
+                properties["family"] = family
+                catalog["materials"][identity] = model.material(
+                    source, model.CORE, family, dk,
+                    context=_CALC_CONTEXT, applies=dict(applies),
+                    properties=properties,
+                    excerpt="{} | {} | {}".format(family, cells[0],
+                                                  cells[1])[:160])
+                emitted_cores += 1
+            if len(cells) >= 6 and cells[2]:
+                type_cell = cells[2]
+                match = re.match(r"^(\d{3,4})(?:\s*\((\d{3,4})\))?$",
+                                 type_cell)
+                resin = re.match(r"^([\d.]+)%$", cells[3])
+                nominal = _MIL.match(cells[4])
+                if match and resin and nominal:
+                    name = match.group(1)
+                    identity = ("prepreg {} ({}, impedance-calculator)"
+                                .format(name, family))
+                    properties = {"family": family,
+                                  "resin_content_percent":
+                                      float(resin.group(1)),
+                                  "nominal_thickness_mil":
+                                      float(nominal.group(1))}
+                    if match.group(2):
+                        properties["supersedes"] = match.group(2)
+                    catalog["materials"][identity] = model.material(
+                        source, model.PREPREG, name, float(cells[5]),
+                        context=_CALC_CONTEXT, applies=dict(applies),
+                        properties=properties,
+                        excerpt=" | ".join(cells[2:6])[:160])
+                    emitted_prepregs += 1
+    if emitted_cores < 12 or emitted_prepregs < 6:
+        raise ParseError(
+            "impedance-calculator guide: only {} core and {} prepreg Dk "
+            "rows parsed; the tables have changed shape and a partial "
+            "model would quietly narrow the published data".format(
+                emitted_cores, emitted_prepregs))
 
 
 # ---------------------------------------------------------------------------
@@ -767,10 +1127,15 @@ def parse(raw_sources):
                     spec["id"]))
     catalog = model.empty_catalog(FABRICATOR)
     # The copper-weight guide first: it carries the oz equivalence the
-    # stackup applicability derivation cites, and the capabilities page
-    # before the impedance page so section option lists can corroborate.
+    # stackup applicability derivation cites. Then the impedance-calculator
+    # guide (finished-thickness statements the applicability basis cites),
+    # then the capabilities page (section option lists), then the
+    # impedance page whose stackups consume all of the above.
     _parse_copper_weight(
         raw_sources["copper-weight"].decode("utf-8", "ignore"), catalog)
+    _parse_impedance_calculator(
+        raw_sources["impedance-calculator"].decode("utf-8", "ignore"),
+        catalog)
     _parse_capabilities(
         raw_sources["capabilities"].decode("utf-8", "ignore"), catalog)
     _parse_impedance(

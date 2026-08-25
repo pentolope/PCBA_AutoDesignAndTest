@@ -139,11 +139,30 @@ def capability(source, name, value, units=None, conditions=None, excerpt=None,
     return record
 
 
-def material(source, kind, name, dk, excerpt=None):
-    """A dielectric material identity with its stated dielectric constant."""
+def material(source, kind, name, dk, excerpt=None, context=None,
+             applies=None, properties=None):
+    """A dielectric material identity with its stated dielectric constant.
+
+    Apparently similar values can carry different engineering meanings -
+    a stackup page's generic core Dk, an impedance model's
+    thickness-conditioned core Dk, a family-scoped prepreg Dk - and
+    flattening them into one field would let one silently stand in for
+    another. `context` names the process/model the value belongs to,
+    `applies` its structural scope (layer counts, board families), and
+    `properties` the stated physical conditions (thickness, resin
+    content). A record without these is the generic statement it always
+    was; a record with them must only ever be consumed inside that scope,
+    and nothing here decides that one overrides another globally.
+    """
     record = {"source": source, "kind": kind, "name": name, "dk": dk}
     if excerpt is not None:
         record["excerpt"] = excerpt
+    if context is not None:
+        record["context"] = context
+    if applies is not None:
+        record["applies"] = applies
+    if properties is not None:
+        record["properties"] = properties
     return record
 
 

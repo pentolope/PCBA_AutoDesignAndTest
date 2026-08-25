@@ -48,7 +48,9 @@ def _fixture_bytes(name):
 def _raw_sources():
     return {"impedance": _fixture_bytes("impedance.fixture.html"),
             "capabilities": _fixture_bytes("capabilities.fixture.html"),
-            "copper-weight": _fixture_bytes("copper-weight.fixture.html")}
+            "copper-weight": _fixture_bytes("copper-weight.fixture.html"),
+            "impedance-calculator":
+                _fixture_bytes("impedance-calculator.fixture.html")}
 
 
 def _fetcher(raw=None, fail=()):
@@ -931,7 +933,7 @@ class ExportedStackupsCarryTheirProvenance(unittest.TestCase):
     def test_the_export_is_a_valid_supplement_with_provenance(self):
         from pcbqa import stackup_physical
         document = selection.export_physical_stackup(
-            self.approved, "JLC-4L-no-requirement",
+            self.approved, _requirements(),
             ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
         self.assertIn(self.approved["normalized_sha256"][:12],
                       document["provenance"])
@@ -945,12 +947,12 @@ class ExportedStackupsCarryTheirProvenance(unittest.TestCase):
 
     def test_the_evidence_chain_reaches_the_raw_bytes(self):
         document = selection.export_physical_stackup(
-            self.approved, "JLC-4L-no-requirement",
+            self.approved, _requirements(),
             ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
         sources = {s["id"]: s for s in
                    document["generated_from"]["sources"]}
         self.assertTrue(sources["impedance"]["sha256_raw"])
-        self.assertTrue(sources["copper-weight"]["sha256_raw"])
+        self.assertTrue(sources["impedance-calculator"]["sha256_raw"])
         self.assertEqual(
             document["generated_from"]["approved_normalized_sha256"],
             self.approved["normalized_sha256"])
@@ -958,18 +960,450 @@ class ExportedStackupsCarryTheirProvenance(unittest.TestCase):
     def test_a_layer_count_mismatch_refuses(self):
         with self.assertRaises(selection.SelectionError):
             selection.export_physical_stackup(
-                self.approved, "JLC-4L-no-requirement", ["F.Cu", "B.Cu"])
+                self.approved, _requirements(), ["F.Cu", "B.Cu"])
+
+    def test_export_cannot_bypass_profile_compatibility(self):
+        """The 1 oz-inner profile is orderable, but no construction
+        describes it - and naming the 0.5 oz-inner construction by id
+        must not dress the board in it anyway."""
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                self.approved, _requirements(inner_copper_oz=1.0),
+                ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"],
+                stackup_id="JLC-4L-no-requirement")
+        self.assertIn("did not publish", str(caught.exception))
+
+    def test_export_refuses_an_infeasible_profile_outright(self):
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                self.approved, _requirements(copper_layers=3),
+                ["F.Cu", "In1.Cu", "B.Cu"])
+        self.assertIn("feasible", str(caught.exception))
+
+    def test_export_resolves_ambiguity_only_to_a_real_candidate(self):
+        requirements = _requirements(impedance_control=True)
+        result = selection.select(self.approved["normalized"], requirements)
+        self.assertGreater(len(result["stackup_candidates"]), 1)
+        with self.assertRaises(selection.SelectionError):
+            selection.export_physical_stackup(
+                self.approved, requirements,
+                ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
+        document = selection.export_physical_stackup(
+            self.approved, requirements,
+            ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"],
+            stackup_id=result["stackup_candidates"][0])
+        self.assertEqual(document["generated_from"]["stackup"],
+                         result["stackup_candidates"][0])
 
     def test_no_dk_is_borrowed_for_an_unlisted_material(self):
         snapshot = copy.deepcopy(self.approved)
         del snapshot["normalized"]["materials"]["prepreg 7628"]
         document = selection.export_physical_stackup(
-            snapshot, "JLC-4L-no-requirement",
+            snapshot, _requirements(),
             ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
         prepreg = document["layers"][1]
         self.assertIsNone(prepreg["epsilon_r"])
         self.assertIn("states no dielectric constant",
                       prepreg["epsilon_r_note"])
+
+
+# ---------------------------------------------------------------------------
+# combinations, not menus
+# ---------------------------------------------------------------------------
+
+class FeasibilityIsAboutCombinations(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = jlcpcb.parse(_raw_sources())
+
+    def test_odd_layer_counts_do_not_pass_on_range_membership(self):
+        """3 and 5 sit inside the stated 1-32 range and outside every
+        stated discrete count; the range must not carry them."""
+        for layers in (3, 5, 7, 31):
+            result = selection.select(
+                self.catalog, _requirements(copper_layers=layers))
+            self.assertFalse(result["feasible"], layers)
+            rejection = [r for r in result["rejections"]
+                         if r["requirement"] == "copper_layers"][0]
+            self.assertIn("discrete", rejection["issue"])
+
+    def test_offered_even_counts_pass_the_layer_check(self):
+        """8 layers is a stated offered count; it fails later only on
+        evidence the catalog genuinely lacks for it, never on the count."""
+        result = selection.select(self.catalog,
+                                  _requirements(copper_layers=8))
+        self.assertFalse(any(r["requirement"] == "copper_layers"
+                             for r in result["rejections"]),
+                         result["rejections"])
+
+    def test_the_impedance_layer_list_is_read_with_its_ellipsis(self):
+        counts = self.catalog["capabilities"][
+            "controlled_impedance_layer_counts"]["value"]
+        self.assertEqual(counts, list(range(4, 33, 2)))
+        self.assertIn("elides", self.catalog["capabilities"][
+            "controlled_impedance_layer_counts"]["conditions"])
+
+    def test_a_broken_enumeration_refuses_the_ellipsis_reading(self):
+        raw = _raw_sources()
+        raw["capabilities"] = raw["capabilities"].replace(
+            b"4/6/8/10/12/14/16/18/20/", b"4/6/9/10/12/14/16/18/20/", 1)
+        with self.assertRaises(jlcpcb.ParseError) as caught:
+            jlcpcb.parse(raw)
+        self.assertIn("no longer ascends", str(caught.exception))
+
+    def test_thickness_over_2mm_is_conditioned_not_open(self):
+        """3.0 mm exists per the page - for 12-plus-layer boards, values
+        unpublished. An 8-layer 3.0 mm request must reject on the stated
+        condition, and a 12-layer one on the unpublished values."""
+        for layers in (8, 12):
+            result = selection.select(
+                self.catalog, _requirements(copper_layers=layers,
+                                            board_thickness_mm=3.0))
+            self.assertFalse(result["feasible"], layers)
+            rejection = [r for r in result["rejections"]
+                         if r["requirement"] == "board_thickness_mm"][0]
+            self.assertIn("12", rejection["issue"])
+            self.assertIn("not", rejection["issue"])
+
+    def test_impedance_thickness_comes_from_the_sections_own_options(self):
+        """0.4 mm is a stated global FR-4 thickness, and it is NOT among
+        the 4-layer impedance section's options; the pair must reject
+        even though each half exists."""
+        result = selection.select(
+            self.catalog, _requirements(board_thickness_mm=0.4,
+                                        impedance_control=True))
+        self.assertFalse(result["feasible"])
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "board_thickness_mm"][0]
+        self.assertIn("not among the stated thickness options",
+                      rejection["issue"])
+        # The same 0.4 mm without impedance is an ordinary stated option.
+        relaxed = selection.select(
+            self.catalog, _requirements(board_thickness_mm=0.4))
+        self.assertFalse(any(r["requirement"] == "board_thickness_mm"
+                             for r in relaxed["rejections"]))
+
+    def test_impedance_on_a_non_listed_layer_count_is_infeasible(self):
+        result = selection.select(
+            self.catalog, _requirements(copper_layers=2,
+                                        impedance_control=True,
+                                        inner_copper_oz=None))
+        self.assertFalse(result["feasible"])
+        self.assertTrue(any(r["requirement"] == "impedance_control"
+                            for r in result["rejections"]))
+
+    def test_impedance_without_a_compatible_construction_is_infeasible(
+            self):
+        """8-layer impedance is a stated offering, but no 8-layer
+        construction is published; controlled impedance IS its
+        construction, so the profile fails closed."""
+        result = selection.select(
+            self.catalog, _requirements(copper_layers=8,
+                                        board_thickness_mm=1.6,
+                                        impedance_control=True))
+        self.assertFalse(result["feasible"])
+        issues = " ".join(r["issue"] for r in result["rejections"])
+        self.assertIn("requires a published construction", issues)
+
+    def test_impedance_with_incompatible_copper_is_infeasible(self):
+        """At 4 layers and 1.6 mm impedance IS offered - but with 1 oz
+        inner copper no published construction describes the build, so
+        the combination fails while its parts all exist."""
+        result = selection.select(
+            self.catalog, _requirements(impedance_control=True,
+                                        inner_copper_oz=1.0))
+        self.assertFalse(result["feasible"])
+        issues = " ".join(r["issue"] for r in result["rejections"])
+        self.assertIn("requires a published construction", issues)
+
+    def test_ordinary_fabrication_survives_an_unpublished_construction(
+            self):
+        """4L / 0.8 mm / 1 oz / 0.5 oz: every option is stated, no
+        construction is published. Ordinary fabrication is feasible with
+        no stackup claim - an unpublished construction is merely
+        unpublished, unless the requirement depends on it."""
+        result = selection.select(
+            self.catalog, _requirements(board_thickness_mm=0.8))
+        self.assertTrue(result["feasible"], result["rejections"])
+        self.assertIsNone(result["stackup"])
+        self.assertEqual(result["stackup_candidates"], [])
+
+    def test_a_synthetic_tuple_cannot_be_assembled_from_menus(self):
+        """Individually supported values whose combination no record
+        supports: thickness options are published per layer count in
+        impedance mode, so a synthetic catalog claiming 1.0 mm only for
+        6 layers must reject a 4-layer 1.0 mm impedance request."""
+        catalog = copy.deepcopy(self.catalog)
+        catalog["capabilities"]["4L thickness_options"]["value"] = [
+            0.8, 1.2, 1.6, 2.0]
+        result = selection.select(
+            catalog, _requirements(board_thickness_mm=1.0,
+                                   impedance_control=True))
+        self.assertFalse(result["feasible"])
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "board_thickness_mm"][0]
+        self.assertIn("not for this combination", rejection["issue"])
+
+    def test_a_stated_requirement_outside_a_limits_scope_rejects(self):
+        """A 1-layer board is an offered count, and the catalog's drill
+        and via limits are stated for multilayer boards only; a stated
+        drill requirement must reject as unverifiable, never be skipped
+        because the limit's scope excludes the board."""
+        result = selection.select(
+            self.catalog, _requirements(copper_layers=1,
+                                        inner_copper_oz=None))
+        self.assertFalse(result["feasible"])
+        requirements_hit = {r["requirement"] for r in result["rejections"]}
+        self.assertIn("min_drill_mm", requirements_hit)
+        self.assertIn("min_via_diameter_mm", requirements_hit)
+
+    def test_unknown_layer_thickness_compatibility_refuses(self):
+        catalog = copy.deepcopy(self.catalog)
+        del catalog["capabilities"]["4L thickness_options"]
+        result = selection.select(
+            catalog, _requirements(impedance_control=True))
+        self.assertFalse(result["feasible"])
+        rejection = [r for r in result["rejections"]
+                     if r["requirement"] == "board_thickness_mm"][0]
+        self.assertIn("unknown is not supported", rejection["issue"])
+
+
+# ---------------------------------------------------------------------------
+# one value, one meaning, one scope
+# ---------------------------------------------------------------------------
+
+class ValuesKeepTheirScopes(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = jlcpcb.parse(_raw_sources())
+
+    def test_calculator_dk_is_distinct_from_generic_dk(self):
+        """The stackup page's generic core Dk (4.6) and the calculator's
+        thickness-conditioned NP-155F values coexist under different
+        identities with different scopes; neither replaces the other."""
+        materials = self.catalog["materials"]
+        self.assertEqual(materials["core"]["dk"], 4.6)
+        self.assertNotIn("context", materials["core"])
+        conditioned = materials[
+            "core NP-155F 0.08mm (impedance-calculator)"]
+        self.assertEqual(conditioned["context"],
+                         "impedance-calculator model")
+        self.assertEqual(conditioned["applies"],
+                         {"min_layers": 4, "max_layers": 8})
+
+    def test_the_same_prepreg_name_differs_by_family(self):
+        """1080 prepreg: 3.91 in the NP-155F family, 3.99 under
+        S1000-2M, 3.91 on the generic page - three records, three
+        scopes, no collapsing."""
+        materials = self.catalog["materials"]
+        self.assertEqual(materials["prepreg 1080"]["dk"], 3.91)
+        self.assertEqual(
+            materials["prepreg 1080 (NP-155F, impedance-calculator)"]["dk"],
+            3.91)
+        self.assertEqual(
+            materials["prepreg 1080 (S1000-2M, impedance-calculator)"]["dk"],
+            3.99)
+
+    def test_nominal_weight_and_finished_thickness_stay_distinct(self):
+        """0.5 oz nominal inner copper, 17.5 um foil, 15.2 um finished:
+        the catalog holds the weight options and the finished thickness
+        as separate records, and nothing converts one into the other."""
+        capabilities = self.catalog["capabilities"]
+        self.assertIn(0.5, capabilities["inner_copper_fr4_oz"]["value"])
+        finished = capabilities["finished_inner_half_oz_um"]
+        self.assertEqual(finished["value"], 15.2)
+        self.assertIn("nominal foil is 17.5", finished["conditions"])
+        mil = capabilities["finished_copper_internal_0.5oz_mil"]
+        self.assertEqual(mil["value"], 0.6)
+        self.assertEqual(mil["units"], "mil")
+
+    def test_the_construction_inner_basis_cites_the_finished_statement(
+            self):
+        basis = self.catalog["stackups"]["JLC-4L-no-requirement"][
+            "applicability"]["inner_basis"]
+        self.assertIn("15.2", basis)
+        self.assertIn("impedance-calculator", basis)
+
+    def test_export_still_uses_the_generic_stackup_page_values(self):
+        """The board supplement restates the stackup page's own numbers;
+        the calculator-model records exist for the future impedance
+        solver and must not leak into it uninvited."""
+        store = _approved_store("scope")
+        document = selection.export_physical_stackup(
+            store.approved(), _requirements(),
+            ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
+        self.assertEqual(document["layers"][3]["epsilon_r"], 4.6)
+
+    def test_the_soldermask_dk_carries_its_context(self):
+        record = self.catalog["materials"][
+            "soldermask (impedance-calculator)"]
+        self.assertEqual(record["dk"], 3.8)
+        self.assertEqual(record["context"], "impedance-calculator model")
+
+
+# ---------------------------------------------------------------------------
+# the evidence universe cannot shrink quietly
+# ---------------------------------------------------------------------------
+
+class TheSourceSetIsComplete(unittest.TestCase):
+
+    def test_a_record_citing_a_vanished_source_refuses(self):
+        store = _approved_store("vanish")
+        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
+
+        def drop(document):
+            document["sources"] = [s for s in document["sources"]
+                                   if s["id"] != "impedance"]
+            document["declared_source_ids"] = [
+                i for i in document["declared_source_ids"]
+                if i != "impedance"]
+        _rewrite_json(store.observed_path, drop)
+        with self.assertRaises(StoreError) as caught:
+            store.observed()
+        self.assertIn("vanished", str(caught.exception))
+
+    def test_a_complete_snapshot_missing_a_declared_source_refuses(self):
+        store = _approved_store("declared")
+        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
+
+        def drop(document):
+            document["sources"] = [s for s in document["sources"]
+                                   if s["id"] != "copper-weight"]
+        _rewrite_json(store.observed_path, drop)
+        with self.assertRaises(StoreError) as caught:
+            store.observed()
+        self.assertIn("evidence universe", str(caught.exception))
+
+    def test_a_duplicated_source_id_refuses(self):
+        store = _approved_store("dupe")
+        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
+
+        def duplicate(document):
+            document["sources"].append(dict(document["sources"][0]))
+            document["declared_source_ids"].append(
+                document["sources"][0]["id"])
+        _rewrite_json(store.observed_path, duplicate)
+        with self.assertRaises(StoreError) as caught:
+            store.observed()
+        self.assertIn("twice", str(caught.exception))
+
+
+# ---------------------------------------------------------------------------
+# the verification ledger earns nothing when malformed
+# ---------------------------------------------------------------------------
+
+class TheLedgerFailsSafe(unittest.TestCase):
+
+    @staticmethod
+    def _renewed(store):
+        return "renewed_by_verification_utc" in store.freshness()
+
+    def _verified_store(self, tag):
+        store = _approved_store(tag)
+        FreshnessIsVerificationAge._age_approved(store, 40)
+        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
+                                             fetcher=_fetcher())
+        store.record_verification(snapshot)
+        assert store.freshness()["state"] == "current"
+        return store
+
+    def test_corrupt_ledger_json_falls_back_to_evidence_age(self):
+        store = self._verified_store("corruptled")
+        with open(store.verification_path, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+        freshness = store.freshness()
+        self.assertEqual(freshness["state"], "stale")
+        self.assertNotIn("renewed_by_verification_utc", freshness)
+
+    def test_unknown_ledger_schema_falls_back(self):
+        store = self._verified_store("schemaled")
+        _rewrite_json(store.verification_path,
+                      lambda d: d.__setitem__("schema_version", 99))
+        self.assertEqual(store.freshness()["state"], "stale")
+
+    def test_a_ledger_for_another_digest_earns_nothing(self):
+        store = self._verified_store("otherled")
+        _rewrite_json(store.verification_path,
+                      lambda d: d.__setitem__("approved_normalized_sha256",
+                                              "0" * 64))
+        self.assertEqual(store.freshness()["state"], "stale")
+
+    def test_a_verification_predating_its_acquisition_is_impossible(self):
+        store = self._verified_store("timeled")
+        _rewrite_json(store.verification_path,
+                      lambda d: d.__setitem__(
+                          "verified_utc", "2001-01-01T00:00:00+00:00"))
+        self.assertEqual(store.freshness()["state"], "stale")
+
+    def test_a_malformed_parser_identity_earns_nothing(self):
+        store = self._verified_store("parserled")
+        _rewrite_json(store.verification_path,
+                      lambda d: d.__setitem__("parser", "not-a-dict"))
+        self.assertEqual(store.freshness()["state"], "stale")
+
+    def test_a_tampered_ledger_cannot_make_ensure_skip_the_network(self):
+        """`fab ensure` trusts freshness(); a ledger that fails
+        validation must leave the state stale so ensure refreshes."""
+        store = self._verified_store("ensureled")
+        _rewrite_json(store.verification_path,
+                      lambda d: d.__setitem__("observed_retrieved_utc",
+                                              "not a timestamp"))
+        freshness = store.freshness()
+        self.assertEqual(freshness["state"], "stale")
+
+
+# ---------------------------------------------------------------------------
+# crashes leave a describable state
+# ---------------------------------------------------------------------------
+
+class InterruptedTransitionsAreRecoverable(unittest.TestCase):
+
+    def test_a_crash_between_rotate_and_write_keeps_the_last_acquisition(
+            self):
+        """Simulated: latest was renamed to previous and the process died
+        before the new latest was written. The store answers honestly -
+        no latest, the last completed acquisition intact as history - and
+        the next refresh rebuilds the normal state."""
+        store = _approved_store("crashrot")
+        good, _problem = acquire.acquire("jlcpcb", store.root,
+                                         fetcher=_fetcher())
+        os.replace(store.observed_path, store.previous_path)
+        self.assertIsNone(store.observed())
+        previous = store.previous_observed()
+        self.assertEqual(previous["normalized_sha256"],
+                         good["normalized_sha256"])
+        again, problem = acquire.acquire("jlcpcb", store.root,
+                                         fetcher=_fetcher())
+        self.assertIsNone(problem)
+        self.assertEqual(store.observed()["normalized_sha256"],
+                         again["normalized_sha256"])
+
+    def test_an_interrupted_promotion_is_self_describing(self):
+        """Simulated: approved.json was replaced and the process died
+        before the audit entry landed. The approved snapshot itself
+        carries its promotion identity, so the store keeps working and
+        the missing audit entry is reconstructible from the file."""
+        store = _approved_store("crashprom")
+        raw = _raw_sources()
+        raw["impedance"] = raw["impedance"].replace(
+            b">1.065mm<", b">1.075mm<", 1)
+        changed, _problem = acquire.acquire("jlcpcb", store.root,
+                                            fetcher=_fetcher(raw=raw))
+        before = store.approved()["normalized_sha256"]
+        store.promote(changed["normalized_sha256"][:12], [],
+                      allow_older=True)
+        # Undo the audit append, as a crash there would have left it.
+        with open(store.promotions_path, encoding="utf-8") as handle:
+            log = json.load(handle)
+        with open(store.promotions_path, "w", encoding="utf-8") as handle:
+            json.dump(log[:-1], handle)
+        approved = store.approved()
+        self.assertEqual(approved["normalized_sha256"],
+                         changed["normalized_sha256"])
+        self.assertEqual(approved["replaced_normalized_sha256"], before)
+        self.assertTrue(approved["approved_utc"])
 
 
 # ---------------------------------------------------------------------------

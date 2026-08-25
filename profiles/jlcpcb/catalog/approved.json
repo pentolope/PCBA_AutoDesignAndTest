@@ -1,5 +1,11 @@
 {
-  "approved_utc": "2026-08-25T04:12:39.422837+00:00",
+  "approved_utc": "2026-08-25T13:45:27.954921+00:00",
+  "declared_source_ids": [
+    "impedance",
+    "capabilities",
+    "copper-weight",
+    "impedance-calculator"
+  ],
   "errors": [],
   "fabricator": "jlcpcb",
   "kind": "approved",
@@ -94,6 +100,30 @@
           "min": 0.4
         }
       },
+      "controlled_impedance_layer_counts": {
+        "category": "layers",
+        "conditions": "layer counts for which controlled impedance is offered; the page enumerates 4/6/8/10/12/14/16/18/20 then elides to 32 and the elision is read as continuing by two",
+        "excerpt": "Controlled Impedance | 4/6/8/10/12/14/16/18/20/.../32 layers",
+        "name": "controlled_impedance_layer_counts",
+        "source": "capabilities",
+        "value": [
+          4,
+          6,
+          8,
+          10,
+          12,
+          14,
+          16,
+          18,
+          20,
+          22,
+          24,
+          26,
+          28,
+          30,
+          32
+        ]
+      },
       "copper_weight_equivalence_um_per_oz": {
         "category": "definition",
         "conditions": "fabricator-stated definition",
@@ -114,6 +144,107 @@
           "min": 0.15
         }
       },
+      "finished_copper_external_1oz_mil": {
+        "applies": {
+          "copper_weights_oz": [
+            1.0
+          ],
+          "position": "external"
+        },
+        "category": "copper-finished",
+        "conditions": "finished conductor thickness the impedance calculator uses for external 1.0 oz copper; distinct from the nominal foil weight",
+        "excerpt": "External copper thickness (1 oz) | 1.6 mil",
+        "name": "finished_copper_external_1oz_mil",
+        "source": "impedance-calculator",
+        "units": "mil",
+        "value": 1.6
+      },
+      "finished_copper_internal_0.5oz_mil": {
+        "applies": {
+          "copper_weights_oz": [
+            0.5
+          ],
+          "position": "internal"
+        },
+        "category": "copper-finished",
+        "conditions": "finished conductor thickness the impedance calculator uses for internal 0.5 oz copper; distinct from the nominal foil weight",
+        "excerpt": "Internal copper thickness (0.5 oz) | 0.6 mil",
+        "name": "finished_copper_internal_0.5oz_mil",
+        "source": "impedance-calculator",
+        "units": "mil",
+        "value": 0.6
+      },
+      "finished_copper_internal_1oz_mil": {
+        "applies": {
+          "copper_weights_oz": [
+            1.0
+          ],
+          "position": "internal"
+        },
+        "category": "copper-finished",
+        "conditions": "finished conductor thickness the impedance calculator uses for internal 1.0 oz copper; distinct from the nominal foil weight",
+        "excerpt": "Internal copper thickness (1 oz) | 1.2 mil",
+        "name": "finished_copper_internal_1oz_mil",
+        "source": "impedance-calculator",
+        "units": "mil",
+        "value": 1.2
+      },
+      "finished_inner_half_oz_um": {
+        "applies": {
+          "copper_weights_oz": [
+            0.5
+          ],
+          "position": "internal"
+        },
+        "category": "copper-finished",
+        "conditions": "finished 0.5 oz inner copper thickness; the nominal foil is 17.5 um and the difference is production loss, per the page",
+        "excerpt": "0.5 oz copper on internal layers is 15.2 \u03bcm thick 4- to 8-layinstead of the nominal 17.5 \u03bcm",
+        "name": "finished_inner_half_oz_um",
+        "source": "impedance-calculator",
+        "units": "um",
+        "value": 15.2
+      },
+      "fr4_copper_layer_options": {
+        "category": "layers",
+        "conditions": "discrete supported copper-layer counts: 1 and 2 from the rows the page conditions on 1- and 2-layer boards, the even multilayer counts from the Controlled Impedance enumeration, inside the stated 1-32 range; no official statement supports an odd count of three or more, so none is offered",
+        "excerpt": "Controlled Impedance | 4/6/8/10/12/14/16/18/20/.../32 layers",
+        "name": "fr4_copper_layer_options",
+        "source": "capabilities",
+        "value": [
+          1,
+          2,
+          4,
+          6,
+          8,
+          10,
+          12,
+          14,
+          16,
+          18,
+          20,
+          22,
+          24,
+          26,
+          28,
+          30,
+          32
+        ]
+      },
+      "fr4_thickness_2p5mm_plus": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 12
+        },
+        "category": "board",
+        "conditions": "board thicknesses of 2.5 mm and above exist only for 12+ layer boards; their discrete values are not published",
+        "excerpt": "2.5 mm and above are for 12+ layer PCBs only",
+        "name": "fr4_thickness_2p5mm_plus",
+        "source": "capabilities",
+        "units": "mm",
+        "value": {
+          "min": 2.5
+        }
+      },
       "fr4_thickness_options_mm": {
         "category": "board",
         "conditions": "2.5 mm and above are for 12+ layer PCBs only",
@@ -130,6 +261,77 @@
           1.6,
           2.0
         ]
+      },
+      "impedance_calculator_external_oz": {
+        "category": "impedance",
+        "conditions": "external copper weight the impedance calculator supports, although heavier is manufacturable",
+        "excerpt": "the calculator only supports 1 oz",
+        "name": "impedance_calculator_external_oz",
+        "source": "impedance-calculator",
+        "units": "oz",
+        "value": [
+          1.0
+        ]
+      },
+      "impedance_calculator_internal_oz": {
+        "category": "impedance",
+        "conditions": "internal copper weights the impedance calculator supports; 2 oz requires contacting customer support, per the page",
+        "excerpt": "The calculator only supports 0.5 oz and 1 oz",
+        "name": "impedance_calculator_internal_oz",
+        "source": "impedance-calculator",
+        "units": "oz",
+        "value": [
+          0.5,
+          1.0
+        ]
+      },
+      "impedance_core_material 10-upL": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "category": "impedance-materials",
+        "conditions": "core material family the impedance calculator assumes for this layer-count class",
+        "excerpt": "4- to 8-layer boards are calculated assuming Nan Ya Plastics NP-155F core material, and SYTECH S1000-2M for 10-layer boards and higher",
+        "name": "impedance_core_material 10-upL",
+        "source": "impedance-calculator",
+        "value": "S1000-2M"
+      },
+      "impedance_core_material 4-8L": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "category": "impedance-materials",
+        "conditions": "core material family the impedance calculator assumes for this layer-count class",
+        "excerpt": "4- to 8-layer boards are calculated assuming Nan Ya Plastics NP-155F core material, and SYTECH S1000-2M for 10-layer boards and higher",
+        "name": "impedance_core_material 4-8L",
+        "source": "impedance-calculator",
+        "value": "NP-155F"
+      },
+      "impedance_range_differential_ohm": {
+        "category": "impedance",
+        "conditions": "impedance-calculator model",
+        "excerpt": "20 to 90 \u03a9 for single-ended and 50 to 150 \u03a9 for differential",
+        "name": "impedance_range_differential_ohm",
+        "source": "impedance-calculator",
+        "units": "ohm",
+        "value": {
+          "max": 150.0,
+          "min": 50.0
+        }
+      },
+      "impedance_range_single_ended_ohm": {
+        "category": "impedance",
+        "conditions": "impedance-calculator model",
+        "excerpt": "20 to 90 \u03a9 for single-ended and 50 to 150 \u03a9 for differential",
+        "name": "impedance_range_single_ended_ohm",
+        "source": "impedance-calculator",
+        "units": "ohm",
+        "value": {
+          "max": 90.0,
+          "min": 20.0
+        }
       },
       "inner_copper_default_oz": {
         "category": "copper",
@@ -224,6 +426,33 @@
           1.0,
           2.0
         ]
+      },
+      "soldermask_between_traces_mil": {
+        "category": "soldermask",
+        "conditions": "impedance-calculator model",
+        "excerpt": "Soldermask thickness in between traces | 1.2 mil",
+        "name": "soldermask_between_traces_mil",
+        "source": "impedance-calculator",
+        "units": "mil",
+        "value": 1.2
+      },
+      "soldermask_on_copper_mil": {
+        "category": "soldermask",
+        "conditions": "impedance-calculator model",
+        "excerpt": "Copper-surface soldermask thickness | 0.6 mil",
+        "name": "soldermask_on_copper_mil",
+        "source": "impedance-calculator",
+        "units": "mil",
+        "value": 0.6
+      },
+      "soldermask_on_fr4_mil": {
+        "category": "soldermask",
+        "conditions": "impedance-calculator model",
+        "excerpt": "Base soldermask thickness | 1.2 mil",
+        "name": "soldermask_on_fr4_mil",
+        "source": "impedance-calculator",
+        "units": "mil",
+        "value": 1.2
       },
       "trace_coils_masked_1oz": {
         "category": "trace-coils",
@@ -497,6 +726,15 @@
           "track": 0.3
         }
       },
+      "trace_top_vs_base_width_mil": {
+        "category": "trace-geometry",
+        "conditions": "finished trace top width is the base width minus this; the etched cross-section is a trapezoid, not the drawn rectangle",
+        "excerpt": "Trace top width | Trace base width \u2013 0.7 mil",
+        "name": "trace_top_vs_base_width_mil",
+        "source": "impedance-calculator",
+        "units": "mil",
+        "value": 0.7
+      },
       "via_multilayer_mm": {
         "category": "via",
         "excerpt": "Multilayer: 0.15 mm hole size / 0.25 mm via diameter",
@@ -518,12 +756,431 @@
         "name": "core",
         "source": "impedance"
       },
+      "core NP-155F 0.08mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 3.99,
+        "excerpt": "NP-155F | 0.08 mm | 3.99",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.08,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.13mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.17,
+        "excerpt": "NP-155F | 0.13 mm | 4.17",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.13,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.15mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.36,
+        "excerpt": "NP-155F | 0.15 mm | 4.36",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.15,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.1mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.36,
+        "excerpt": "NP-155F | 0.10 mm | 4.36",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.1,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.25mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.23,
+        "excerpt": "NP-155F | 0.25 mm | 4.23",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.25,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.2mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.36,
+        "excerpt": "NP-155F | 0.20 mm | 4.36",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.2,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.35mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.36,
+        "excerpt": "NP-155F | 0.35 mm | 4.36",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.35,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.3mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.41,
+        "excerpt": "NP-155F | 0.30 mm | 4.41",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.3,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.45mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.36,
+        "excerpt": "NP-155F | 0.45 mm | 4.36",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.45,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.4mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.36,
+        "excerpt": "NP-155F | 0.40 mm | 4.36",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.4,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.55mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.41,
+        "excerpt": "NP-155F | 0.55 mm | 4.41",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.55,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.5mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.48,
+        "excerpt": "NP-155F | 0.50 mm | 4.48",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.5,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.65mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.36,
+        "excerpt": "NP-155F | 0.65 mm | 4.36",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.65,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.6mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.36,
+        "excerpt": "NP-155F | 0.60 mm | 4.36",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.6,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F 0.7mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.53,
+        "excerpt": "NP-155F | 0.70 mm | 4.53",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_mm": 0.7,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core NP-155F >0.7mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.43,
+        "excerpt": "NP-155F | > 0.70 mm | 4.43",
+        "kind": "core",
+        "name": "NP-155F",
+        "properties": {
+          "core_thickness_over_mm": 0.7,
+          "family": "NP-155F"
+        },
+        "source": "impedance-calculator"
+      },
+      "core S1000-2M 0.075mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.14,
+        "excerpt": "S1000-2M | 0.075 mm | 4.14",
+        "kind": "core",
+        "name": "S1000-2M",
+        "properties": {
+          "core_thickness_mm": 0.075,
+          "family": "S1000-2M"
+        },
+        "source": "impedance-calculator"
+      },
+      "core S1000-2M 0.13mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.03,
+        "excerpt": "S1000-2M | 0.13 mm | 4.03",
+        "kind": "core",
+        "name": "S1000-2M",
+        "properties": {
+          "core_thickness_mm": 0.13,
+          "family": "S1000-2M"
+        },
+        "source": "impedance-calculator"
+      },
+      "core S1000-2M 0.15mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.35,
+        "excerpt": "S1000-2M | 0.15 mm | 4.35",
+        "kind": "core",
+        "name": "S1000-2M",
+        "properties": {
+          "core_thickness_mm": 0.15,
+          "family": "S1000-2M"
+        },
+        "source": "impedance-calculator"
+      },
+      "core S1000-2M 0.1mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.11,
+        "excerpt": "S1000-2M | 0.10 mm | 4.11",
+        "kind": "core",
+        "name": "S1000-2M",
+        "properties": {
+          "core_thickness_mm": 0.1,
+          "family": "S1000-2M"
+        },
+        "source": "impedance-calculator"
+      },
+      "core S1000-2M 0.25mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.29,
+        "excerpt": "S1000-2M | 0.25 mm | 4.29",
+        "kind": "core",
+        "name": "S1000-2M",
+        "properties": {
+          "core_thickness_mm": 0.25,
+          "family": "S1000-2M"
+        },
+        "source": "impedance-calculator"
+      },
+      "core S1000-2M 0.2mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.42,
+        "excerpt": "S1000-2M | 0.20 mm | 4.42",
+        "kind": "core",
+        "name": "S1000-2M",
+        "properties": {
+          "core_thickness_mm": 0.2,
+          "family": "S1000-2M"
+        },
+        "source": "impedance-calculator"
+      },
+      "core S1000-2M 0.3mm (impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.56,
+        "excerpt": "S1000-2M | 0.30 mm | 4.56",
+        "kind": "core",
+        "name": "S1000-2M",
+        "properties": {
+          "core_thickness_mm": 0.3,
+          "family": "S1000-2M"
+        },
+        "source": "impedance-calculator"
+      },
+      "prepreg 106 (S1000-2M, impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 3.92,
+        "excerpt": "106 | 72% | 1.97 mil | 3.92",
+        "kind": "prepreg",
+        "name": "106",
+        "properties": {
+          "family": "S1000-2M",
+          "nominal_thickness_mil": 1.97,
+          "resin_content_percent": 72.0
+        },
+        "source": "impedance-calculator"
+      },
       "prepreg 1080": {
         "dk": 3.91,
         "excerpt": "1080 -> 3.91",
         "kind": "prepreg",
         "name": "1080",
         "source": "impedance"
+      },
+      "prepreg 1080 (NP-155F, impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 3.91,
+        "excerpt": "1080 | 67% | 3.3 mil | 3.91",
+        "kind": "prepreg",
+        "name": "1080",
+        "properties": {
+          "family": "NP-155F",
+          "nominal_thickness_mil": 3.3,
+          "resin_content_percent": 67.0
+        },
+        "source": "impedance-calculator"
+      },
+      "prepreg 1080 (S1000-2M, impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 3.99,
+        "excerpt": "1080 | 69% | 3.31 mil | 3.99",
+        "kind": "prepreg",
+        "name": "1080",
+        "properties": {
+          "family": "S1000-2M",
+          "nominal_thickness_mil": 3.31,
+          "resin_content_percent": 69.0
+        },
+        "source": "impedance-calculator"
       },
       "prepreg 2116": {
         "dk": 4.16,
@@ -532,6 +1189,57 @@
         "name": "2116",
         "source": "impedance"
       },
+      "prepreg 2116 (NP-155F, impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.16,
+        "excerpt": "2116 | 54% | 4.9 mil | 4.16",
+        "kind": "prepreg",
+        "name": "2116",
+        "properties": {
+          "family": "NP-155F",
+          "nominal_thickness_mil": 4.9,
+          "resin_content_percent": 54.0
+        },
+        "source": "impedance-calculator"
+      },
+      "prepreg 2116 (S1000-2M, impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.29,
+        "excerpt": "2116 | 57% | 5.00 mil | 4.29",
+        "kind": "prepreg",
+        "name": "2116",
+        "properties": {
+          "family": "S1000-2M",
+          "nominal_thickness_mil": 5.0,
+          "resin_content_percent": 57.0
+        },
+        "source": "impedance-calculator"
+      },
+      "prepreg 2313 (S1000-2M, impedance-calculator)": {
+        "applies": {
+          "max_layers": null,
+          "min_layers": 10
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.31,
+        "excerpt": "2313 | 58% | 4.09 mil | 4.31",
+        "kind": "prepreg",
+        "name": "2313",
+        "properties": {
+          "family": "S1000-2M",
+          "nominal_thickness_mil": 4.09,
+          "resin_content_percent": 58.0
+        },
+        "source": "impedance-calculator"
+      },
       "prepreg 3313": {
         "dk": 4.1,
         "excerpt": "3313 -> 4.1",
@@ -539,12 +1247,55 @@
         "name": "3313",
         "source": "impedance"
       },
+      "prepreg 3313 (NP-155F, impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.1,
+        "excerpt": "3313 (2313) | 57% | 4.2 mil | 4.1",
+        "kind": "prepreg",
+        "name": "3313",
+        "properties": {
+          "family": "NP-155F",
+          "nominal_thickness_mil": 4.2,
+          "resin_content_percent": 57.0,
+          "supersedes": "2313"
+        },
+        "source": "impedance-calculator"
+      },
       "prepreg 7628": {
         "dk": 4.4,
         "excerpt": "7628 -> 4.4",
         "kind": "prepreg",
         "name": "7628",
         "source": "impedance"
+      },
+      "prepreg 7628 (NP-155F, impedance-calculator)": {
+        "applies": {
+          "max_layers": 8,
+          "min_layers": 4
+        },
+        "context": "impedance-calculator model",
+        "dk": 4.4,
+        "excerpt": "7628 | 49% | 8.6 mil | 4.4",
+        "kind": "prepreg",
+        "name": "7628",
+        "properties": {
+          "family": "NP-155F",
+          "nominal_thickness_mil": 8.6,
+          "resin_content_percent": 49.0
+        },
+        "source": "impedance-calculator"
+      },
+      "soldermask (impedance-calculator)": {
+        "context": "impedance-calculator model",
+        "dk": 3.8,
+        "excerpt": "Soldermask dielectric constant | 3.8",
+        "kind": "soldermask",
+        "name": "soldermask",
+        "source": "impedance-calculator"
       }
     },
     "not_extracted": [
@@ -568,7 +1319,7 @@
     "stackups": {
       "JLC-4L-no-requirement": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -627,7 +1378,7 @@
       },
       "JLC-6L-no-requirement": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -709,7 +1460,7 @@
       },
       "JLC04161H-1080": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -768,7 +1519,7 @@
       },
       "JLC04161H-1080A": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -841,7 +1592,7 @@
       },
       "JLC04161H-2116": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -900,7 +1651,7 @@
       },
       "JLC04161H-2116A": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -987,7 +1738,7 @@
       },
       "JLC04161H-2116B": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1060,7 +1811,7 @@
       },
       "JLC04161H-2116C": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1133,7 +1884,7 @@
       },
       "JLC04161H-2116D": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1206,7 +1957,7 @@
       },
       "JLC04161H-2116E": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1279,7 +2030,7 @@
       },
       "JLC04161H-3313": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1338,7 +2089,7 @@
       },
       "JLC04161H-3313A": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1411,7 +2162,7 @@
       },
       "JLC04161H-7628": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1470,7 +2221,7 @@
       },
       "JLC04161H-7628A": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1543,7 +2294,7 @@
       },
       "JLC04161H-7628B": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1630,7 +2381,7 @@
       },
       "JLC04161H-7628C": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1717,7 +2468,7 @@
       },
       "JLC04161H-7628E": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1790,7 +2541,7 @@
       },
       "JLC04161H-7628F": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1877,7 +2628,7 @@
       },
       "JLC04161H-7628G": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -1964,7 +2715,7 @@
       },
       "JLC06161H-1080": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2046,7 +2797,7 @@
       },
       "JLC06161H-1080A": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2128,7 +2879,7 @@
       },
       "JLC06161H-1080B": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2223,7 +2974,7 @@
       },
       "JLC06161H-2116": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2326,7 +3077,7 @@
       },
       "JLC06161H-2116A": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2421,7 +3172,7 @@
       },
       "JLC06161H-2116B": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2510,7 +3261,7 @@
       },
       "JLC06161H-3313": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2592,7 +3343,7 @@
       },
       "JLC06161H-3313C": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2695,7 +3446,7 @@
       },
       "JLC06161H-3313D": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2805,7 +3556,7 @@
       },
       "JLC06161H-3313E": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2900,7 +3651,7 @@
       },
       "JLC06161H-7628": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -2982,7 +3733,7 @@
       },
       "JLC06161H-7628A": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -3099,7 +3850,7 @@
       },
       "JLC06161H-7628B": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -3202,7 +3953,7 @@
       },
       "JLC06161H-7628D": {
         "applicability": {
-          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities]",
+          "inner_basis": "core cladding notation 'H/H OZ' read as half-oz/half-oz, corroborated by the stated 0.5 oz inner default [copper-weight, capabilities], and by the stated finished 0.5 oz inner thickness of 15.2 um matching this construction's 0.0152 mm [impedance-calculator]",
           "inner_copper_thickness_mm": 0.0152,
           "inner_copper_weight_oz": 0.5,
           "nominal_thickness_mm": 1.6,
@@ -3298,36 +4049,43 @@
       }
     }
   },
-  "normalized_sha256": "c01eac2fc111764513aa30bebd60f379cf220be9511569b322efe24efff25b04",
+  "normalized_sha256": "fd6b92a3449cd4ae5586b20e3bc2e459bacce87afaa87569a0419bcdf0ec284d",
   "outcome": "complete",
   "parser": {
     "id": "pcbqa.fabricators.jlcpcb",
-    "version": "2"
+    "version": "3"
   },
-  "replaced_normalized_sha256": "e92df834668837d223d2a1a5a611022f68b8d89d01a1d37539abc5e751a3b3a9",
-  "retrieved_utc": "2026-08-25T04:11:41.341837+00:00",
-  "schema_version": 2,
+  "replaced_normalized_sha256": "c01eac2fc111764513aa30bebd60f379cf220be9511569b322efe24efff25b04",
+  "retrieved_utc": "2026-08-25T13:45:02.787549+00:00",
+  "schema_version": 3,
   "sources": [
     {
-      "bytes": 297343,
+      "bytes": 294085,
       "id": "impedance",
       "kind": "official-stackup-page",
-      "sha256_raw": "a64ebd66e7b0db953c5bd5fa2f0ffd2e03eec983f16c01c15d9107d3c6b5bef8",
+      "sha256_raw": "aea035bcdbc79d3211399f2922647f0faa3f8c76ad741777a036e92627f0fad4",
       "url": "https://jlcpcb.com/impedance"
     },
     {
-      "bytes": 137786,
+      "bytes": 134878,
       "id": "capabilities",
       "kind": "official-capabilities-page",
-      "sha256_raw": "8c34f8347d5975e50870ee533c4afbbe6b62c5e2471634d32a266b77732cc1ea",
+      "sha256_raw": "191cec2a05f6b4ed202119c4b9e43076004e28a1b1b270178f7962069aee52b5",
       "url": "https://jlcpcb.com/capabilities/pcb-capabilities"
     },
     {
-      "bytes": 113214,
+      "bytes": 109952,
       "id": "copper-weight",
       "kind": "official-help-article",
-      "sha256_raw": "c068ad6c2a703eba68eb8ca6bf3ab267698f307c2f429ea74c505a88f09704b2",
+      "sha256_raw": "10e5f95c4b4710c18d5fe267a83254d34589364ded28b6a79a6a66e649d10e28",
       "url": "https://jlcpcb.com/help/article/jlcpcb-copper-weight"
+    },
+    {
+      "bytes": 135788,
+      "id": "impedance-calculator",
+      "kind": "official-help-article",
+      "sha256_raw": "1e86ed5b0f36c46a21ce919f4bd8e40530d0d2aa6b99b5ec8d5750e83c03ef42",
+      "url": "https://jlcpcb.com/help/article/user-guide-to-the-jlcpcb-impedance-calculator"
     }
   ]
 }

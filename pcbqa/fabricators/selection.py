@@ -123,42 +123,103 @@ def select(catalog, requirements):
                              identity)})
         return record
 
-    # -- layer count -------------------------------------------------------
-    layer_range = capability("layer_count_range", "copper_layers")
-    if layer_range is not None:
-        low = layer_range["value"]["min"]
-        high = layer_range["value"]["max"]
-        if not low <= layers <= high:
+    # -- layer count: the discrete offered set, not a numeric range --------
+    discrete = capabilities.get("fr4_copper_layer_options")
+    if discrete is not None:
+        if layers not in discrete["value"]:
             rejections.append({
                 "requirement": "copper_layers",
-                "issue": "{} copper layers is outside the fabricator's "
-                         "stated {}-{} range".format(layers, low, high)})
+                "issue": "{} copper layers is not among the fabricator's "
+                         "discrete offered counts {}; a count inside the "
+                         "stated 1-32 range that no statement supports is "
+                         "not offered ({})".format(
+                             layers, discrete["value"],
+                             discrete.get("conditions"))})
         else:
             explanations.append(
-                "{} copper layers is within the stated {}-{} range "
-                "[{}]".format(layers, low, high, layer_range["source"]))
+                "{} copper layers is among the discrete offered counts "
+                "[{}]".format(layers, discrete["source"]))
+    else:
+        layer_range = capability("layer_count_range", "copper_layers")
+        if layer_range is not None:
+            low = layer_range["value"]["min"]
+            high = layer_range["value"]["max"]
+            if not low <= layers <= high:
+                rejections.append({
+                    "requirement": "copper_layers",
+                    "issue": "{} copper layers is outside the fabricator's "
+                             "stated {}-{} range".format(layers, low, high)})
+            else:
+                explanations.append(
+                    "{} copper layers is within the stated {}-{} range "
+                    "[{}]; no discrete count list is in this catalog, so "
+                    "the range is the only evidence".format(
+                        layers, low, high, layer_range["source"]))
 
-    # -- board thickness ---------------------------------------------------
-    thickness_options = capability("fr4_thickness_options_mm",
-                                   "board_thickness_mm")
+    # -- board thickness, coupled to the layer count and mode --------------
     material = requirements.get("material", "FR4")
     if material != "FR4":
         rejections.append({
             "requirement": "material",
             "issue": "the approved catalog carries thickness options for "
                      "FR-4 only; {!r} cannot be checked".format(material)})
-    elif thickness_options is not None:
-        if thickness not in thickness_options["value"]:
+    elif impedance:
+        # An impedance build is ordered against a layer-count section; its
+        # thickness options are stated per section, and a thickness that
+        # section does not state is not available for THIS combination,
+        # however standard it is elsewhere in the catalog.
+        section_options = capabilities.get(
+            "{}L thickness_options".format(layers))
+        if section_options is None:
             rejections.append({
                 "requirement": "board_thickness_mm",
-                "issue": "{} mm is not among the fabricator's stated FR-4 "
-                         "options {} ({})".format(
-                             thickness, thickness_options["value"],
-                             thickness_options.get("conditions"))})
+                "issue": "no thickness options are published for {}-layer "
+                         "impedance-controlled builds; whether {} mm is "
+                         "available for this combination cannot be "
+                         "established, and unknown is not "
+                         "supported".format(layers, thickness)})
+        elif thickness not in section_options["value"]:
+            rejections.append({
+                "requirement": "board_thickness_mm",
+                "issue": "{} mm is not among the stated thickness options "
+                         "{} for {}-layer impedance-controlled builds; the "
+                         "value exists elsewhere in the catalog but not "
+                         "for this combination".format(
+                             thickness, section_options["value"], layers)})
         else:
             explanations.append(
-                "{} mm is a stated standard FR-4 thickness "
-                "[{}]".format(thickness, thickness_options["source"]))
+                "{} mm is a stated thickness option for {}-layer "
+                "impedance-controlled builds [{}]".format(
+                    thickness, layers, section_options["source"]))
+    else:
+        thickness_options = capability("fr4_thickness_options_mm",
+                                       "board_thickness_mm")
+        if thickness_options is not None:
+            heavy = capabilities.get("fr4_thickness_2p5mm_plus")
+            if thickness in thickness_options["value"]:
+                explanations.append(
+                    "{} mm is a stated standard FR-4 thickness "
+                    "[{}]".format(thickness, thickness_options["source"]))
+            elif heavy is not None and \
+                    thickness >= heavy["value"]["min"]:
+                minimum_layers = (heavy.get("applies") or {}).get(
+                    "min_layers")
+                rejections.append({
+                    "requirement": "board_thickness_mm",
+                    "issue": "{} mm falls in the range the fabricator "
+                             "states exists only for {}+ layer boards, and "
+                             "its discrete values are not published; a "
+                             "thickness that cannot be confirmed for this "
+                             "layer count is not assumed ({})".format(
+                                 thickness, minimum_layers,
+                                 heavy.get("conditions"))})
+            else:
+                rejections.append({
+                    "requirement": "board_thickness_mm",
+                    "issue": "{} mm is not among the fabricator's stated "
+                             "FR-4 options {} ({})".format(
+                                 thickness, thickness_options["value"],
+                                 thickness_options.get("conditions"))})
 
     # -- copper weights, resolved first ------------------------------------
     # The trace/space limits and the stackup tables are both conditioned on
@@ -239,40 +300,97 @@ def select(catalog, requirements):
                         which_weight(weight), which, layers, cited))
 
     # -- drill and via -----------------------------------------------------
+    # The published limits are conditioned on multilayer boards. A stated
+    # requirement the catalog holds no limit for is unverifiable, and an
+    # unverifiable requirement rejects - it must never be quietly skipped
+    # because the board's layer count falls outside the limit's scope.
     drill = _require_number(requirements, "min_drill_mm")
-    if drill is not None and layers >= 2:
-        drill_capability = capability("drill_diameter_multilayer_mm",
-                                      "min_drill_mm")
-        if drill_capability is not None:
-            if drill < drill_capability["value"]["min"]:
-                rejections.append({
-                    "requirement": "min_drill_mm",
-                    "issue": "the design drills {} mm; the stated minimum is "
-                             "{} mm".format(drill,
-                                            drill_capability["value"]["min"])})
+    if drill is not None:
+        if layers < 2:
+            rejections.append({
+                "requirement": "min_drill_mm",
+                "issue": "the published drill limits are stated for "
+                         "multilayer boards; no limit for a {}-layer board "
+                         "is in the approved catalog, and unknown is not "
+                         "supported".format(layers)})
+        else:
+            drill_capability = capability("drill_diameter_multilayer_mm",
+                                          "min_drill_mm")
+            if drill_capability is not None:
+                if drill < drill_capability["value"]["min"]:
+                    rejections.append({
+                        "requirement": "min_drill_mm",
+                        "issue": "the design drills {} mm; the stated "
+                                 "minimum is {} mm".format(
+                                     drill,
+                                     drill_capability["value"]["min"])})
     via = _require_number(requirements, "min_via_diameter_mm")
-    if via is not None and layers >= 2:
-        via_capability = capability("via_multilayer_mm",
-                                    "min_via_diameter_mm")
-        if via_capability is not None:
-            if via < via_capability["value"]["diameter"]:
-                rejections.append({
-                    "requirement": "min_via_diameter_mm",
-                    "issue": "the design uses {} mm vias; the stated minimum "
-                             "diameter is {} mm".format(
-                                 via, via_capability["value"]["diameter"])})
+    if via is not None:
+        if layers < 2:
+            rejections.append({
+                "requirement": "min_via_diameter_mm",
+                "issue": "the published via limits are stated for "
+                         "multilayer boards; no limit for a {}-layer board "
+                         "is in the approved catalog, and unknown is not "
+                         "supported".format(layers)})
+        else:
+            via_capability = capability("via_multilayer_mm",
+                                        "min_via_diameter_mm")
+            if via_capability is not None:
+                if via < via_capability["value"]["diameter"]:
+                    rejections.append({
+                        "requirement": "min_via_diameter_mm",
+                        "issue": "the design uses {} mm vias; the stated "
+                                 "minimum diameter is {} mm".format(
+                                     via,
+                                     via_capability["value"]["diameter"])})
 
     profile = {"copper_layers": layers, "board_thickness_mm": thickness,
                "impedance_control": impedance,
                "outer_copper_oz": outer_oz, "inner_copper_oz": inner_oz}
 
+    # -- controlled impedance is itself a conditioned capability -----------
+    if impedance:
+        offered = capabilities.get("controlled_impedance_layer_counts")
+        if offered is None:
+            rejections.append({
+                "requirement": "impedance_control",
+                "issue": "the approved catalog does not state which layer "
+                         "counts controlled impedance is offered for; "
+                         "unknown is not supported"})
+        elif layers not in offered["value"]:
+            rejections.append({
+                "requirement": "impedance_control",
+                "issue": "controlled impedance is stated as offered for "
+                         "layer counts {}; {} layers is not among "
+                         "them".format(offered["value"], layers)})
+
     # -- stackup candidates: the same configuration, or none ---------------
     stackup_id, candidates = _stackups(catalog, layers, thickness, impedance,
                                        outer_oz, inner_oz, explanations)
     if impedance:
+        if not candidates:
+            # A controlled-impedance build IS its construction: impedance
+            # is achieved by a specific published stackup, so a profile
+            # with no compatible published construction has no established
+            # controlled-impedance process - unlike ordinary fabrication,
+            # where an unpublished construction is merely unpublished.
+            rejections.append({
+                "requirement": "impedance_control",
+                "issue": "controlled impedance requires a published "
+                         "construction compatible with this exact "
+                         "configuration ({}L, {} mm, {} oz outer, {} oz "
+                         "inner), and none is in the approved "
+                         "catalog".format(
+                             layers, thickness,
+                             "?" if outer_oz is None
+                             else which_weight(outer_oz),
+                             "?" if inner_oz is None
+                             else which_weight(inner_oz))})
         explanations.append(
             "impedance control is required by the requirements, so the "
-            "impedance-grade constructions are in scope")
+            "impedance-grade constructions are in scope and one of them "
+            "must describe this exact configuration")
     else:
         explanations.append(
             "no impedance requirement is stated, so no impedance-grade "
@@ -447,8 +565,8 @@ def _stackups(catalog, layers, thickness, impedance, outer_oz, inner_oz,
 # feeding the timing/SI system
 # ---------------------------------------------------------------------------
 
-def export_physical_stackup(approved_snapshot, stackup_id,
-                            copper_layer_names):
+def export_physical_stackup(approved_snapshot, requirements,
+                            copper_layer_names, stackup_id=None):
     """A board-supplement physical stackup from one approved construction.
 
     The output is the exact document `timing.physical_stackup.supplement`
@@ -459,15 +577,45 @@ def export_physical_stackup(approved_snapshot, stackup_id,
     change shows up as a reviewable difference against a *file the board
     owns*, not as a silent shift under its results.
 
+    The export runs the SAME selection the profile decision runs, from the
+    board's `requirements`, and only a construction that selection names as
+    a candidate for that profile can come out. There is deliberately no way
+    to hand this function a bare stackup id and have it trusted: an export
+    that bypassed profile compatibility would let a caller dress a board in
+    a construction the fabricator never published for its configuration.
+    `stackup_id` exists only to resolve a preserved ambiguity - it must be
+    one of the selection's own candidates.
+
     `copper_layer_names` are the BOARD's copper layers, outermost first: the
     board is the authority on what its layers are called, and the count has
     to match the construction or the export refuses.
     """
     catalog = approved_snapshot["normalized"]
-    stackup = catalog.get("stackups", {}).get(stackup_id)
-    if stackup is None:
+    result = select(catalog, requirements)
+    if not result["feasible"]:
         raise SelectionError(
-            "the approved catalog has no stackup {!r}".format(stackup_id))
+            "the requirements do not select a feasible fabrication profile, "
+            "so no construction can be exported as describing them: {}".format(
+                "; ".join(r["issue"] for r in result["rejections"][:3])))
+    candidates = result["stackup_candidates"]
+    if stackup_id is None:
+        stackup_id = result["stackup"]
+        if stackup_id is None:
+            raise SelectionError(
+                "no unique construction describes this profile ({}); "
+                "name one of the selection's own candidates explicitly, or "
+                "none exists to export".format(
+                    ", ".join(candidates) if candidates
+                    else "no candidates at all"))
+    elif stackup_id not in candidates:
+        raise SelectionError(
+            "stackup {!r} is not among the constructions selection "
+            "establishes for this profile ({}); exporting it would dress "
+            "the board in a construction the fabricator did not publish "
+            "for its configuration".format(
+                stackup_id, ", ".join(candidates) if candidates
+                else "none"))
+    stackup = catalog["stackups"][stackup_id]
     copper_names = list(copper_layer_names)
     if model.stackup_copper_count(stackup) != len(copper_names):
         raise SelectionError(

@@ -58,11 +58,16 @@ from . import model
 #: move slowly; a month-old catalog is worth re-checking, not worth blocking.
 FRESHNESS_DAYS_DEFAULT = 30
 
-SNAPSHOT_SCHEMA_VERSION = 2
+SNAPSHOT_SCHEMA_VERSION = 3
 
 #: Snapshot schema versions this loader understands. Anything else refuses:
 #: reading half of an unknown format is how provenance quietly rots.
-KNOWN_SNAPSHOT_SCHEMAS = (1, 2)
+#: Version 3 added `declared_source_ids` - the adapter's required source
+#: set at acquisition time - so completeness is checkable without the
+#: store knowing any fabricator's names.
+KNOWN_SNAPSHOT_SCHEMAS = (1, 2, 3)
+
+VERIFICATION_SCHEMA_VERSION = 1
 
 OUTCOME_COMPLETE = "complete"
 OUTCOME_INCOMPLETE = "incomplete"
@@ -263,6 +268,21 @@ class CatalogStore:
             raise StoreError(
                 "the {} snapshot records outcome {!r}, which is not an "
                 "outcome this code knows".format(kind, snapshot["outcome"]))
+        source_ids = [s.get("id") for s in snapshot["sources"]]
+        if len(source_ids) != len(set(source_ids)):
+            raise StoreError(
+                "the {} snapshot lists a source id twice; a duplicated "
+                "identity means one evidence entry silently shadows "
+                "another".format(kind))
+        declared = snapshot.get("declared_source_ids")
+        if declared is not None and snapshot.get("outcome") == \
+                OUTCOME_COMPLETE and sorted(declared) != sorted(source_ids):
+            raise StoreError(
+                "the {} snapshot claims a complete acquisition of {} but "
+                "its evidence list carries {}; part of the claimed evidence "
+                "universe has vanished (or grown), and a complete snapshot "
+                "with a mutilated source set cannot be trusted".format(
+                    kind, sorted(declared), sorted(source_ids)))
         normalized = snapshot.get("normalized")
         if snapshot["outcome"] == OUTCOME_COMPLETE:
             if normalized is None or not snapshot.get("normalized_sha256"):
@@ -280,6 +300,17 @@ class CatalogStore:
                                       snapshot["normalized_sha256"][:12],
                                       recomputed[:12]))
             model.validate_catalog(normalized)
+            referenced = set()
+            for section in ("capabilities", "materials", "stackups"):
+                for record in normalized.get(section, {}).values():
+                    referenced.add(record.get("source"))
+            unbacked = sorted(referenced - set(source_ids))
+            if unbacked:
+                raise StoreError(
+                    "the {} snapshot's normalized records cite source(s) "
+                    "{} that its evidence list does not carry; a value "
+                    "whose claimed source has vanished from the snapshot "
+                    "is a value nobody can audit".format(kind, unbacked))
         problems = verify_evidence(snapshot, evidence_dir)
         if problems:
             raise StoreError(
@@ -305,10 +336,43 @@ class CatalogStore:
                                    self.observed_evidence)
 
     def verification(self):
+        """The verification ledger, validated - or None, never a guess.
+
+        The ledger can renew freshness, which makes it operationally
+        trust-relevant even though it can never alter approved semantics.
+        Any structural or semantic problem - unreadable JSON, an unknown
+        schema, missing fields, unparseable or reversed timestamps -
+        makes the ledger worth nothing rather than worth anything:
+        freshness falls back to the approved evidence age, which can only
+        make the catalog look older, never fresher.
+        """
         if not os.path.isfile(self.verification_path):
             return None
-        with open(self.verification_path, encoding="utf-8") as handle:
-            return json.load(handle)
+        try:
+            with open(self.verification_path, encoding="utf-8") as handle:
+                record = json.load(handle)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(record, dict):
+            return None
+        if record.get("schema_version") != VERIFICATION_SCHEMA_VERSION:
+            return None
+        for field in ("verified_utc", "approved_normalized_sha256",
+                      "observed_retrieved_utc", "parser"):
+            if not record.get(field):
+                return None
+        if not isinstance(record["parser"], dict) \
+                or not record["parser"].get("id"):
+            return None
+        try:
+            verified = _parse_utc(record["verified_utc"])
+            retrieved = _parse_utc(record["observed_retrieved_utc"])
+        except (ValueError, TypeError):
+            return None
+        if verified < retrieved:
+            # A verification cannot predate the acquisition it verified.
+            return None
+        return record
 
     # -- freshness ---------------------------------------------------------
     def freshness(self, max_age_days=FRESHNESS_DAYS_DEFAULT, now=None):
@@ -422,6 +486,17 @@ class CatalogStore:
         Never touches the approved state. The attempt that was ``latest``
         until now is kept as ``previous.json`` - history for inspection,
         no longer anyone's idea of current.
+
+        Crash recovery, stated: evidence files are written first (content-
+        addressed, so a re-run overwrites nothing meaningful), then the old
+        ``latest`` is atomically renamed to ``previous``, then the new
+        ``latest`` is atomically written. A crash in the gap leaves
+        ``latest`` absent and the last acquisition intact at ``previous`` -
+        a visible degraded state (``observed()`` returns None,
+        ``previous_observed()`` still answers), never a corrupt or lying
+        one. What that gap can cost is the *older* history layer that the
+        rename displaced; the newest completed acquisition itself is never
+        the only casualty. The next refresh rebuilds ``latest`` normally.
         """
         if outcome not in (OUTCOME_COMPLETE, OUTCOME_INCOMPLETE,
                            OUTCOME_PARSE_FAILED):
@@ -461,6 +536,7 @@ class CatalogStore:
                 "retrieved_utc": retrieved,
                 "parser": dict(parser_identity),
                 "sources": sources,
+                "declared_source_ids": [spec["id"] for spec in source_specs],
                 "outcome": outcome,
                 "errors": list(errors),
                 "normalized_sha256": (model.normalized_digest(normalized)
@@ -499,10 +575,14 @@ class CatalogStore:
                     (observed.get("normalized_sha256") or "")[:12],
                     approved["normalized_sha256"][:12]))
         record = {
+            "schema_version": VERIFICATION_SCHEMA_VERSION,
             "verified_utc": _utcnow().isoformat(),
             "approved_normalized_sha256": approved["normalized_sha256"],
             "observed_retrieved_utc": observed["retrieved_utc"],
             "parser": observed.get("parser"),
+            "sources": [{key: source.get(key) for key in
+                         ("id", "url", "sha256_raw")}
+                        for source in observed.get("sources", [])],
         }
         with self._lock():
             _atomic_write_json(self.verification_path, record)
@@ -519,6 +599,19 @@ class CatalogStore:
         approving something other than what was reviewed is the exact
         failure this parameter exists to prevent. A prefix of at least 12
         characters is accepted.
+
+        Crash recovery, stated: evidence copies land first (verified,
+        content-addressed, idempotent), then ``approved.json`` is
+        atomically replaced, then the audit entry is appended. The
+        approved snapshot itself carries its promotion identity -
+        ``approved_utc`` and ``replaced_normalized_sha256`` - so a crash
+        after the approved write but before the audit append leaves a
+        fully self-describing approved state whose missing audit entry is
+        reconstructible from the file it describes; the audit log is
+        corroborating history, never the only proof a promotion happened.
+        A crash before the approved write leaves the old approved state
+        untouched with at most some orphaned (correct, content-addressed)
+        evidence copies.
         """
         with self._lock():
             observed = self.observed()
