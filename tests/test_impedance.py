@@ -10,6 +10,7 @@ trends, limits and symmetries - rather than mirroring their arithmetic.
 from __future__ import annotations
 
 import copy
+import inspect
 import os
 import sys
 import unittest
@@ -434,6 +435,37 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
                       "specified to the fabricator", control["note"])
         self.assertNotIn("requested_impedance_established", control)
 
+    def test_tolerance_prose_never_implies_a_value_exists(self):
+        """The tolerance record is a pure function of profile and
+        catalog - the signature proves it cannot see the numeric
+        outcome - so one wording serves every result state and must
+        stay true when numeric_solution is null. No note may speak of
+        "the value above"."""
+        self.assertEqual(
+            list(inspect.signature(
+                impedance._fabrication_tolerance).parameters),
+            ["approved_snapshot", "context"])
+        solved = impedance.solve(self.snapshot, _request())
+        controlled = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628"))
+        unsolved = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628", target_ohm=30.0,
+            width_search_mm={"min": 0.15, "max": 0.5}))
+        rejected = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628", target_ohm=90.0,
+            width_search_mm={"min": 0.05, "max": 2.0}))
+        self.assertIsNotNone(solved["numeric_solution"])
+        self.assertIsNotNone(controlled["numeric_solution"])
+        self.assertIsNone(unsolved["numeric_solution"])
+        self.assertFalse(rejected["geometry_feasible"])
+        for result in (solved, controlled, unsolved, rejected):
+            note = result["fabrication_tolerance"]["note"]
+            self.assertNotIn("value above", note)
+            self.assertIn("any solved width", note)
+
     def test_a_controlled_no_solution_is_not_called_eligible(self):
         """impedance_control=true with no root in the domain: the
         boolean says not eligible, and the prose must agree - selecting
@@ -840,6 +872,8 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
             self.assertFalse(result["geometry_feasible"])
             self.assertIn("no root is silently chosen",
                           result["failure"])
+            self.assertNotIn("value above",
+                             result["fabrication_tolerance"]["note"])
 
     def test_a_domain_reaching_invalid_geometry_refuses_cleanly(self):
         with self.assertRaises(impedance.ImpedanceError) as caught:
@@ -1029,6 +1063,111 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
         self.assertLess(gap, 1e-4)
         for _width, z, _eps in roots:
             self.assertAlmostEqual(z, target, places=6)
+
+    @staticmethod
+    def _tie_context():
+        """h and t pinned so the u=1 seam is an exact float:
+        thickness_corrected_width(TIE_SEAM, h, t) - h == 0.0 to the
+        last bit. For most parameter pairs the crossing falls between
+        two adjacent floats and no exact tie exists; this pair was
+        found by scanning the conductor thickness."""
+        return {"topology": impedance.MICROSTRIP, "height_mm": 0.2104,
+                "epsilon_r": 4.4, "conductor_thickness_mm": 0.04,
+                "trapezoid_delta_mm": 0.0}
+
+    TIE_SEAM = 0.16770473581954828
+
+    def test_seam_discovery_reports_an_interior_seam(self):
+        context = self._microstrip_context()
+        (seam, owner), = impedance._seam_positions(context, 0.05, 2.0)
+        self.assertEqual(owner, "left")
+        self.assertGreater(seam, 0.05)
+        self.assertLess(seam, 2.0)
+        self.assertLess(abs(propagation.thickness_corrected_width(
+            seam, 0.2104, 0.04064) - 0.2104), 1e-9)
+
+    def test_seam_discovery_includes_the_low_endpoint(self):
+        """A caller whose domain starts exactly at the reported seam
+        still gets the seam back, exactly, because discovery brackets
+        from a fixed anchor and is clamped into the closed domain.
+        Premise: this context's reported seam sits on the narrow side
+        of the true crossing, so it is a domain point the partition
+        must keep."""
+        context = self._microstrip_context()
+        (seam, _o), = impedance._seam_positions(context, 0.05, 2.0)
+        self.assertLess(propagation.thickness_corrected_width(
+            seam, 0.2104, 0.04064) - 0.2104, 0.0)
+        self.assertEqual(impedance._seam_positions(context, seam, 2.0),
+                         [(seam, "left")])
+
+    def test_seam_discovery_includes_an_exact_tie_at_either_endpoint(
+            self):
+        """An exact u=1 tie at a domain endpoint IS the seam at that
+        endpoint. The v5 gate tested strict inequality at its bracket
+        ends and silently dropped the tie-at-high case; discovery is
+        now decided at the domain endpoints themselves."""
+        context = self._tie_context()
+        self.assertEqual(propagation.thickness_corrected_width(
+            self.TIE_SEAM, 0.2104, 0.04) - 0.2104, 0.0)
+        self.assertEqual(
+            impedance._seam_positions(context, 0.05, self.TIE_SEAM),
+            [(self.TIE_SEAM, "left")])
+        self.assertEqual(
+            impedance._seam_positions(context, self.TIE_SEAM, 2.0),
+            [(self.TIE_SEAM, "left")])
+        (interior, _o), = impedance._seam_positions(context, 0.05, 2.0)
+        self.assertLess(abs(interior - self.TIE_SEAM), 1e-9)
+
+    def test_seam_discovery_reports_nothing_outside_the_domain(self):
+        context = self._microstrip_context()
+        (seam, _o), = impedance._seam_positions(context, 0.05, 2.0)
+        self.assertEqual(
+            impedance._seam_positions(context, seam + 0.01, 2.0), [])
+        self.assertEqual(
+            impedance._seam_positions(context, 0.05, seam - 0.01), [])
+        strip = self._stripline_context(0.03)
+        strip_seam = 0.35 * (1.0 - 0.03)
+        self.assertEqual(
+            impedance._seam_positions(strip, strip_seam + 0.01, 0.8),
+            [])
+
+    def test_seam_discovery_includes_stripline_domain_endpoints(self):
+        """The same closed-domain rule, asserted on _seam_positions
+        itself for the closed-form stripline seam - no topology is
+        special-cased."""
+        context = self._stripline_context(0.03)
+        seam = 0.35 * (1.0 - 0.03)
+        self.assertEqual(impedance._seam_positions(context, seam, 0.8),
+                         [(seam, "right")])
+        self.assertEqual(impedance._seam_positions(context, 0.1, seam),
+                         [(seam, "right")])
+
+    def test_an_exact_tie_seam_at_low_is_the_owned_point(self):
+        """Tie at low, owner narrow: the partition reduces the narrow
+        branch to the single owned point and the exact value there is
+        attained exactly."""
+        context = self._tie_context()
+        target, _e = impedance._impedance_at(context, self.TIE_SEAM,
+                                             _force_branch="narrow")
+        production, _e = impedance._impedance_at(context, self.TIE_SEAM)
+        self.assertEqual(target, production)
+        roots, _diag = impedance._solve_width(context, self.TIE_SEAM,
+                                              2.0, target)
+        self.assertEqual(len(roots), 1)
+        self.assertEqual(roots[0][0], self.TIE_SEAM)
+        self.assertEqual(roots[0][1], target)
+
+    def test_an_exact_tie_seam_at_high_is_owned_and_attained(self):
+        """Tie at high, owner narrow: the whole closed domain is the
+        narrow branch and the endpoint value is attained at the
+        endpoint."""
+        context = self._tie_context()
+        target, _e = impedance._impedance_at(context, self.TIE_SEAM)
+        roots, _diag = impedance._solve_width(context, 0.05,
+                                              self.TIE_SEAM, target)
+        self.assertEqual(len(roots), 1)
+        self.assertLess(abs(roots[0][0] - self.TIE_SEAM), 1e-9)
+        self.assertAlmostEqual(roots[0][1], target, places=6)
 
     def test_gapless_result_values_never_carry_nan(self):
         snapshot = _snapshot()

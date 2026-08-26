@@ -75,8 +75,14 @@ from .. import propagation
 #: its owned root, fabricate a root from the neighbouring branch's
 #: values, or collapse a two-root answer to one; and the published
 #: process tolerance was separated from any claim of applying to this
-#: still-unbound target.
-MODEL_VERSION = "5"
+#: still-unbound target. Version 6 made microstrip seam discovery a
+#: fact of the closed domain itself: branch membership is decided at
+#: the domain endpoints, an exact endpoint tie is owned per the
+#: production inequality, and the bisected interior crossing is clamped
+#: into the closed domain, so no endpoint seam depends on the luck of a
+#: bracket evaluated elsewhere; and the tolerance prose was reworded to
+#: stay true when no width is solved at all.
+MODEL_VERSION = "6"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -727,6 +733,15 @@ def _seam_positions(context, low, high):
     branch owns the point) or "right". A seam equal to `low` or `high`
     is returned too: the caller's domain is CLOSED, so its endpoints
     are points like any other and each belongs to exactly one branch.
+    Microstrip discovery is therefore decided AT the domain endpoints:
+    branch membership is evaluated at `low` and `high` themselves, an
+    exact tie there (thickness-corrected width equal to the height to
+    the last bit) IS the seam at that endpoint, and an interior
+    crossing is bisected from a fixed anchor and clamped into the
+    closed domain. At float precision the seam is normally a crossing
+    between two adjacent representable widths, so the reported position
+    is production-consistent to within the bisection tolerance rather
+    than a representable point of exact branch change.
     """
     delta = context["trapezoid_delta_mm"]
     seams = []
@@ -737,21 +752,40 @@ def _seam_positions(context, low, high):
     else:
         h = context["height_mm"]
         t = context["conductor_thickness_mm"]
+        if low - delta / 2.0 <= 0:
+            raise propagation.Unsupported(
+                "width {} mm is not wider than the stated trapezoid "
+                "narrowing".format(low))
 
-        def excess(width_mean):
+        def excess(width_base):
             return propagation.thickness_corrected_width(
-                width_mean, h, t) - h
-        a, c = 1e-6, high + delta
-        if excess(a) < 0 < excess(c):
+                width_base - delta / 2.0, h, t) - h
+
+        low_excess = excess(low)
+        high_excess = excess(high)
+        if low_excess == 0.0:
+            seams.append((low, "left"))
+        elif high_excess == 0.0:
+            seams.append((high, "left"))
+        elif low_excess < 0.0 < high_excess:
+            # The anchor is fixed (not the caller's low) so the same
+            # construction reports the same seam float regardless of
+            # how the caller frames the domain around it; monotonicity
+            # gives excess(anchor) <= excess(low) < 0, so the bracket
+            # is valid without evaluating it.
+            a = delta / 2.0 + 1e-6
+            if not a < low:
+                a = low
+            c = high
             for _ in range(200):
                 middle = (a + c) / 2.0
-                if excess(middle) > 0:
+                if excess(middle) > 0.0:
                     c = middle
                 else:
                     a = middle
                 if c - a < 1e-12:
                     break
-            seams.append(((a + c) / 2.0 + delta / 2.0, "left"))
+            seams.append((min(max((a + c) / 2.0, low), high), "left"))
     return sorted((s, owner) for s, owner in seams if low <= s <= high)
 
 
@@ -963,7 +997,9 @@ def _fabrication_tolerance(approved_snapshot, context):
     fabrication_control.target_bound_to_fabrication_specification
     records. "The fabricator offers plus-minus ten percent" never
     becomes "plus-minus ten percent applies to this line" without that
-    binding.
+    binding. The record is a pure function of the profile and the
+    approved catalog - it never sees the numeric outcome - so its
+    prose is written to stay true when no width is solved at all.
     """
     controlled = bool(context["profile"].get("impedance_control"))
     tolerance = approved_snapshot["normalized"]["capabilities"].get(
@@ -977,13 +1013,13 @@ def _fabrication_tolerance(approved_snapshot, context):
         record["note"] = (
             "the fabrication profile does not select controlled "
             "impedance, so the fabricator's stated controlled-impedance "
-            "tolerance does NOT apply; the value above is an "
+            "tolerance does NOT apply; any solved width here is an "
             "uncontrolled nominal analytic estimate only")
         return record
     if tolerance is None:
         record["note"] = (
             "no impedance tolerance is normalized from the approved "
-            "sources; the value above is nominal only")
+            "sources; any solved width here is nominal only")
         return record
     record["stated_percent"] = tolerance["value"]
     record["source"] = tolerance["source"]
@@ -993,8 +1029,10 @@ def _fabrication_tolerance(approved_snapshot, context):
         "computed into an interval here, and the profile selects that "
         "process - but this solver target is not bound into any "
         "fabrication specification, so nothing here proves the "
-        "fabricator will hold THIS line to the stated percent; the "
-        "value above remains the nominal analytic estimate")
+        "fabricator will hold THIS line to the stated percent; any "
+        "solved width remains a nominal analytic estimate, and a "
+        "result without one carries no value for this tolerance to "
+        "describe")
     return record
 
 
