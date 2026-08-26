@@ -1496,9 +1496,10 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
     """
 
     def test_the_immersed_equation_reproduces_the_papers_figures(self):
-        """Equation (8) against the paper's own asymptotes: Figure 4
-        (er=10, erc=2, w/d=1) and Figure 7 (er=4, erc=1.06, w/d=1),
-        both on the Corr = 1 branch."""
+        """Equation (8) against the paper's largest-thickness plotted
+        readings, asymptotically consistent with its stated limiting
+        behavior: Figure 4 (er=10, erc=2, w/d=1) and Figure 7 (er=4,
+        erc=1.06, w/d=1), both on the Corr = 1 branch."""
         self.assertAlmostEqual(
             overlay_reference.immersed_epsilon(10.0, 2.0, 1.0),
             7.14, delta=0.03)
@@ -1518,6 +1519,9 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
         self.assertAlmostEqual(
             overlay_reference.immersed_epsilon(4.0, 1.06, 1.0),
             2.954012829995, places=10)
+        self.assertAlmostEqual(
+            overlay_reference.immersed_epsilon(2.0, 20.0, 10.0),
+            4.329681813209, places=10)
 
     def test_the_matched_immersion_is_exact(self):
         """eps_rc = eps_r kills the correction term outright."""
@@ -1628,23 +1632,21 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
             with self.assertRaises(propagation.Unsupported):
                 covered(4.3, nan, 1.7, 1.0)
 
-    def test_a_direct_thick_cover_anchor_avoids_equation_ten(self):
-        """A direct equation (8) anchor on the eps_r < eps_rc branch
-        that never touches equation (10): the paper's own constraint
-        (2) makes equation (8) at the material eps_rc the stated
-        limit of its covered curves, and Figure 5's largest plotted
-        thickness (dc/d about 9, curve and full-wave both reading
-        about 2.40) must therefore sit BELOW that limit by only the
-        remaining ArcTan convergence. Plot-reading tolerance is
-        explicit and separate from the exact pin vector."""
+    def test_the_equation_eight_asymptotic_consistency(self):
+        """An equation (8) ASYMPTOTIC CONSISTENCY check on the
+        eps_r < eps_rc branch that never touches equation (10) - not
+        a direct figure anchor, because no figure plots the infinite
+        superstrate itself. The paper's constraint (2) makes equation
+        (8) at the material eps_rc the stated limit of its covered
+        curves, and Figure 5's largest plotted thickness (dc/d about
+        9, curve and full-wave both reading about 2.40) must
+        therefore sit BELOW that limit by only the remaining ArcTan
+        convergence. Plot-reading evidence only; the exact arithmetic
+        pin vectors live in test_the_transcription_pin_vectors."""
         asymptote = overlay_reference.immersed_epsilon(2.0, 4.0, 4.0)
         plotted_at_largest_thickness = 2.40
         self.assertGreater(asymptote, plotted_at_largest_thickness)
         self.assertLess(asymptote - plotted_at_largest_thickness, 0.08)
-        self.assertAlmostEqual(asymptote, 2.452744317415, places=10)
-        self.assertAlmostEqual(
-            overlay_reference.immersed_epsilon(2.0, 20.0, 10.0),
-            4.329681813209, places=10)
 
     def test_the_reference_has_no_conductor_thickness_parameter(self):
         """Barbuto's design chain has no finished copper thickness and
@@ -1683,11 +1685,13 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
             self.assertNotIn(name, source)
 
     def test_the_source_artifact_is_fingerprinted(self):
-        """Reproducible provenance: the exact supplied PDF and the
-        decisive equation renders are identified by hash, size and
-        page identity."""
+        """Provenance identity: the exact supplied PDF is identified
+        by hash, size and page identity, and every adjudicating
+        render is fingerprinted under the recorded recipe."""
         artifact = overlay_reference.SOURCE_ARTIFACT
         self.assertEqual(len(artifact["sha256"]), 64)
+        self.assertTrue(set(artifact["sha256"]) <= set(
+            "0123456789abcdef"))
         self.assertEqual(artifact["bytes"], 131045)
         self.assertEqual(artifact["page_count"], 13)
         self.assertEqual(artifact["doi"], "10.1108/COMPEL-10-2012-0283")
@@ -1696,23 +1700,70 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
                          4)
         for render in overlay_reference.TRANSCRIPTION_RENDERS:
             self.assertEqual(len(render["sha256"]), 64)
-            self.assertIn("dpi", render)
-            self.assertIn("page_index", render)
+            self.assertTrue(set(render["sha256"]) <= set(
+                "0123456789abcdef"))
+            self.assertIsInstance(render["page_index"], int)
+            self.assertIsInstance(render["dpi"], int)
             self.assertEqual(len(render["clip"]), 4)
+            for fraction in render["clip"]:
+                self.assertGreaterEqual(fraction, 0.0)
+                self.assertLessEqual(fraction, 1.0)
+            self.assertIn("role", render)
+
+    def test_the_render_recipe_scopes_its_own_claim(self):
+        """The recipe records renderer identity, call shape, clip
+        convention, colorspace, alpha, annotation handling and what
+        the SHA-256 covers - and the module says these are recorded
+        fingerprints of the images judged, not byte-reproducible
+        artifacts, because raster output is not stable across
+        renderer versions."""
+        recipe = overlay_reference.RENDER_RECIPE
+        for key in ("renderer", "call", "clip_convention", "colorspace",
+                    "alpha", "annotations", "sha256_of"):
+            self.assertIn(key, recipe)
+        self.assertIn("pymupdf", recipe["renderer"])
+        self.assertIn("MuPDF", recipe["renderer"])
+        self.assertIs(recipe["alpha"], False)
+        self.assertEqual(recipe["colorspace"], "RGB")
+        self.assertIn("PNG file bytes", recipe["sha256_of"])
+        self.assertIn("no rounding", recipe["clip_convention"])
+        doc = " ".join(overlay_reference.__doc__.split())
+        self.assertIn("RECORDED FINGERPRINTS", doc)
+        self.assertIn("not claimed to be byte-reproducible", doc)
 
     def test_no_confirmed_erratum_is_claimed(self):
         """The evidence establishes a printed-vs-figure inconsistency
-        and a candidate sign correction - not an author- or
-        publisher-confirmed erratum. Neither the reference module nor
-        the production impedance module may say otherwise."""
+        and a candidate sign correction - not an erratum as an
+        existing object. Neither module may treat one as established:
+        the phrases that would ("internal erratum", "the erratum",
+        "erratum remains") are banned outright, and the scoped
+        statement must be present verbatim."""
         for module in (overlay_reference, impedance):
             source = inspect.getsource(module)
             for banned in ("internal erratum", "documented erratum",
-                           "confirmed erratum's"):
+                           "the erratum", "erratum remains",
+                           "established erratum"):
                 self.assertNotIn(banned, source)
         doc = " ".join(overlay_reference.__doc__.split())
         self.assertIn("printed-vs-figure inconsistency", doc)
         self.assertIn("candidate", doc.lower())
+        impedance_doc = " ".join(
+            inspect.getsource(impedance).split())
+        self.assertIn("no erratum is established", impedance_doc)
+
+    def test_reference_and_production_versions_are_separate(self):
+        """Production MODEL_VERSION moves only when the production
+        model or its composition changes meaning; the reference
+        carries its own REFERENCE_VERSION anchored to the transcribed
+        artifact's hash. This pass changed only the reference, so the
+        production version is pinned unchanged here."""
+        self.assertEqual(impedance.MODEL_VERSION, "11")
+        self.assertEqual(overlay_reference.REFERENCE_VERSION, "3")
+        self.assertEqual(len(overlay_reference.SOURCE_ARTIFACT[
+            "sha256"]), 64)
+        source = inspect.getsource(impedance)
+        self.assertIn("REFERENCE_VERSION", source)
+        self.assertIn("PRODUCTION", source)
 
     def test_production_does_not_dispatch_the_reference(self):
         """The reference is evidence: the impedance module never

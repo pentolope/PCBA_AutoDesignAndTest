@@ -64,7 +64,12 @@ from . import model as catalog_model
 from . import selection
 from .. import propagation
 
-#: Bumped when the analytic model or its composition changes meaning.
+#: Bumped when the analytic PRODUCTION model or its composition
+#: changes meaning. The non-dispatched Barbuto reference carries its
+#: own identity (overlay_reference.REFERENCE_VERSION, anchored to the
+#: transcribed artifact's hash); from version 11 onward reference-only
+#: changes move that marker and not this one - version 11 itself was
+#: such a change, the last recorded here.
 #: Version 2 replaced the narrow-stripline branch: version 1 carried an
 #: equivalent-diameter expansion whose 0.51*pi*(t/w)^2 term could not be
 #: pinned to any printed source, so it was replaced outright by the
@@ -262,10 +267,11 @@ def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
     solver uses one half and the square, so mixing the two families
     inside one enclosure would put the edges on inconsistent bare
     baselines; (c) a finite-cover point model would additionally need
-    the printed-vs-figure inconsistency resolved by an authoritative text and a defensible
-    mapping of the fabricator's three stated mask thicknesses onto
-    the paper's single uniform overlay; until then the erratum
-    remains unconfirmed and the inconsistency merely documented.
+    the printed-vs-figure inconsistency resolved by an
+    authoritative text and a defensible mapping of the fabricator's
+    three stated mask thicknesses onto the paper's single uniform
+    overlay; no erratum is established, and the printed-vs-figure
+    inconsistency remains unresolved.
     Svacina (IEEE MTT 40(4), 1992) and Bahl and Stuchly (IEEE MTT,
     1980) remain unobtained.
     """

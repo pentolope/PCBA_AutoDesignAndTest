@@ -80,8 +80,14 @@ bound is claimed from it.
 
 The exact artifact transcribed is fingerprinted in
 ``SOURCE_ARTIFACT`` below (the PDF itself is copyrighted and is not
-committed); the decisive equation-region renders that adjudicated the
-transcription are fingerprinted in ``TRANSCRIPTION_RENDERS``.
+committed). The decisive equation-region renders that adjudicated the
+transcription are fingerprinted in ``TRANSCRIPTION_RENDERS``: these
+are RECORDED FINGERPRINTS of the exact images judged, together with
+the rendering recipe in ``RENDER_RECIPE`` - they are not claimed to be
+byte-reproducible render artifacts, because raster output is not
+stable across renderer versions. The recipe permits best-effort
+regeneration and visual re-adjudication from the fingerprinted PDF;
+the hashes identify what was actually looked at.
 """
 
 from __future__ import annotations
@@ -95,6 +101,18 @@ K1, K2, K3, K4 = 0.52, 0.241, 0.715, 0.446
 K5, K6, K7 = 1.814, 1.798, 12.52
 K8, K9, K10 = 1.877, 0.904, 0.367
 K11, K12, K13 = 1.782, 0.782, 0.214
+
+#: Identity of this transcription AS EVIDENCE, independent of the
+#: production impedance MODEL_VERSION: reference-only changes move this
+#: marker and leave production versioning untouched. Revision 1 was the
+#: initial pin (immersed equation, cover variants, figure anchors);
+#: revision 2 bound equation (11) to the original material triple,
+#: added the finite-input discipline and the artifact fingerprints;
+#: revision 3 recorded the render recipe, split this identity from the
+#: production version, and scoped the asymptote and inconsistency
+#: wording to the evidence. The transcribed artifact itself is
+#: anchored by SOURCE_ARTIFACT["sha256"].
+REFERENCE_VERSION = "3"
 
 PAPER = {
     "authors": "Barbuto, Alu, Bilotti, Toscano, Vegni",
@@ -120,10 +138,30 @@ SOURCE_ARTIFACT = {
     "published_pages": "1855-1867",
 }
 
+#: How the adjudicating renders were produced. Recorded so the images
+#: can be regenerated for visual re-adjudication from the fingerprinted
+#: PDF; NOT a byte-reproduction contract - raster antialiasing and PNG
+#: encoding vary across renderer versions, so the hashes below identify
+#: the exact images judged rather than promising to be recomputable.
+RENDER_RECIPE = {
+    "renderer": "pymupdf 1.28.2 (MuPDF 1.28.2)",
+    "call": "page.get_pixmap(dpi=<dpi>, clip=<clip>) followed by "
+            "Pixmap.save(<path>.png)",
+    "clip_convention": "clip fractions (left, top, right, bottom) of "
+                       "page.rect, applied as x0 + left*width, "
+                       "y0 + top*height, x0 + right*width, "
+                       "y0 + bottom*height, exact float arithmetic, "
+                       "no rounding",
+    "colorspace": "RGB",
+    "alpha": False,
+    "annotations": "renderer default (annotations included)",
+    "sha256_of": "the PNG file bytes as written by Pixmap.save",
+}
+
 #: The equation-region renders that materially adjudicated the
-#: transcription (pymupdf pixmaps of the artifact above; page indices
-#: are zero-based, clips are fractions of the page rectangle:
-#: left, top, right, bottom).
+#: transcription. Page indices are zero-based; clips follow
+#: RENDER_RECIPE["clip_convention"]; hashes follow
+#: RENDER_RECIPE["sha256_of"].
 TRANSCRIPTION_RENDERS = (
     {"role": "s(w/d), Corr, ExpCorr and k1..k7", "page_index": 5,
      "dpi": 340, "clip": (0.18, 0.50, 1.00, 0.95),
@@ -195,10 +233,13 @@ def immersed_epsilon(epsilon_r, epsilon_rc, w_over_d):
     """Equation (8): the microstrip immersed in eps_rc, as printed.
 
     Zero-thickness strip, substrate eps_r below, homogeneous eps_rc
-    everywhere above. Validated in the tests against the paper's own
-    Figure 4 and Figure 7 asymptotes directly and, through the
-    figure-consistent cover composition, Figures 5, 6, 8 and 10 -
-    which together exercise both Corr branches.
+    everywhere above. Checked in the tests for asymptotic consistency
+    with the paper's own largest-thickness plotted readings (Figures
+    4, 5 and 7 - the plotted curves are large-but-finite covers, so
+    these are consistency checks against the paper's stated limiting
+    behavior, not direct infinite-superstrate data) and, through the
+    figure-consistent cover composition, Figures 6, 8 and 10 - which
+    together exercise both Corr branches.
     """
     _validate(epsilon_r, epsilon_rc, w_over_d)
     if epsilon_r >= epsilon_rc:
