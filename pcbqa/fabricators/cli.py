@@ -350,6 +350,10 @@ def _cmd_impedance(arguments, store):
               "a successful exit means a manufacturable geometry whose "
               "ANALYTIC nominal meets the target - it does not mean the "
               "fabricator will control the line to it")
+    if result.get("enclosure"):
+        print("NOTE: coated-microstrip yields a width ENCLOSURE, not a "
+              "point solution; geometry_feasible stays false by design "
+              "and the exit status follows it")
     print(json.dumps(result, indent=2))
     # Exit 0 means geometry_feasible: an unambiguous analytic root whose
     # width the fabricator's published limits accept. Whether the target

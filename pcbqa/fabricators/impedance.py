@@ -30,11 +30,19 @@ Supported topologies, deliberately few and stated exactly:
     Narrow strips use the IPC-2141 closed form, wide strips Cohn's
     fringing-capacitance form; the exact equations, sources and validity
     limits are stated at ``stripline_z0``.
+  * coated external microstrip - the bare-microstrip geometry with
+    soldermask present. The toolkit pins no covered-microstrip point
+    equation, so this topology returns an ENCLOSURE, never a single
+    width: the same Hammerstad geometry factor evaluated under the two
+    permittivity readings that bracket the mask's effect (mask ignored,
+    and the whole upper half-space at the fabricator's stated mask
+    permittivity), each solved by the full branch-aware inverse. The
+    exact statement and its limits are at ``coated_microstrip_z0``.
 
-Everything else refuses by name: coated (soldermask-covered) microstrip,
-asymmetric stripline, mixed-dielectric stripline, embedded microstrip,
-and every differential topology are recognized and reported as
-unsupported by this pass, never silently approximated.
+Everything else refuses by name: asymmetric stripline,
+mixed-dielectric stripline, embedded microstrip, and every
+differential topology are recognized and reported as unsupported by
+this pass, never silently approximated.
 
 What a result does NOT claim: reference-plane continuity (the named
 planes are taken as the caller's electrical intent; whether they are
@@ -81,8 +89,16 @@ from .. import propagation
 #: production inequality, and the bisected interior crossing is clamped
 #: into the closed domain, so no endpoint seam depends on the luck of a
 #: bracket evaluated elsewhere; and the tolerance prose was reworded to
-#: stay true when no width is solved at all.
-MODEL_VERSION = "6"
+#: stay true when no width is solved at all. Version 7 added the third
+#: topology, coated external microstrip, as an ENCLOSURE model: the
+#: toolkit pins no covered-microstrip point equation, so the solve
+#: reports the bare and mask-filled edge readings of the two-media
+#: Hammerstad decomposition - both parameter-free, both through the
+#: branch-aware inverse - and refuses to name a width between them.
+#: Topology dispatch became explicit and fail-closed at every site in
+#: the same pass: an unenumerated topology now refuses instead of
+#: falling through a catch-all else.
+MODEL_VERSION = "7"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -92,13 +108,13 @@ SINGLE_ENDED = "single-ended"
 DIFFERENTIAL = "differential"
 
 MICROSTRIP = "external-microstrip-bare"
+COATED_MICROSTRIP = "external-microstrip-coated"
 STRIPLINE = "symmetric-stripline"
 
 #: Topologies this module recognizes but does not solve. Naming them is
 #: the point: a refusal that says WHICH unsupported thing was asked for is
 #: reviewable; a generic "cannot" is not.
 UNSUPPORTED_TOPOLOGIES = (
-    "coated-microstrip (soldermask present)",
     "asymmetric-stripline",
     "mixed-dielectric-stripline",
     "embedded-microstrip",
@@ -114,19 +130,18 @@ class ImpedanceError(Exception):
 # closed forms
 # ---------------------------------------------------------------------------
 
-def microstrip_z0(epsilon_r, width_mm, height_mm, conductor_mm,
-                  _force_branch=None):
-    """Hammerstad Z0 for a bare microstrip of finite conductor thickness.
+def _hammerstad_geometry(epsilon_r, width_mm, height_mm, conductor_mm,
+                         _force_branch):
+    """z_air and the bare effective permittivity of the Hammerstad model.
 
-    The effective width and effective permittivity come from the same
-    helpers the timing propagation model uses, so impedance and delay can
-    never quietly disagree about the geometry. The two-branch Hammerstad
-    Z0 is used with its usual validity window on u = w_eff/h; a geometry
-    outside it refuses rather than extrapolating.
+    Shared verbatim by the bare and coated external-microstrip forms so
+    the two can never drift in transcription: the effective width, the
+    validity window, the two-branch geometry factor and the bare
+    permittivity are computed exactly once, here.
     """
     effective_width = propagation.thickness_corrected_width(
         width_mm, height_mm, conductor_mm)
-    epsilon_effective = propagation.hammerstad_effective_permittivity(
+    epsilon_bare = propagation.hammerstad_effective_permittivity(
         epsilon_r, effective_width, height_mm)
     u = effective_width / height_mm
     if not 0.1 <= u <= 20.0:
@@ -137,10 +152,83 @@ def microstrip_z0(epsilon_r, width_mm, height_mm, conductor_mm,
         else _force_branch == "narrow"
     if narrow:
         z_air = 60.0 * math.log(8.0 / u + u / 4.0)
-        return z_air / math.sqrt(epsilon_effective), epsilon_effective
-    z_air = (FREE_SPACE_ETA_OHM
-             / (u + 1.393 + 0.667 * math.log(u + 1.444)))
+    else:
+        z_air = (FREE_SPACE_ETA_OHM
+                 / (u + 1.393 + 0.667 * math.log(u + 1.444)))
+    return z_air, epsilon_bare
+
+
+def microstrip_z0(epsilon_r, width_mm, height_mm, conductor_mm,
+                  _force_branch=None):
+    """Hammerstad Z0 for a bare microstrip of finite conductor thickness.
+
+    The effective width and effective permittivity come from the same
+    helpers the timing propagation model uses, so impedance and delay can
+    never quietly disagree about the geometry. The two-branch Hammerstad
+    Z0 is used with its usual validity window on u = w_eff/h; a geometry
+    outside it refuses rather than extrapolating. The geometry factor is
+    computed by ``_hammerstad_geometry``, shared with the coated model.
+    """
+    z_air, epsilon_effective = _hammerstad_geometry(
+        epsilon_r, width_mm, height_mm, conductor_mm, _force_branch)
     return z_air / math.sqrt(epsilon_effective), epsilon_effective
+
+
+def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
+    """Two-media permittivity: the upper half-space at epsilon_mask.
+
+    Hammerstad's effective permittivity decomposes as
+    eps_bare = q*eps_r + (1 - q)*1 with a purely geometric filling
+    fraction q = (eps_bare - 1)/(eps_r - 1) - Wheeler's filling-fraction
+    identity, algebra on the pinned form, not a new source. For a
+    microstrip between two homogeneous half-spaces the same
+    region-capacitance decomposition reads q*eps_r + (1 - q)*eps_upper;
+    evaluated at eps_upper = epsilon_mask it is the mask-filled limit of
+    the coated line. Exact anchors, tested: eps_upper = 1 reproduces the
+    bare permittivity and eps_upper = eps_r the homogeneous medium.
+    """
+    if epsilon_r <= 1.0:
+        raise propagation.Unsupported(
+            "the filling-fraction decomposition needs epsilon_r > 1 "
+            "(got {})".format(epsilon_r))
+    q = (epsilon_bare - 1.0) / (epsilon_r - 1.0)
+    return q * epsilon_r + (1.0 - q) * epsilon_mask
+
+
+def coated_microstrip_z0(epsilon_r, epsilon_mask, width_mm, height_mm,
+                         conductor_mm, _force_branch=None):
+    """The MASK-FILLED edge of the coated-microstrip enclosure.
+
+    This is deliberately not a point model of a thin soldermask. It is
+    the two-media Hammerstad reading with the entire upper half-space at
+    the fabricator's stated mask permittivity - parameter-free, exact
+    relative to the pinned Hammerstad filling fraction, and by
+    construction it OVERFILLS any real finite mask, so it understates
+    the impedance (narrows the solved width) while the bare form
+    overstates it; the fabricated coated line lies between the two
+    readings under this decomposition. The fabricator's stated mask
+    thicknesses are deliberately NOT consumed: no pinned form maps a
+    thickness to a permittivity weight, and an invented weighting would
+    be fabricated precision.
+
+    Monotonicity of the inverse is established for
+    1 <= epsilon_mask <= epsilon_r (the two-media permittivity is then
+    non-decreasing in width while z_air strictly decreases); outside
+    that window the form refuses. The geometry factor, validity window
+    and branch structure are shared verbatim with ``microstrip_z0``,
+    so the coated model has exactly the bare model's u = 1 seam and no
+    other.
+    """
+    z_air, epsilon_bare = _hammerstad_geometry(
+        epsilon_r, width_mm, height_mm, conductor_mm, _force_branch)
+    if not 1.0 <= epsilon_mask <= epsilon_r:
+        raise propagation.Unsupported(
+            "the coated enclosure is established for 1 <= mask Dk <= "
+            "substrate Dk; got mask {} against substrate {}".format(
+                epsilon_mask, epsilon_r))
+    epsilon = coated_microstrip_epsilon(epsilon_r, epsilon_mask,
+                                        epsilon_bare)
+    return z_air / math.sqrt(epsilon), epsilon
 
 
 def stripline_z0(epsilon_r, width_mm, plate_gap_mm, conductor_mm,
@@ -456,15 +544,6 @@ def resolve_context(approved_snapshot, requirements, stackup_id,
     }
 
     if external:
-        if soldermask_present:
-            raise ImpedanceError(
-                "coated-microstrip (soldermask present) is not a "
-                "supported topology in this pass; the analytic model has "
-                "no defensible representation of the mask, and a bare "
-                "calculation silently presented as a coated one would "
-                "overstate the impedance. Solve with "
-                "soldermask_present=False for the bare nominal, or wait "
-                "for the coated model")
         if len(references) != 1:
             raise ImpedanceError(
                 "an external microstrip has one reference plane; {} were "
@@ -497,6 +576,40 @@ def resolve_context(approved_snapshot, requirements, stackup_id,
             "conductor_thickness_mm": round(conductor_mm, 6),
             "conductor_weight_oz": profile["outer_copper_oz"],
         })
+        if soldermask_present:
+            masks = sorted(
+                (name, mask) for name, mask in materials.items()
+                if mask.get("kind") == "soldermask")
+            if len(masks) != 1:
+                raise ImpedanceError(
+                    "coated-microstrip needs exactly one approved "
+                    "soldermask material record; the catalog carries "
+                    "{}".format(len(masks)))
+            mask_identity, mask_record = masks[0]
+            mask_dk = mask_record.get("dk")
+            if isinstance(mask_dk, bool) or \
+                    not isinstance(mask_dk, (int, float)):
+                raise ImpedanceError(
+                    "the approved soldermask record {!r} carries no "
+                    "numeric dielectric constant".format(mask_identity))
+            if not 1.0 <= mask_dk <= record["dk"]:
+                raise ImpedanceError(
+                    "the coated enclosure is established for "
+                    "1 <= mask Dk <= substrate Dk; this construction "
+                    "has mask {} against substrate {} and is refused "
+                    "rather than extrapolated".format(mask_dk,
+                                                      record["dk"]))
+            context["topology"] = COATED_MICROSTRIP
+            context["epsilon_mask"] = mask_dk
+            context["soldermask_record"] = mask_identity
+            context["notes"].append(
+                "coated-microstrip is an ENCLOSURE model: the toolkit "
+                "pins no covered-microstrip point equation, so the "
+                "solve reports the mask-filled and bare edge readings "
+                "of the two-media Hammerstad decomposition and claims "
+                "no width between them. The fabricator's stated mask "
+                "thicknesses are deliberately not consumed: no pinned "
+                "form maps them to a permittivity weight")
     else:
         if soldermask_present:
             raise ImpedanceError(
@@ -597,15 +710,27 @@ def _impedance_at(context, width_mm, _force_branch=None):
         raise propagation.Unsupported(
             "width {} mm is not wider than the stated trapezoid "
             "narrowing".format(width_mm))
-    if context["topology"] == MICROSTRIP:
+    topology = context["topology"]
+    if topology == MICROSTRIP:
         return microstrip_z0(context["epsilon_r"], mean_width,
                              context["height_mm"],
                              context["conductor_thickness_mm"],
                              _force_branch=_force_branch)
-    return stripline_z0(context["epsilon_r"], mean_width,
-                        context["span_mm"],
-                        context["conductor_thickness_mm"],
-                        _force_branch=_force_branch)
+    if topology == COATED_MICROSTRIP:
+        return coated_microstrip_z0(context["epsilon_r"],
+                                    context["epsilon_mask"], mean_width,
+                                    context["height_mm"],
+                                    context["conductor_thickness_mm"],
+                                    _force_branch=_force_branch)
+    if topology == STRIPLINE:
+        return stripline_z0(context["epsilon_r"], mean_width,
+                            context["span_mm"],
+                            context["conductor_thickness_mm"],
+                            _force_branch=_force_branch)
+    raise ImpedanceError(
+        "context topology {!r} has no model dispatch: this solver "
+        "enumerates its topologies and refuses anything else rather "
+        "than guessing a formula".format(topology))
 
 
 def _solve(approved_snapshot, request):
@@ -669,6 +794,10 @@ def _solve(approved_snapshot, request):
     range_record = _target_range(catalog["capabilities"], mode, target,
                                  enforced=controlled)
 
+    if context["topology"] == COATED_MICROSTRIP:
+        return _solve_coated(catalog, context, request, range_record,
+                             low, high, target)
+
     try:
         roots, diagnostics = _solve_width(context, low, high, target)
     except propagation.Unsupported as exc:
@@ -710,14 +839,104 @@ def _solve(approved_snapshot, request):
     }, manufacturing=checks, ambiguous=None, failure=None)
 
 
+def _solve_coated(catalog, context, request, range_record, low, high,
+                  target):
+    """Solve both edges of the coated enclosure; claim no point width.
+
+    The two edges are genuine models of the same geometry: the bare
+    reading ignores the mask (impedance read HIGH for any real mask)
+    and the mask-filled reading floods the whole upper half-space with
+    mask material (impedance read LOW under the two-media
+    decomposition), so the width meeting the target on the fabricated
+    coated line lies between their roots. Each edge runs the full
+    branch-aware inverse and its own manufacturing check; nothing
+    between the edges is computed, weighted or preferred, because no
+    pinned form licenses a point in the interior.
+    """
+    edges = {}
+    for name, topology in (("mask_filled", COATED_MICROSTRIP),
+                           ("bare", MICROSTRIP)):
+        edge_context = dict(context)
+        edge_context["topology"] = topology
+        try:
+            roots, diagnostics = _solve_width(edge_context, low, high,
+                                              target)
+        except propagation.Unsupported as exc:
+            raise ImpedanceError(
+                "the width search domain reaches geometry outside the "
+                "model's stated validity ({}); narrow the domain to "
+                "where the model is defined rather than have it "
+                "extrapolate".format(exc))
+        if len(roots) > 1:
+            edges[name] = {
+                "established": False,
+                "ambiguous_roots": [{"width_mm": round(w, 6),
+                                     "impedance_ohm": round(z, 3)}
+                                    for w, z, _e in roots],
+                "failure": "the target is reached by {} distinct "
+                           "widths on this edge ({}); no root is "
+                           "silently chosen".format(len(roots),
+                                                    diagnostics)}
+            continue
+        if not roots:
+            edges[name] = {
+                "established": False,
+                "failure": "no width in [{} , {}] mm reaches {} ohm "
+                           "on this edge ({})".format(low, high, target,
+                                                      diagnostics)}
+            continue
+        width, z_root, eps_root = roots[0]
+        width = round(width, 6)
+        edges[name] = {
+            "established": True,
+            "width_mm": width,
+            "impedance_ohm": round(z_root, 3),
+            "epsilon_effective": round(eps_root, 4),
+            "manufacturing": _manufacturing(catalog["capabilities"],
+                                            context, width),
+        }
+    established = edges["mask_filled"]["established"] \
+        and edges["bare"]["established"]
+    enclosure = {
+        "established": established,
+        "mask_filled_edge": edges["mask_filled"],
+        "bare_edge": edges["bare"],
+        "note": ("the width for this target on the fabricated coated "
+                 "line lies between the mask-filled and bare edge "
+                 "roots under the two-media Hammerstad model; the "
+                 "toolkit pins no covered-microstrip point equation, "
+                 "so no width inside the enclosure is claimed or "
+                 "preferred"),
+    }
+    if established:
+        enclosure["width_mm"] = {
+            "lower": edges["mask_filled"]["width_mm"],
+            "upper": edges["bare"]["width_mm"],
+        }
+    return _result(
+        context, request, range_record, numeric=None,
+        manufacturing=None, ambiguous=None,
+        failure="coated-microstrip returns an enclosure, not a point "
+                "solution: the toolkit pins no covered-microstrip "
+                "closed form, and a single width would be fabricated "
+                "precision. The enclosure field carries both edge "
+                "solves; a point model would require a pinned printed "
+                "covered-microstrip equation or fabricator-published "
+                "reference geometries",
+        enclosure=enclosure)
+
+
 def _seam_positions(context, low, high):
     """Top-level branch boundaries in the closed domain, with owners.
 
     Stated precisely: every impedance-model branch boundary CAPABLE OF
     CHANGING THE INVERSE is represented here - the stripline narrow/wide
     split at w_mean = 0.35*(b - t) and the microstrip Hammerstad split
-    at w_eff = h, mapped to base-width space through the trapezoid
-    delta. Lower-level helpers are also piecewise (the Wheeler
+    at w_eff = h (one seam serving the bare and coated external models
+    alike: the coated permittivity factor is continuous in width and
+    its epsilon kink at u = 1 is co-located with, and owned like, the
+    z_air branch change), mapped to base-width space through the
+    trapezoid delta. Lower-level helpers are also piecewise (the Wheeler
     thickness-correction switch, the effective-permittivity sub-terms),
     but they are continuous and the composition stays strictly monotone
     across them, so they create no inverse branches and are deliberately
@@ -749,7 +968,7 @@ def _seam_positions(context, low, high):
         b = context["span_mm"]
         t = context["conductor_thickness_mm"]
         seams.append((0.35 * (b - t) + delta / 2.0, "right"))
-    else:
+    elif context["topology"] in (MICROSTRIP, COATED_MICROSTRIP):
         h = context["height_mm"]
         t = context["conductor_thickness_mm"]
         if low - delta / 2.0 <= 0:
@@ -786,6 +1005,12 @@ def _seam_positions(context, low, high):
                 if c - a < 1e-12:
                     break
             seams.append((min(max((a + c) / 2.0, low), high), "left"))
+    else:
+        raise ImpedanceError(
+            "context topology {!r} has no seam dispatch: this solver "
+            "enumerates its topologies and refuses anything else rather "
+            "than assuming an unpartitioned inverse".format(
+                context["topology"]))
     return sorted((s, owner) for s, owner in seams if low <= s <= high)
 
 
@@ -911,7 +1136,7 @@ def _manufacturing(capabilities, context, width):
 
 
 def _result(context, request, range_record, numeric, manufacturing,
-            ambiguous, failure):
+            ambiguous, failure, enclosure=None):
     """One result shape, with every success concept its own field.
 
     There is deliberately no single field spelled like success. The
@@ -927,6 +1152,10 @@ def _result(context, request, range_record, numeric, manufacturing,
     (always false here: no board- or order-side specification binds a
     solver-request target). The prose note is rendered from those same
     booleans, so it can never call an ineligible result eligible.
+    A coated-microstrip result additionally carries `enclosure` - the
+    two edge solves that bracket the target - and never a
+    numeric_solution, so geometry_feasible stays false for it by
+    construction in this model version.
     """
     geometry_feasible = bool(numeric) and bool(manufacturing) \
         and manufacturing.get("established", False)
@@ -970,6 +1199,7 @@ def _result(context, request, range_record, numeric, manufacturing,
         "target_range": range_record,
         "numeric_solution": numeric,
         "ambiguous_roots": ambiguous,
+        "enclosure": enclosure,
         "manufacturing": manufacturing,
         "geometry_feasible": geometry_feasible,
         "fabrication_control": {

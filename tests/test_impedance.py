@@ -201,8 +201,95 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         self._refuses("differential solving is not implemented",
                       mode="differential", target_ohm=100.0)
 
-    def test_soldermask_makes_the_topology_coated_and_unsupported(self):
-        self._refuses("coated-microstrip", soldermask_present=True)
+    def test_a_coated_solve_returns_the_enclosure(self):
+        """Soldermask on an external layer is the coated topology: no
+        point width exists in this model version, and the result says
+        so while delivering both parameter-free edge solves."""
+        result = impedance.solve(self.snapshot,
+                                 _request(soldermask_present=True))
+        self.assertEqual(result["model"]["identity"],
+                         "external-microstrip-coated")
+        self.assertIsNone(result["numeric_solution"])
+        self.assertFalse(result["geometry_feasible"])
+        self.assertIn("enclosure", result["failure"])
+        enclosure = result["enclosure"]
+        self.assertTrue(enclosure["established"])
+        lower = enclosure["width_mm"]["lower"]
+        upper = enclosure["width_mm"]["upper"]
+        self.assertLess(lower, upper)
+        for edge in (enclosure["mask_filled_edge"],
+                     enclosure["bare_edge"]):
+            self.assertTrue(edge["established"])
+            self.assertTrue(edge["manufacturing"]["established"])
+            self.assertAlmostEqual(edge["impedance_ohm"], 50.0,
+                                   places=3)
+        self.assertGreater(
+            enclosure["mask_filled_edge"]["epsilon_effective"],
+            enclosure["bare_edge"]["epsilon_effective"])
+        bare = impedance.solve(self.snapshot, _request())
+        self.assertEqual(upper, bare["numeric_solution"]["width_mm"])
+        self.assertIsNone(bare["enclosure"])
+        control = result["fabrication_control"]
+        self.assertFalse(
+            control["target_eligible_for_controlled_fabrication"])
+
+    def test_a_controlled_coated_solve_is_never_called_eligible(self):
+        """The enclosure has no feasible point geometry, so a
+        controlled profile cannot make a coated target eligible, and
+        the prose agrees."""
+        result = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628", soldermask_present=True))
+        self.assertTrue(result["enclosure"]["established"])
+        self.assertFalse(result["geometry_feasible"])
+        control = result["fabrication_control"]
+        self.assertTrue(control["impedance_control_selected"])
+        self.assertFalse(
+            control["target_eligible_for_controlled_fabrication"])
+        self.assertIn("NOT eligible", control["note"])
+
+    def test_a_missing_soldermask_material_refuses_the_coated_solve(
+            self):
+        """The mask permittivity is a consumed catalog fact: without an
+        approved soldermask record the coated topology refuses by name,
+        while the bare topology on the same snapshot still solves."""
+        catalog = jlcpcb.parse(_raw_sources())
+        for name in [name for name, record in
+                     catalog["materials"].items()
+                     if record.get("kind") == "soldermask"]:
+            del catalog["materials"][name]
+        snapshot = {"normalized": catalog,
+                    "normalized_sha256": model.normalized_digest(catalog),
+                    "parser": {"id": "x", "version": "0"},
+                    "retrieved_utc": "2026-08-25T00:00:00+00:00",
+                    "sources": []}
+        with self.assertRaises(impedance.ImpedanceError) as caught:
+            impedance.solve(snapshot, _request(soldermask_present=True))
+        self.assertIn("soldermask material", str(caught.exception))
+        bare = impedance.solve(snapshot, _request())
+        self.assertIsNotNone(bare["numeric_solution"])
+
+    def test_soldermask_thicknesses_are_not_consumed(self):
+        """The enclosure model states it does not consume the
+        fabricator's mask thicknesses; deleting them from the catalog
+        must not change one bit of the coated result."""
+        reference = impedance.solve(self.snapshot,
+                                    _request(soldermask_present=True))
+        catalog = jlcpcb.parse(_raw_sources())
+        for name in ("soldermask_between_traces_mil",
+                     "soldermask_on_copper_mil",
+                     "soldermask_on_fr4_mil"):
+            self.assertIn(name, catalog["capabilities"])
+            del catalog["capabilities"][name]
+        snapshot = {"normalized": catalog,
+                    "normalized_sha256": model.normalized_digest(catalog),
+                    "parser": {"id": "x", "version": "0"},
+                    "retrieved_utc": "2026-08-25T00:00:00+00:00",
+                    "sources": []}
+        stripped = impedance.solve(snapshot,
+                                   _request(soldermask_present=True))
+        self.assertEqual(reference["enclosure"],
+                         stripped["enclosure"])
 
     def test_soldermask_presence_must_be_explicit(self):
         self._refuses("explicitly true or false", soldermask_present=None)
@@ -1168,6 +1255,110 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
         self.assertEqual(len(roots), 1)
         self.assertLess(abs(roots[0][0] - self.TIE_SEAM), 1e-9)
         self.assertAlmostEqual(roots[0][1], target, places=6)
+
+    def test_the_pinned_coated_reference_vectors(self):
+        """Hand-evaluated from the two-media composition at er=4.3,
+        em=3.8, vanishing conductor: q = (eps_bare-1)/3.3, then
+        eps = q*4.3 + (1-q)*3.8 under each z_air branch. Narrow branch
+        at u=0.5 (eps_bare 2.9965 -> 4.1025), wide branch at u=2.0
+        (eps_bare 3.2736 -> 4.1445)."""
+        z, eps = impedance.coated_microstrip_z0(4.3, 3.8, 0.5, 1.0,
+                                                1e-12)
+        self.assertAlmostEqual(eps, 4.1025, places=3)
+        self.assertAlmostEqual(z, 82.363, delta=0.005)
+        z, eps = impedance.coated_microstrip_z0(4.3, 3.8, 2.0, 1.0,
+                                                1e-12)
+        self.assertAlmostEqual(eps, 4.1445, places=3)
+        self.assertAlmostEqual(z, 43.874, delta=0.005)
+
+    def test_the_coated_form_anchors_are_exact(self):
+        """The two provable anchors of the two-media reading: a unit
+        mask reproduces the bare model and a substrate-matched mask
+        reproduces the homogeneous medium."""
+        for width in (0.5, 2.0):
+            bare_z, bare_eps = impedance.microstrip_z0(4.3, width, 1.0,
+                                                       1e-12)
+            unit_z, unit_eps = impedance.coated_microstrip_z0(
+                4.3, 1.0, width, 1.0, 1e-12)
+            self.assertAlmostEqual(unit_eps, bare_eps, places=12)
+            self.assertAlmostEqual(unit_z, bare_z, places=12)
+            _z, full_eps = impedance.coated_microstrip_z0(
+                4.3, 4.3, width, 1.0, 1e-12)
+            self.assertAlmostEqual(full_eps, 4.3, places=12)
+
+    def test_the_coated_edge_reads_below_bare_everywhere(self):
+        """A mask permittivity above 1 loads the line at every width on
+        both branches; the coated reading is strictly below bare and
+        strictly decreasing in width."""
+        previous = None
+        for width in (0.2, 0.5, 0.8, 1.2, 2.0, 3.0):
+            bare_z, _e = impedance.microstrip_z0(4.4, width, 1.0, 0.03)
+            coated_z, _e = impedance.coated_microstrip_z0(
+                4.4, 3.8, width, 1.0, 0.03)
+            self.assertLess(coated_z, bare_z)
+            if previous is not None:
+                self.assertLess(coated_z, previous)
+            previous = coated_z
+
+    def test_the_coated_mask_window_is_enforced(self):
+        """Outside 1 <= mask Dk <= substrate Dk the monotone inverse is
+        not established and the form refuses; a unit substrate has no
+        filling fraction to decompose."""
+        with self.assertRaises(propagation.Unsupported) as caught:
+            impedance.coated_microstrip_z0(4.3, 4.5, 0.5, 1.0, 1e-12)
+        self.assertIn("mask Dk <= substrate", str(caught.exception))
+        with self.assertRaises(propagation.Unsupported):
+            impedance.coated_microstrip_z0(4.3, 0.9, 0.5, 1.0, 1e-12)
+        with self.assertRaises(propagation.Unsupported) as caught:
+            impedance.coated_microstrip_z0(1.0, 1.0, 0.5, 1.0, 1e-12)
+        self.assertIn("epsilon_r > 1", str(caught.exception))
+
+    def test_the_coated_context_shares_the_bare_seam_exactly(self):
+        """One seam serves both external models: the coated context
+        reports bit-identical seam positions and owners, because the
+        mask factor is continuous in width and creates no inverse
+        branch of its own."""
+        bare = self._microstrip_context()
+        coated = dict(bare, topology=impedance.COATED_MICROSTRIP,
+                      epsilon_mask=3.8)
+        self.assertEqual(impedance._seam_positions(bare, 0.05, 2.0),
+                         impedance._seam_positions(coated, 0.05, 2.0))
+
+    def test_the_coated_edge_honors_the_seam_gap(self):
+        """The downward u=1 step exists on the coated edge exactly as
+        on the bare model; a target strictly inside the gap has no
+        root, never a converged width that misses the target."""
+        context = dict(self._microstrip_context(),
+                       topology=impedance.COATED_MICROSTRIP,
+                       epsilon_mask=3.8)
+        (seam, _o), = impedance._seam_positions(context, 0.05, 2.0)
+        narrow, _e = impedance._impedance_at(context, seam,
+                                             _force_branch="narrow")
+        wide, _e = impedance._impedance_at(context, seam,
+                                           _force_branch="wide")
+        self.assertLess(wide, narrow)
+        roots, _diag = impedance._solve_width(context, seam, 2.0,
+                                              (narrow + wide) / 2.0)
+        self.assertEqual(roots, [])
+
+    def test_unknown_topology_dispatch_refuses(self):
+        """The third topology made dispatch explicit: an unenumerated
+        topology refuses at every dispatch site instead of falling
+        through a catch-all else into the wrong formula."""
+        context = dict(self._microstrip_context(),
+                       topology="bogus-topology")
+        with self.assertRaises(impedance.ImpedanceError) as caught:
+            impedance._impedance_at(context, 0.5)
+        self.assertIn("no model dispatch", str(caught.exception))
+        with self.assertRaises(impedance.ImpedanceError) as caught:
+            impedance._seam_positions(context, 0.05, 2.0)
+        self.assertIn("no seam dispatch", str(caught.exception))
+
+    def test_unsupported_topologies_no_longer_name_coated(self):
+        self.assertNotIn("coated-microstrip (soldermask present)",
+                         impedance.UNSUPPORTED_TOPOLOGIES)
+        self.assertIn("asymmetric-stripline",
+                      impedance.UNSUPPORTED_TOPOLOGIES)
 
     def test_gapless_result_values_never_carry_nan(self):
         snapshot = _snapshot()
