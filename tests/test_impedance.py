@@ -14,6 +14,7 @@ import inspect
 import os
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
@@ -201,37 +202,109 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         self._refuses("differential solving is not implemented",
                       mode="differential", target_ohm=100.0)
 
-    def test_a_coated_solve_returns_the_enclosure(self):
+    def test_a_coated_solve_returns_the_model_enclosure(self):
         """Soldermask on an external layer is the coated topology: no
-        point width exists in this model version, and the result says
-        so while delivering both parameter-free edge solves."""
+        point width exists in this model version, and the result
+        delivers both MODEL edge solves without presenting them as
+        physical bounds."""
         result = impedance.solve(self.snapshot,
                                  _request(soldermask_present=True))
         self.assertEqual(result["model"]["identity"],
                          "external-microstrip-coated")
         self.assertIsNone(result["numeric_solution"])
         self.assertFalse(result["geometry_feasible"])
-        self.assertIn("enclosure", result["failure"])
+        self.assertIn("MODEL enclosure", result["failure"])
         enclosure = result["enclosure"]
-        self.assertTrue(enclosure["established"])
+        self.assertTrue(enclosure["model_enclosure_established"])
+        self.assertTrue(enclosure["ordering_verified"])
         lower = enclosure["width_mm"]["lower"]
         upper = enclosure["width_mm"]["upper"]
         self.assertLess(lower, upper)
-        for edge in (enclosure["mask_filled_edge"],
-                     enclosure["bare_edge"]):
-            self.assertTrue(edge["established"])
-            self.assertTrue(edge["manufacturing"]["established"])
+        for edge in (enclosure["loaded_edge"], enclosure["bare_edge"]):
+            self.assertTrue(edge["root_established"])
+            self.assertNotIn("manufacturing", edge)
             self.assertAlmostEqual(edge["impedance_ohm"], 50.0,
                                    places=3)
-        self.assertGreater(
-            enclosure["mask_filled_edge"]["epsilon_effective"],
-            enclosure["bare_edge"]["epsilon_effective"])
+        self.assertGreater(enclosure["loaded_edge"]["epsilon_effective"],
+                           enclosure["bare_edge"]["epsilon_effective"])
+        manufacturing = enclosure["manufacturing"]
+        self.assertTrue(manufacturing["loaded_edge"]["established"])
+        self.assertTrue(manufacturing["bare_edge"]["established"])
+        self.assertTrue(manufacturing["usable"])
+        self.assertEqual(manufacturing["routable_intersection_mm"],
+                         {"min": lower, "max": upper})
         bare = impedance.solve(self.snapshot, _request())
         self.assertEqual(upper, bare["numeric_solution"]["width_mm"])
         self.assertIsNone(bare["enclosure"])
         control = result["fabrication_control"]
         self.assertFalse(
             control["target_eligible_for_controlled_fabrication"])
+
+    def test_model_and_physical_enclosures_cannot_be_conflated(self):
+        """The implemented mathematics producing two ordered roots is
+        one fact; those roots being physical bounds on the fabricated
+        line is another, unestablished one. The schema carries both
+        names and no bare `established` flag a reader could mistake
+        for the stronger claim."""
+        result = impedance.solve(self.snapshot,
+                                 _request(soldermask_present=True))
+        enclosure = result["enclosure"]
+        self.assertTrue(enclosure["model_enclosure_established"])
+        self.assertFalse(enclosure["physical_enclosure_established"])
+        self.assertNotIn("established", enclosure)
+        self.assertIn("MODEL edges", enclosure["physical_note"])
+        self.assertIn("No claim is made", enclosure["physical_note"])
+
+    def test_an_edge_root_with_manufacturing_rejection_is_represented(
+            self):
+        """85 ohm on this construction: both model roots exist and are
+        ordered, the loaded root is below the strictest published
+        minimum track and reads rejected, the bare root passes, and
+        the interval's routable intersection starts at the published
+        minimum - numerical enclosure and manufacturability never
+        conflated."""
+        result = impedance.solve(self.snapshot, _request(
+            target_ohm=85.0, width_search_mm={"min": 0.05, "max": 2.0},
+            soldermask_present=True))
+        enclosure = result["enclosure"]
+        self.assertTrue(enclosure["model_enclosure_established"])
+        manufacturing = enclosure["manufacturing"]
+        self.assertFalse(manufacturing["loaded_edge"]["established"])
+        self.assertTrue(manufacturing["bare_edge"]["established"])
+        self.assertTrue(manufacturing["usable"])
+        intersection = manufacturing["routable_intersection_mm"]
+        self.assertEqual(
+            intersection["min"],
+            manufacturing["loaded_edge"]["minimum_track_mm"])
+        self.assertGreater(intersection["min"],
+                           enclosure["width_mm"]["lower"])
+        self.assertEqual(intersection["max"],
+                         enclosure["width_mm"]["upper"])
+        self.assertIn("does NOT identify", manufacturing["note"])
+
+    def test_a_reversed_edge_ordering_refuses_the_interval(self):
+        """No parameterization inside the guards can reverse the
+        loading order - which is why the check must not be assumed
+        away: it defends against a future edge-model change.
+        Synthetically reversed roots must refuse the interval instead
+        of presenting lower/upper by edge name."""
+        def reversed_roots(context, low, high, target):
+            if context["topology"] == impedance.COATED_MICROSTRIP:
+                return [(0.4, 50.0, 4.2)], "synthetic"
+            return [(0.3, 50.0, 3.3)], "synthetic"
+        with mock.patch.object(impedance, "_solve_width",
+                               side_effect=reversed_roots):
+            result = impedance.solve(self.snapshot,
+                                     _request(soldermask_present=True))
+        enclosure = result["enclosure"]
+        self.assertTrue(enclosure["loaded_edge"]["root_established"])
+        self.assertTrue(enclosure["bare_edge"]["root_established"])
+        self.assertFalse(enclosure["ordering_verified"])
+        self.assertFalse(enclosure["model_enclosure_established"])
+        self.assertNotIn("width_mm", enclosure)
+        self.assertNotIn("manufacturing", enclosure)
+        self.assertIn("does not exhibit the loading relation",
+                      enclosure["failure"])
 
     def test_a_controlled_coated_solve_is_never_called_eligible(self):
         """The enclosure has no feasible point geometry, so a
@@ -240,7 +313,8 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         result = impedance.solve(self.snapshot, _request(
             requirements=_requirements(impedance_control=True),
             stackup="JLC04161H-7628", soldermask_present=True))
-        self.assertTrue(result["enclosure"]["established"])
+        self.assertTrue(
+            result["enclosure"]["model_enclosure_established"])
         self.assertFalse(result["geometry_feasible"])
         control = result["fabrication_control"]
         self.assertTrue(control["impedance_control_selected"])
