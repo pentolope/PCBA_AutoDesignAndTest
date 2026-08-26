@@ -1551,13 +1551,14 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
             self.assertAlmostEqual(cover(3.8, 1e9, 1.7), 3.8, places=5)
 
     def test_the_printed_cover_exponent_disagrees_with_the_figures(self):
-        """The erratum, quantified on the paper's own plotted curves:
-        the printed positive w/d exponent misses every mid-thickness
-        anchor by about 0.2 in effective permittivity while the
-        sign-reversed variant lands within plot-reading precision -
-        Figures 6, 8 and 10, the last at the eps_rc/eps_r = 10
-        validity edge. Both variants stay pinned; neither is adopted;
-        the w/d < 1 cover branch has no figure to test at all."""
+        """The printed-vs-figure inconsistency, quantified on the
+        paper's own plotted curves: the printed positive w/d exponent
+        misses every mid-thickness anchor by about 0.2 in effective
+        permittivity while the sign-reversed CANDIDATE correction
+        lands within plot-reading precision - Figures 6, 8 and 10,
+        the last at the eps_rc/eps_r = 10 validity edge. Both
+        variants stay pinned; neither is adopted; the w/d < 1 cover
+        branch has no figure to test at all."""
         anchors = (
             (2.0, 4.0, 4.0, 0.5, 2.01),
             (2.0, 4.0, 4.0, 1.0, 2.135),
@@ -1582,6 +1583,136 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
                 overlay_reference.immersed_epsilon(*arguments)
         with self.assertRaises(propagation.Unsupported):
             overlay_reference.cover_epsilon_as_printed(3.8, -0.1, 1.7)
+
+    def test_the_covered_ratio_window_binds_the_original_materials(
+            self):
+        """Equation (11) speaks about the materials, not about the
+        thickness-reduced equivalent: a cover with eps_rc/eps_r above
+        10 refuses at ANY thickness, however thin, in both cover
+        variants, while the ratio exactly 10 is inside the stated fit
+        range."""
+        for covered in (
+                overlay_reference.covered_epsilon_as_printed,
+                overlay_reference.covered_epsilon_figure_consistent):
+            value = covered(2.0, 20.0, 10.0, 8.0)
+            self.assertGreater(value, 1.0)
+            for thickness in (0.01, 1.0, 100.0):
+                with self.assertRaises(propagation.Unsupported):
+                    covered(1.5, 15.1, 4.0, thickness)
+                with self.assertRaises(propagation.Unsupported):
+                    covered(2.0, 20.2, 4.0, thickness)
+
+    def test_non_finite_reference_inputs_refuse(self):
+        """NaN, the infinities and bools refuse at every reference
+        entry point instead of propagating into the output."""
+        nan, inf = float("nan"), float("inf")
+        for arguments in ((inf, 2.0, 1.0), (nan, 2.0, 1.0),
+                          (4.3, inf, 1.0), (4.3, nan, 1.0),
+                          (4.3, 2.0, nan), (4.3, 2.0, inf),
+                          (True, 2.0, 1.0), (4.3, True, 1.0),
+                          (4.3, 2.0, True)):
+            with self.assertRaises(propagation.Unsupported):
+                overlay_reference.immersed_epsilon(*arguments)
+        for cover in (overlay_reference.cover_epsilon_as_printed,
+                      overlay_reference.cover_epsilon_figure_consistent):
+            for arguments in ((3.8, nan, 1.7), (3.8, inf, 1.7),
+                              (3.8, -inf, 1.7), (3.8, True, 1.7),
+                              (nan, 1.0, 1.7), (3.8, 1.0, nan)):
+                with self.assertRaises(propagation.Unsupported):
+                    cover(*arguments)
+        for covered in (
+                overlay_reference.covered_epsilon_as_printed,
+                overlay_reference.covered_epsilon_figure_consistent):
+            with self.assertRaises(propagation.Unsupported):
+                covered(4.3, 3.8, 1.7, nan)
+            with self.assertRaises(propagation.Unsupported):
+                covered(4.3, nan, 1.7, 1.0)
+
+    def test_a_direct_thick_cover_anchor_avoids_equation_ten(self):
+        """A direct equation (8) anchor on the eps_r < eps_rc branch
+        that never touches equation (10): the paper's own constraint
+        (2) makes equation (8) at the material eps_rc the stated
+        limit of its covered curves, and Figure 5's largest plotted
+        thickness (dc/d about 9, curve and full-wave both reading
+        about 2.40) must therefore sit BELOW that limit by only the
+        remaining ArcTan convergence. Plot-reading tolerance is
+        explicit and separate from the exact pin vector."""
+        asymptote = overlay_reference.immersed_epsilon(2.0, 4.0, 4.0)
+        plotted_at_largest_thickness = 2.40
+        self.assertGreater(asymptote, plotted_at_largest_thickness)
+        self.assertLess(asymptote - plotted_at_largest_thickness, 0.08)
+        self.assertAlmostEqual(asymptote, 2.452744317415, places=10)
+        self.assertAlmostEqual(
+            overlay_reference.immersed_epsilon(2.0, 20.0, 10.0),
+            4.329681813209, places=10)
+
+    def test_the_reference_has_no_conductor_thickness_parameter(self):
+        """Barbuto's design chain has no finished copper thickness and
+        no trapezoid: the signatures lock that in, so a thickness can
+        never be threaded through quietly - the mapping from
+        finite-thickness geometry to w/d stays a declared, separate
+        decision and a recorded promotion blocker."""
+        expected = {
+            overlay_reference.immersed_epsilon:
+                ["epsilon_r", "epsilon_rc", "w_over_d"],
+            overlay_reference.cover_epsilon_as_printed:
+                ["epsilon_rc", "dc_over_d", "w_over_d"],
+            overlay_reference.cover_epsilon_figure_consistent:
+                ["epsilon_rc", "dc_over_d", "w_over_d"],
+            overlay_reference.covered_epsilon_as_printed:
+                ["epsilon_r", "epsilon_rc", "w_over_d", "dc_over_d"],
+            overlay_reference.covered_epsilon_figure_consistent:
+                ["epsilon_r", "epsilon_rc", "w_over_d", "dc_over_d"],
+        }
+        for function, parameters in expected.items():
+            self.assertEqual(
+                list(inspect.signature(function).parameters),
+                parameters)
+            for name in parameters:
+                self.assertNotIn("conductor", name)
+                self.assertNotIn("thickness", name)
+
+    def test_the_reference_is_decoupled_from_the_catalog(self):
+        """The reference knows nothing of JLCPCB: no catalog, parser
+        or selection import, so no convenience mapping of the
+        fabricator's three mask thicknesses onto the single uniform
+        dc can creep in unnoticed."""
+        source = inspect.getsource(overlay_reference)
+        for name in ("jlcpcb", "selection", "catalog_model",
+                     "import model", "soldermask_"):
+            self.assertNotIn(name, source)
+
+    def test_the_source_artifact_is_fingerprinted(self):
+        """Reproducible provenance: the exact supplied PDF and the
+        decisive equation renders are identified by hash, size and
+        page identity."""
+        artifact = overlay_reference.SOURCE_ARTIFACT
+        self.assertEqual(len(artifact["sha256"]), 64)
+        self.assertEqual(artifact["bytes"], 131045)
+        self.assertEqual(artifact["page_count"], 13)
+        self.assertEqual(artifact["doi"], "10.1108/COMPEL-10-2012-0283")
+        self.assertEqual(artifact["published_pages"], "1855-1867")
+        self.assertEqual(len(overlay_reference.TRANSCRIPTION_RENDERS),
+                         4)
+        for render in overlay_reference.TRANSCRIPTION_RENDERS:
+            self.assertEqual(len(render["sha256"]), 64)
+            self.assertIn("dpi", render)
+            self.assertIn("page_index", render)
+            self.assertEqual(len(render["clip"]), 4)
+
+    def test_no_confirmed_erratum_is_claimed(self):
+        """The evidence establishes a printed-vs-figure inconsistency
+        and a candidate sign correction - not an author- or
+        publisher-confirmed erratum. Neither the reference module nor
+        the production impedance module may say otherwise."""
+        for module in (overlay_reference, impedance):
+            source = inspect.getsource(module)
+            for banned in ("internal erratum", "documented erratum",
+                           "confirmed erratum's"):
+                self.assertNotIn(banned, source)
+        doc = " ".join(overlay_reference.__doc__.split())
+        self.assertIn("printed-vs-figure inconsistency", doc)
+        self.assertIn("candidate", doc.lower())
 
     def test_production_does_not_dispatch_the_reference(self):
         """The reference is evidence: the impedance module never

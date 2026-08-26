@@ -124,12 +124,20 @@ from .. import propagation
 #: 2013 paper was transcribed verbatim into overlay_reference, its
 #: immersed two-media equation validated against the paper's own
 #: figures, its finite-cover equation found to carry an internal
-#: erratum (the printed w/d exponent sign contradicts the paper's own
-#: validation figures - both variants recorded, neither adopted), and
+#: printed-vs-figure inconsistency (the printed w/d exponent sign
+#: contradicts the paper's own validation figures - both variants
+#: recorded, neither adopted), and
 #: the exact obstacles between that reference and a production loaded
 #: edge written down. Production dispatch and every solved number are
-#: unchanged.
-MODEL_VERSION = "10"
+#: unchanged. Version 11 hardened the reference: equation (11) is
+#: enforced on the original material triple before the cover
+#: transform, every reference input follows the toolkit's
+#: finite-number discipline, the supplied PDF and the decisive
+#: equation renders are fingerprinted for reproducible provenance,
+#: and the inconsistency wording was scoped down to what the evidence
+#: establishes - a candidate sign correction, not a confirmed
+#: erratum. Production numbers are again unchanged.
+MODEL_VERSION = "11"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -240,9 +248,11 @@ def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
     ``pcbqa.fabricators.overlay_reference`` - the immersed two-media
     equation (8) validated against the paper's own figures on both of
     its branches, the finite-cover equation (10) carrying a
-    documented internal erratum (its printed w/d exponent sign
-    contradicts the paper's own validation figures), and the w/d < 1
-    cover branch unvalidated by any figure. The reference is
+    documented printed-vs-figure inconsistency (its printed w/d
+    exponent sign contradicts the paper's own validation figures; the
+    sign reversal is a candidate correction, not a confirmed
+    erratum), and the w/d < 1 cover branch unvalidated by any
+    figure. The reference is
     EVIDENCE; nothing here dispatches it. What still stands between
     it and a production loaded edge, exactly: (a) the paper models a
     zero-thickness strip, so a mapping from this solver's
@@ -252,10 +262,12 @@ def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
     solver uses one half and the square, so mixing the two families
     inside one enclosure would put the edges on inconsistent bare
     baselines; (c) a finite-cover point model would additionally need
-    the erratum resolved by an authoritative text and a defensible
+    the printed-vs-figure inconsistency resolved by an authoritative text and a defensible
     mapping of the fabricator's three stated mask thicknesses onto
-    the paper's single uniform overlay. Svacina (IEEE MTT 40(4),
-    1992) and Bahl and Stuchly (IEEE MTT, 1980) remain unobtained.
+    the paper's single uniform overlay; until then the erratum
+    remains unconfirmed and the inconsistency merely documented.
+    Svacina (IEEE MTT 40(4), 1992) and Bahl and Stuchly (IEEE MTT,
+    1980) remain unobtained.
     """
     if epsilon_r <= 1.0:
         raise propagation.Unsupported(
@@ -1065,7 +1077,8 @@ def _solve_coated(catalog, context, request, range_record, low, high,
                 "covered-microstrip point equation is dispatched in "
                 "production. The Barbuto reference is pinned in "
                 "overlay_reference as evidence, with a documented "
-                "erratum and recorded mapping obstacles; a single "
+                "printed-vs-figure inconsistency and recorded "
+                "mapping obstacles; a single "
                 "coated width would additionally require a declared "
                 "width mapping for this solver's finite-thickness "
                 "trapezoid geometry, a consistent bare baseline "
