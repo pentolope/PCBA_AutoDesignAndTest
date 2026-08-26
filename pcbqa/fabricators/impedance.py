@@ -141,8 +141,23 @@ from .. import propagation
 #: equation renders are fingerprinted for reproducible provenance,
 #: and the inconsistency wording was scoped down to what the evidence
 #: establishes - a candidate sign correction, not a confirmed
-#: erratum. Production numbers are again unchanged.
-MODEL_VERSION = "11"
+#: erratum. Production numbers are again unchanged. Version 12 made
+#: the loaded-edge PROMOTION DECISION and added the design-guidance
+#: contract. The decision: Barbuto equation (8) is NOT promoted into
+#: the dispatched loaded edge. Measured across this fabricator's
+#: constructions the declared chord and the pinned equation (8) agree
+#: within 0.4 percent in effective permittivity - they are the same
+#: functional form up to the fitted k1 and the sub-unity shape term -
+#: so promotion buys no material accuracy; while the zero-thickness
+#: width convention the reference requires shifts the loaded width by
+#: roughly 7 to 50 percent across representative targets, which is
+#: exactly the unlicensed finite-conductor mapping. The chord
+#: therefore stays, no longer floating but CHARACTERIZED against a
+#: pinned source, with the measurements asserted in the tests; and
+#: every result now carries `design_guidance`, separating what an
+#: autonomous designer may use as a reversible choice from what
+#: remains unestablished. Production roots are unchanged.
+MODEL_VERSION = "12"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -274,6 +289,21 @@ def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
     inconsistency remains unresolved.
     Svacina (IEEE MTT 40(4), 1992) and Bahl and Stuchly (IEEE MTT,
     1980) remain unobtained.
+
+    Promotion decision (model version 12): equation (8) was NOT
+    promoted into this dispatched edge. Measured across this
+    fabricator's constructions, this chord and the pinned equation
+    (8) agree in effective permittivity within 0.4 percent at matched
+    widths - the same functional form up to k1 = 0.52 versus one half
+    and the sub-unity shape term - so promotion buys no material
+    accuracy. The zero-thickness width convention the reference
+    requires would instead shift the loaded width by roughly 7 to 50
+    percent across representative targets (measured, asserted in the
+    tests): that shift IS the finite-conductor contribution no source
+    licenses a mapping for, and dispatching the reference would trade
+    a sub-percent sourced refinement for a double-digit unmodeled
+    geometry change. The chord stays, characterized instead of
+    floating; the reference stays evidence.
     """
     if epsilon_r <= 1.0:
         raise propagation.Unsupported(
@@ -1058,7 +1088,15 @@ def _solve_coated(catalog, context, request, range_record, low, high,
         "bare_edge": edges["bare"],
         "note": ("no covered-microstrip point equation is dispatched "
                  "by this solve, so no width inside the model "
-                 "interval is claimed or preferred"),
+                 "interval is claimed or preferred. The loaded chord "
+                 "is measured against the pinned Barbuto "
+                 "infinite-superstrate reference: effective "
+                 "permittivities agree within 0.4 percent across this "
+                 "fabricator's constructions, while the "
+                 "finite-conductor contribution the zero-thickness "
+                 "reference omits shifts the loaded width by roughly "
+                 "7 to 50 percent - which is why the reference is not "
+                 "dispatched (bounds asserted in tests)"),
     }
     if both_rooted and not ordering_verified:
         enclosure["failure"] = (
@@ -1356,6 +1394,50 @@ def _result(context, request, range_record, numeric, manufacturing,
             "feasible geometry is an analytic nominal estimate, and "
             "nothing here establishes that the fabricated line meets "
             "the requested impedance")
+    not_established = ["fabrication binding of the requested target"]
+    interval = None
+    if enclosure is not None:
+        not_established.extend([
+            "physical enclosure bounds on the fabricated line",
+            "the finite-conductor-thickness contribution to the "
+            "coated reading (measured to move the loaded width by "
+            "roughly 7 to 50 percent)",
+            "a single point width (no pinned finite-cover model)",
+        ])
+        manufacturing_record = enclosure.get("manufacturing") or {}
+        if enclosure.get("model_enclosure_established") and \
+                manufacturing_record.get(
+                    "model_interval_has_routable_widths"):
+            interval = manufacturing_record[
+                "model_interval_routable_intersection_mm"]
+    elif geometry_feasible:
+        not_established.append(
+            "physical tolerance on the fabricated line (the nominal "
+            "is analytic)")
+    if geometry_feasible and controlled:
+        confidence = "controlled-eligible-analytic-nominal"
+    elif geometry_feasible:
+        confidence = "uncontrolled-analytic-nominal"
+    elif interval is not None:
+        confidence = "model-interval-reversible-estimate"
+    else:
+        confidence = "not-usable"
+    design_guidance = {
+        "usable_for_autonomous_nominal_design":
+            confidence != "not-usable",
+        "confidence_class": confidence,
+        "nominal_width_mm":
+            numeric["width_mm"] if geometry_feasible else None,
+        "reversible_choice_interval_mm": interval,
+        "release_grade": False,
+        "not_established": not_established,
+        "meaning": ("usable means safe as a REVERSIBLE engineering "
+                    "choice inside the stated class - a width an "
+                    "autonomous designer may draw and later revise - "
+                    "never a release-grade claim; everything in "
+                    "not_established stays unestablished regardless "
+                    "of the class"),
+    }
     return {
         "model": {
             "identity": context["topology"],
@@ -1383,6 +1465,7 @@ def _result(context, request, range_record, numeric, manufacturing,
             "target_bound_to_fabrication_specification": False,
             "note": control_note,
         },
+        "design_guidance": design_guidance,
         "failure": failure,
     }
 

@@ -110,9 +110,17 @@ K11, K12, K13 = 1.782, 0.782, 0.214
 #: added the finite-input discipline and the artifact fingerprints;
 #: revision 3 recorded the render recipe, split this identity from the
 #: production version, and scoped the asymptote and inconsistency
-#: wording to the evidence. The transcribed artifact itself is
-#: anchored by SOURCE_ARTIFACT["sha256"].
-REFERENCE_VERSION = "3"
+#: wording to the evidence. Revision 4 bound the identity into
+#: REFERENCE_ID (version + artifact hash, mechanically composed) and
+#: recorded the outcome of the production promotion decision: equation
+#: (8) was measured against the production loaded chord (agreement
+#: within 0.4 percent in effective permittivity across the
+#: fabricator's constructions) and deliberately NOT promoted, because
+#: the zero-thickness width convention it requires shifts the loaded
+#: width by roughly 7 to 50 percent - the unlicensed finite-conductor
+#: mapping - as asserted in the tests. The transcribed artifact itself
+#: is anchored by SOURCE_ARTIFACT["sha256"].
+REFERENCE_VERSION = "4"
 
 PAPER = {
     "authors": "Barbuto, Alu, Bilotti, Toscano, Vegni",
@@ -137,6 +145,11 @@ SOURCE_ARTIFACT = {
     "doi": "10.1108/COMPEL-10-2012-0283",
     "published_pages": "1855-1867",
 }
+
+#: The unambiguous identity of this evidence: revision and exact
+#: artifact, mechanically composed so the pair can never drift apart.
+REFERENCE_ID = "barbuto-2013-overlay+r{}+sha256:{}".format(
+    REFERENCE_VERSION, SOURCE_ARTIFACT["sha256"])
 
 #: How the adjudicating renders were produced. Recorded so the images
 #: can be regenerated for visual re-adjudication from the fingerprinted

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import math
 import os
 import sys
 import unittest
@@ -202,6 +203,84 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
     def test_differential_inside_range_is_a_named_unsupported(self):
         self._refuses("differential solving is not implemented",
                       mode="differential", target_ohm=100.0)
+
+    def test_design_guidance_separates_use_from_establishment(self):
+        """The machine-facing contract for an autonomous designer:
+        a feasible bare solve is an analytic nominal (controlled adds
+        eligibility, nothing more), a coated solve offers only a
+        reversible-choice interval with no nominal, a no-solution
+        result is not usable - and nothing, in any class, is
+        release-grade or establishes what the not_established list
+        names."""
+        bare = impedance.solve(self.snapshot, _request())
+        guidance = bare["design_guidance"]
+        self.assertTrue(guidance["usable_for_autonomous_nominal_design"])
+        self.assertEqual(guidance["confidence_class"],
+                         "uncontrolled-analytic-nominal")
+        self.assertEqual(guidance["nominal_width_mm"],
+                         bare["numeric_solution"]["width_mm"])
+        self.assertIsNone(guidance["reversible_choice_interval_mm"])
+
+        controlled = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628"))
+        self.assertEqual(
+            controlled["design_guidance"]["confidence_class"],
+            "controlled-eligible-analytic-nominal")
+
+        coated = impedance.solve(self.snapshot,
+                                 _request(soldermask_present=True))
+        guidance = coated["design_guidance"]
+        self.assertTrue(guidance["usable_for_autonomous_nominal_design"])
+        self.assertEqual(guidance["confidence_class"],
+                         "model-interval-reversible-estimate")
+        self.assertIsNone(guidance["nominal_width_mm"])
+        self.assertEqual(
+            guidance["reversible_choice_interval_mm"],
+            coated["enclosure"]["manufacturing"][
+                "model_interval_routable_intersection_mm"])
+        joined = " ".join(guidance["not_established"])
+        self.assertIn("finite-conductor", joined)
+        self.assertIn("physical enclosure", joined)
+
+        unsolved = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628", target_ohm=30.0,
+            width_search_mm={"min": 0.15, "max": 0.5}))
+        guidance = unsolved["design_guidance"]
+        self.assertFalse(
+            guidance["usable_for_autonomous_nominal_design"])
+        self.assertEqual(guidance["confidence_class"], "not-usable")
+        self.assertIsNone(guidance["nominal_width_mm"])
+
+    def test_guidance_never_claims_release_grade(self):
+        """Every class, every state: release_grade is false, the
+        fabrication binding stays in not_established, and a
+        controlled profile cannot turn an unbound analytic model into
+        an established fabrication target or upgrade a coated model
+        interval beyond a reversible estimate."""
+        results = (
+            impedance.solve(self.snapshot, _request()),
+            impedance.solve(self.snapshot, _request(
+                requirements=_requirements(impedance_control=True),
+                stackup="JLC04161H-7628")),
+            impedance.solve(self.snapshot,
+                            _request(soldermask_present=True)),
+            impedance.solve(self.snapshot, _request(
+                requirements=_requirements(impedance_control=True),
+                stackup="JLC04161H-7628", soldermask_present=True)),
+        )
+        for result in results:
+            guidance = result["design_guidance"]
+            self.assertIs(guidance["release_grade"], False)
+            self.assertIn("fabrication binding of the requested "
+                          "target", guidance["not_established"])
+            self.assertIn("REVERSIBLE", guidance["meaning"])
+        controlled_coated = results[3]["design_guidance"]
+        self.assertEqual(controlled_coated["confidence_class"],
+                         "model-interval-reversible-estimate")
+        self.assertFalse(results[3]["fabrication_control"][
+            "target_bound_to_fabrication_specification"])
 
     def test_a_coated_solve_returns_the_model_enclosure(self):
         """Soldermask on an external layer is the coated topology: no
@@ -1753,17 +1832,96 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
 
     def test_reference_and_production_versions_are_separate(self):
         """Production MODEL_VERSION moves only when the production
-        model or its composition changes meaning; the reference
-        carries its own REFERENCE_VERSION anchored to the transcribed
-        artifact's hash. This pass changed only the reference, so the
-        production version is pinned unchanged here."""
-        self.assertEqual(impedance.MODEL_VERSION, "11")
-        self.assertEqual(overlay_reference.REFERENCE_VERSION, "3")
-        self.assertEqual(len(overlay_reference.SOURCE_ARTIFACT[
-            "sha256"]), 64)
+        model or its composition changes meaning (version 12 added
+        the design-guidance contract and recorded the promotion
+        decision); the reference carries its own REFERENCE_VERSION.
+        The identity is bound mechanically: the exact
+        (revision, artifact-hash) pair is pinned, and REFERENCE_ID is
+        composed from that same pair so the two can never drift
+        apart."""
+        self.assertEqual(impedance.MODEL_VERSION, "12")
+        expected_sha = ("618bce2839878e7725f14ec7264d70a666116e5057"
+                        "44290d0b4d953714e4cad4")
+        self.assertEqual(
+            (overlay_reference.REFERENCE_VERSION,
+             overlay_reference.SOURCE_ARTIFACT["sha256"]),
+            ("4", expected_sha))
+        self.assertEqual(
+            overlay_reference.REFERENCE_ID,
+            "barbuto-2013-overlay+r4+sha256:" + expected_sha)
         source = inspect.getsource(impedance)
         self.assertIn("REFERENCE_VERSION", source)
         self.assertIn("PRODUCTION", source)
+
+    def test_the_chord_is_measured_against_the_pinned_reference(self):
+        """The promotion decision's first measurement: the production
+        chord and Barbuto equation (8) agree in effective permittivity
+        within 0.4 percent at matched zero-thickness widths across
+        this fabricator's substrate range - they are the same
+        functional form up to k1 and the sub-unity shape term. The
+        chord is therefore characterized, not floating."""
+        worst = 0.0
+        for er in (3.91, 4.4, 4.6):
+            for width in (0.06, 0.1, 0.15, 0.21, 0.2104, 0.25, 0.37,
+                          0.6, 1.0, 1.6):
+                bare = propagation.hammerstad_effective_permittivity(
+                    er, width, 0.2104)
+                q = (bare - 1.0) / (er - 1.0)
+                chord = q * er + (1.0 - q) * 3.8
+                pinned = overlay_reference.immersed_epsilon(
+                    er, 3.8, width / 0.2104)
+                worst = max(worst, abs(chord - pinned) / pinned)
+        self.assertLess(worst, 0.004)
+        self.assertGreater(worst, 0.0005)
+
+    def test_the_thickness_mapping_question_is_material(self):
+        """The promotion decision's second measurement: a hypothetical
+        fully-promoted zero-thickness Barbuto edge (raw w/h in both
+        the geometry factor and the permittivity) moves the loaded
+        width by between 5 and 60 percent across representative
+        targets - two orders of magnitude beyond the family
+        difference. That shift IS the finite-conductor contribution
+        no source licenses a mapping for, and it is why the reference
+        is not dispatched."""
+        def z_air(u):
+            if u <= 1.0:
+                return 60.0 * math.log(8.0 / u + u / 4.0)
+            return 376.730313668 / (
+                u + 1.393 + 0.667 * math.log(u + 1.444))
+
+        def solve(z_of_w, target):
+            low, high = 0.05, 2.0
+            for _ in range(80):
+                middle = (low + high) / 2.0
+                if z_of_w(middle) > target:
+                    low = middle
+                else:
+                    high = middle
+            return (low + high) / 2.0
+
+        height, thickness = 0.2104, 0.04064
+        for er in (3.91, 4.4):
+            def chord_z(width):
+                effective = propagation.thickness_corrected_width(
+                    width, height, thickness)
+                bare = propagation.hammerstad_effective_permittivity(
+                    er, effective, height)
+                q = (bare - 1.0) / (er - 1.0)
+                chord = q * er + (1.0 - q) * 3.8
+                return z_air(effective / height) / math.sqrt(chord)
+
+            def barbuto_z(width):
+                ratio = width / height
+                pinned = overlay_reference.immersed_epsilon(
+                    er, 3.8, ratio)
+                return z_air(ratio) / math.sqrt(pinned)
+
+            for target in (75.0, 50.0, 35.0):
+                production = solve(chord_z, target)
+                promoted = solve(barbuto_z, target)
+                shift = abs(promoted - production) / production
+                self.assertGreater(shift, 0.05)
+                self.assertLess(shift, 0.60)
 
     def test_production_does_not_dispatch_the_reference(self):
         """The reference is evidence: the impedance module never
