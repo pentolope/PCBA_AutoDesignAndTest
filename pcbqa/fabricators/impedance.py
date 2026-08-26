@@ -110,8 +110,16 @@ from .. import propagation
 #: separates the model enclosure from the never-yet-established
 #: physical enclosure and from manufacturing usability, and the
 #: loading order of the unrounded edge roots is verified rather than
-#: assumed before any interval is presented.
-MODEL_VERSION = "8"
+#: assumed before any interval is presented. Version 9 corrected the
+#: concavity claim - the variational argument orders the TRUE-endpoint
+#: chord against the true curve and transfers nothing to a chord drawn
+#: from the Hammerstad approximate bare endpoint, so no ordering
+#: against the true infinite superstrate is claimed in either
+#: direction - renamed the interval-routability fields to
+#: model_interval_* so a routable MODEL interval can never read as a
+#: physical coated fabrication interval, and recorded the exhausted
+#: access check for the named primary sources.
+MODEL_VERSION = "9"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -202,11 +210,17 @@ def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
     upper permittivity between two exact anchors (eps_mask = 1
     reproduces the bare form by construction; eps_mask = eps_r is the
     homogeneous medium, exact by physics). No pinned source licenses
-    the interior, and the true two-media curve is CONCAVE in the
-    upper permittivity (capacitance is an infimum of energy
-    functionals each linear in the permittivity field), so between
-    the anchors this chord reads LOW even against the true
-    infinite-superstrate loading. It is a model edge, not a proven
+    the interior. For the exact electrostatic problem the true
+    effective permittivity is concave in the upper permittivity at
+    fixed geometry (capacitance is an infimum of energy functionals
+    each linear in the permittivity field), so a chord drawn between
+    the TRUE endpoints would read low in effective permittivity -
+    equivalently high in impedance - against the true curve between
+    the anchors. That comparison does NOT transfer to this chord,
+    whose bare endpoint is the Hammerstad approximation rather than
+    the true value: no ordering between this loaded edge and the
+    true infinite-superstrate response is established in either
+    direction, and none is claimed. It is a model edge, not a proven
     physical bound, and the result says so.
 
     The primary sources for a genuine covered/two-media treatment
@@ -216,10 +230,16 @@ def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
     "Characteristic impedance of a microstrip line with a dielectric
     overlay" (COMPEL 32(6), 2013, Schwarz-Christoffel) - but none was
     transcribable with reviewable certainty when this model was
-    written: the primary texts were unreachable and the reachable
-    reproductions are patch-antenna adaptations with author-modified
-    equations. Pinning one of them, exactly, is the stated path to a
-    stronger loaded edge.
+    written. The access check has been run to the end: the publisher
+    texts are paywalled, the Roma Tre repository record for the
+    COMPEL paper (handle 11590/115257) is metadata-only, the
+    open-access aggregators report no repository fulltext anywhere,
+    an author-posted copy reported on a gated academic network could
+    not be opened by any route available to this toolchain, and the
+    reachable third-party reproductions are patch-antenna
+    adaptations with author-modified equations. Pinning one of the
+    primary texts, exactly, is the stated path to a stronger loaded
+    edge.
     """
     if epsilon_r <= 1.0:
         raise propagation.Unsupported(
@@ -878,13 +898,16 @@ def _solve(approved_snapshot, request):
 
 
 def _enclosure_manufacturing(capabilities, context, lower, upper):
-    """Routability of the model interval, kept apart from root existence.
+    """Routability of the MODEL interval, kept apart from everything else.
 
     Per-edge checks against the published routing limits, plus the
-    interval's intersection with the routable width domain. A nonempty
-    intersection means SOME width in the model interval is routable;
-    it explicitly does not identify the impedance-true width, and an
-    unknown limit reads as not usable, never as permission.
+    model interval's intersection with the routable width domain. The
+    field names say exactly what is measured:
+    `model_interval_has_routable_widths` means SOME widths inside the
+    implemented model's interval clear the published limits - a fact
+    about the model interval only, never a claim that the unknown
+    physical coated width has a usable fabrication interval - and an
+    unknown limit reads as no routable widths, never as permission.
     """
     record = {
         "loaded_edge": _manufacturing(capabilities, context, lower),
@@ -892,26 +915,28 @@ def _enclosure_manufacturing(capabilities, context, lower, upper):
     }
     minimum = record["bare_edge"].get("minimum_track_mm")
     if minimum is None:
-        record["usable"] = False
-        record["routable_intersection_mm"] = None
+        record["model_interval_has_routable_widths"] = False
+        record["model_interval_routable_intersection_mm"] = None
         record["note"] = ("no published trace limit covers this "
                           "construction; whether any width in the "
-                          "interval is routable is unknown, and "
-                          "unknown is not usable")
+                          "model interval is routable is unknown, and "
+                          "unknown is not routable")
         return record
     if upper < minimum:
-        record["usable"] = False
-        record["routable_intersection_mm"] = None
+        record["model_interval_has_routable_widths"] = False
+        record["model_interval_routable_intersection_mm"] = None
         record["note"] = ("no width in the model interval reaches the "
                           "strictest published minimum track "
                           "{} mm".format(minimum))
         return record
-    record["usable"] = True
-    record["routable_intersection_mm"] = {"min": max(lower, minimum),
-                                          "max": upper}
+    record["model_interval_has_routable_widths"] = True
+    record["model_interval_routable_intersection_mm"] = {
+        "min": max(lower, minimum), "max": upper}
     record["note"] = ("widths in this intersection are routable under "
-                      "the published limits; the intersection does "
-                      "NOT identify the impedance-true width")
+                      "the published limits; this is a statement "
+                      "about the MODEL interval only - it does NOT "
+                      "identify or bound the physical coated line's "
+                      "impedance-true width")
     return record
 
 

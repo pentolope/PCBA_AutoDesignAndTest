@@ -230,9 +230,11 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         manufacturing = enclosure["manufacturing"]
         self.assertTrue(manufacturing["loaded_edge"]["established"])
         self.assertTrue(manufacturing["bare_edge"]["established"])
-        self.assertTrue(manufacturing["usable"])
-        self.assertEqual(manufacturing["routable_intersection_mm"],
-                         {"min": lower, "max": upper})
+        self.assertTrue(
+            manufacturing["model_interval_has_routable_widths"])
+        self.assertEqual(
+            manufacturing["model_interval_routable_intersection_mm"],
+            {"min": lower, "max": upper})
         bare = impedance.solve(self.snapshot, _request())
         self.assertEqual(upper, bare["numeric_solution"]["width_mm"])
         self.assertIsNone(bare["enclosure"])
@@ -255,6 +257,40 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         self.assertIn("MODEL edges", enclosure["physical_note"])
         self.assertIn("No claim is made", enclosure["physical_note"])
 
+    def test_no_superstrate_ordering_is_claimed_anywhere(self):
+        """The variational concavity argument orders a chord between
+        the TRUE endpoints against the true curve; it transfers
+        nothing to the implemented chord, whose bare endpoint is the
+        Hammerstad approximation. Neither the model documentation nor
+        the result may claim this loaded edge sits above or below the
+        true infinite-superstrate response."""
+        doc = " ".join(impedance.coated_microstrip_epsilon.__doc__
+                       .split())
+        self.assertIn("no ordering", doc.lower())
+        self.assertIn("either direction", doc.lower())
+        self.assertNotIn("reads LOW even against", doc)
+        result = impedance.solve(self.snapshot,
+                                 _request(soldermask_present=True))
+        enclosure = result["enclosure"]
+        self.assertFalse(enclosure["physical_enclosure_established"])
+        self.assertNotIn("reads LOW", enclosure["physical_note"])
+
+    def test_model_interval_fields_cannot_read_as_physical(self):
+        """A mathematically routable MODEL interval must never read as
+        a fabrication interval for the unknown physical coated width:
+        the old generic names are gone and the note scopes itself to
+        the model interval explicitly."""
+        result = impedance.solve(self.snapshot,
+                                 _request(soldermask_present=True))
+        manufacturing = result["enclosure"]["manufacturing"]
+        self.assertNotIn("usable", manufacturing)
+        self.assertNotIn("routable_intersection_mm", manufacturing)
+        self.assertTrue(
+            manufacturing["model_interval_has_routable_widths"])
+        self.assertIn("MODEL interval only", manufacturing["note"])
+        self.assertIn("does NOT identify or bound",
+                      manufacturing["note"])
+
     def test_an_edge_root_with_manufacturing_rejection_is_represented(
             self):
         """85 ohm on this construction: both model roots exist and are
@@ -271,8 +307,10 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         manufacturing = enclosure["manufacturing"]
         self.assertFalse(manufacturing["loaded_edge"]["established"])
         self.assertTrue(manufacturing["bare_edge"]["established"])
-        self.assertTrue(manufacturing["usable"])
-        intersection = manufacturing["routable_intersection_mm"]
+        self.assertTrue(
+            manufacturing["model_interval_has_routable_widths"])
+        intersection = \
+            manufacturing["model_interval_routable_intersection_mm"]
         self.assertEqual(
             intersection["min"],
             manufacturing["loaded_edge"]["minimum_track_mm"])
@@ -1330,12 +1368,15 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
         self.assertLess(abs(roots[0][0] - self.TIE_SEAM), 1e-9)
         self.assertAlmostEqual(roots[0][1], target, places=6)
 
-    def test_the_pinned_coated_reference_vectors(self):
-        """Hand-evaluated from the two-media composition at er=4.3,
-        em=3.8, vanishing conductor: q = (eps_bare-1)/3.3, then
-        eps = q*4.3 + (1-q)*3.8 under each z_air branch. Narrow branch
-        at u=0.5 (eps_bare 2.9965 -> 4.1025), wide branch at u=2.0
-        (eps_bare 3.2736 -> 4.1445)."""
+    def test_the_loaded_chord_model_regression_vectors(self):
+        """Regression vectors for the DECLARED loaded-chord model:
+        hand arithmetic of this toolkit's own assumption, pinning the
+        transcription against drift. These are NOT source-pinned
+        coated-microstrip physics - no printed source stands behind
+        the chord's interior. At er=4.3, em=3.8, vanishing conductor:
+        q = (eps_bare-1)/3.3, then eps = q*4.3 + (1-q)*3.8 under each
+        z_air branch; narrow branch at u=0.5 (eps_bare 2.9965 ->
+        4.1025), wide branch at u=2.0 (eps_bare 3.2736 -> 4.1445)."""
         z, eps = impedance.coated_microstrip_z0(4.3, 3.8, 0.5, 1.0,
                                                 1e-12)
         self.assertAlmostEqual(eps, 4.1025, places=3)
