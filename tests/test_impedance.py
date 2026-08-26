@@ -21,6 +21,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from pcbqa.fabricators import impedance, jlcpcb, model, selection  # noqa: E402
+from pcbqa.fabricators import overlay_reference                     # noqa: E402
 from pcbqa import propagation                                       # noqa: E402
 from tests.test_fabricators import _raw_sources                     # noqa: E402
 
@@ -1482,6 +1483,117 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
             for value in (result["numeric_solution"]["width_mm"],
                           result["numeric_solution"]["impedance_ohm"]):
                 self.assertEqual(value, value)
+
+
+class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
+    """Barbuto et al. (COMPEL 32(6), 2013), held to its own letter.
+
+    Anchor values are read off the paper's own figures, with the
+    plot-reading tolerance stated per assertion; the pin vectors are
+    this module's exact arithmetic, guarding the transcription
+    against drift. The reference is evidence only - the last test
+    proves production neither imports it nor changed a digit.
+    """
+
+    def test_the_immersed_equation_reproduces_the_papers_figures(self):
+        """Equation (8) against the paper's own asymptotes: Figure 4
+        (er=10, erc=2, w/d=1) and Figure 7 (er=4, erc=1.06, w/d=1),
+        both on the Corr = 1 branch."""
+        self.assertAlmostEqual(
+            overlay_reference.immersed_epsilon(10.0, 2.0, 1.0),
+            7.14, delta=0.03)
+        self.assertAlmostEqual(
+            overlay_reference.immersed_epsilon(4.0, 1.06, 1.0),
+            2.951, delta=0.01)
+
+    def test_the_transcription_pin_vectors(self):
+        """Exact arithmetic of the transcribed constants, pinned to
+        twelve digits against drift."""
+        self.assertAlmostEqual(
+            overlay_reference.immersed_epsilon(10.0, 2.0, 1.0),
+            7.153776408148, places=10)
+        self.assertAlmostEqual(
+            overlay_reference.immersed_epsilon(2.0, 4.0, 4.0),
+            2.452744317415, places=10)
+        self.assertAlmostEqual(
+            overlay_reference.immersed_epsilon(4.0, 1.06, 1.0),
+            2.954012829995, places=10)
+
+    def test_the_matched_immersion_is_exact(self):
+        """eps_rc = eps_r kills the correction term outright."""
+        self.assertEqual(
+            overlay_reference.immersed_epsilon(4.3, 4.3, 1.7), 4.3)
+
+    def test_the_air_limit_is_the_papers_not_hammerstads(self):
+        """The paper's equation (9): k1 = 0.52 where the classic
+        Hammerstad coefficient is exactly one half. The bare limits of
+        the reference and of production are DIFFERENT families - a
+        recorded obstacle to promoting the reference into the coated
+        edge, asserted here so it cannot be forgotten."""
+        for width in (0.5, 2.0):
+            base = (1.0 + 12.0 / width) ** -0.5
+            shape = base if width >= 1.0 else base + 0.04 * (1.0 - width)
+            expected = (4.3 + 1.0) / 2.0 + 0.52 * 3.3 * shape
+            value = overlay_reference.immersed_epsilon(4.3, 1.0, width)
+            self.assertAlmostEqual(value, expected, places=12)
+            hammerstad = propagation.hammerstad_effective_permittivity(
+                4.3, width, 1.0)
+            self.assertGreater(abs(value - hammerstad), 0.01)
+
+    def test_the_cover_limits_hold_for_both_variants(self):
+        """The paper's two stated constraints on equation (10): the
+        cover permittivity is 1 at zero thickness and eps_rc in the
+        infinite-thickness limit - true for the printed and the
+        figure-consistent variant alike."""
+        for cover in (overlay_reference.cover_epsilon_as_printed,
+                      overlay_reference.cover_epsilon_figure_consistent):
+            self.assertEqual(cover(3.8, 0.0, 1.7), 1.0)
+            self.assertAlmostEqual(cover(3.8, 1e9, 1.7), 3.8, places=5)
+
+    def test_the_printed_cover_exponent_disagrees_with_the_figures(self):
+        """The erratum, quantified on the paper's own plotted curves:
+        the printed positive w/d exponent misses every mid-thickness
+        anchor by about 0.2 in effective permittivity while the
+        sign-reversed variant lands within plot-reading precision -
+        Figures 6, 8 and 10, the last at the eps_rc/eps_r = 10
+        validity edge. Both variants stay pinned; neither is adopted;
+        the w/d < 1 cover branch has no figure to test at all."""
+        anchors = (
+            (2.0, 4.0, 4.0, 0.5, 2.01),
+            (2.0, 4.0, 4.0, 1.0, 2.135),
+            (2.0, 4.0, 10.0, 1.0, 2.045),
+            (2.0, 20.0, 10.0, 8.0, 4.05),
+        )
+        for er, erc, width, cover, plotted in anchors:
+            consistent = \
+                overlay_reference.covered_epsilon_figure_consistent(
+                    er, erc, width, cover)
+            printed = overlay_reference.covered_epsilon_as_printed(
+                er, erc, width, cover)
+            self.assertLess(abs(consistent - plotted), 0.03)
+            self.assertGreater(abs(printed - plotted), 0.15)
+
+    def test_the_validity_window_refuses(self):
+        """Equation (11) enforced fail-closed, plus the physical
+        domain."""
+        for arguments in ((4.3, 3.8, 0.0), (4.3, 3.8, 10.5),
+                          (1.0, 10.5, 1.0), (4.3, 0.9, 1.0)):
+            with self.assertRaises(propagation.Unsupported):
+                overlay_reference.immersed_epsilon(*arguments)
+        with self.assertRaises(propagation.Unsupported):
+            overlay_reference.cover_epsilon_as_printed(3.8, -0.1, 1.7)
+
+    def test_production_does_not_dispatch_the_reference(self):
+        """The reference is evidence: the impedance module never
+        imports it, and the production coated enclosure is unchanged
+        to the digit."""
+        source = inspect.getsource(impedance)
+        self.assertNotIn("import overlay_reference", source)
+        self.assertNotIn("overlay_reference import", source)
+        result = impedance.solve(_snapshot(),
+                                 _request(soldermask_present=True))
+        self.assertEqual(result["enclosure"]["width_mm"],
+                         {"lower": 0.292081, "upper": 0.370656})
 
 
 if __name__ == "__main__":                                # pragma: no cover

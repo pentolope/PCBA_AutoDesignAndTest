@@ -31,9 +31,10 @@ Supported topologies, deliberately few and stated exactly:
     fringing-capacitance form; the exact equations, sources and validity
     limits are stated at ``stripline_z0``.
   * coated external microstrip - the bare-microstrip geometry with
-    soldermask present. The toolkit pins no covered-microstrip point
-    equation, so this topology returns an ENCLOSURE, never a single
-    width: the same Hammerstad geometry factor evaluated under two
+    soldermask present. No covered-microstrip point equation is
+    dispatched in production - the pinned Barbuto reference
+    (``overlay_reference``) is evidence with recorded obstacles - so
+    this topology returns an ENCLOSURE, never a single width: the same Hammerstad geometry factor evaluated under two
     MODEL readings - the mask ignored, and a declared linear-chord
     loading at the fabricator's stated mask permittivity - each solved
     by the full branch-aware inverse. Neither reading is a proven
@@ -118,8 +119,17 @@ from .. import propagation
 #: direction - renamed the interval-routability fields to
 #: model_interval_* so a routable MODEL interval can never read as a
 #: physical coated fabrication interval, and recorded the exhausted
-#: access check for the named primary sources.
-MODEL_VERSION = "9"
+#: access check for the named primary sources. Version 10 pinned the
+#: Barbuto reference itself: an author-provided copy of the COMPEL
+#: 2013 paper was transcribed verbatim into overlay_reference, its
+#: immersed two-media equation validated against the paper's own
+#: figures, its finite-cover equation found to carry an internal
+#: erratum (the printed w/d exponent sign contradicts the paper's own
+#: validation figures - both variants recorded, neither adopted), and
+#: the exact obstacles between that reference and a production loaded
+#: edge written down. Production dispatch and every solved number are
+#: unchanged.
+MODEL_VERSION = "10"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -223,23 +233,29 @@ def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
     direction, and none is claimed. It is a model edge, not a proven
     physical bound, and the result says so.
 
-    The primary sources for a genuine covered/two-media treatment
-    exist - Svacina, "Analysis of multilayer microstrip lines by a
-    conformal mapping method" (IEEE MTT 40(4), 1992); Bahl and
-    Stuchly (IEEE MTT, 1980); Barbuto, Alu, Bilotti, Toscano, Vegni,
-    "Characteristic impedance of a microstrip line with a dielectric
-    overlay" (COMPEL 32(6), 2013, Schwarz-Christoffel) - but none was
-    transcribable with reviewable certainty when this model was
-    written. The access check has been run to the end: the publisher
-    texts are paywalled, the Roma Tre repository record for the
-    COMPEL paper (handle 11590/115257) is metadata-only, the
-    open-access aggregators report no repository fulltext anywhere,
-    an author-posted copy reported on a gated academic network could
-    not be opened by any route available to this toolchain, and the
-    reachable third-party reproductions are patch-antenna
-    adaptations with author-modified equations. Pinning one of the
-    primary texts, exactly, is the stated path to a stronger loaded
-    edge.
+    The Barbuto reference is now pinned: an author-provided copy of
+    Barbuto, Alu, Bilotti, Toscano, Vegni, "Characteristic impedance
+    of a microstrip line with a dielectric overlay" (COMPEL 32(6),
+    2013) has been transcribed verbatim into
+    ``pcbqa.fabricators.overlay_reference`` - the immersed two-media
+    equation (8) validated against the paper's own figures on both of
+    its branches, the finite-cover equation (10) carrying a
+    documented internal erratum (its printed w/d exponent sign
+    contradicts the paper's own validation figures), and the w/d < 1
+    cover branch unvalidated by any figure. The reference is
+    EVIDENCE; nothing here dispatches it. What still stands between
+    it and a production loaded edge, exactly: (a) the paper models a
+    zero-thickness strip, so a mapping from this solver's
+    finite-thickness trapezoid geometry onto its w/d must be declared
+    and defended; (b) the paper's air limit uses k1 = 0.52 and a
+    linear 0.04 shape term where the Hammerstad form pinned by this
+    solver uses one half and the square, so mixing the two families
+    inside one enclosure would put the edges on inconsistent bare
+    baselines; (c) a finite-cover point model would additionally need
+    the erratum resolved by an authoritative text and a defensible
+    mapping of the fabricator's three stated mask thicknesses onto
+    the paper's single uniform overlay. Svacina (IEEE MTT 40(4),
+    1992) and Bahl and Stuchly (IEEE MTT, 1980) remain unobtained.
     """
     if epsilon_r <= 1.0:
         raise propagation.Unsupported(
@@ -655,11 +671,13 @@ def resolve_context(approved_snapshot, requirements, stackup_id,
             context["epsilon_mask"] = mask_dk
             context["soldermask_record"] = mask_identity
             context["notes"].append(
-                "coated-microstrip is a MODEL enclosure: the toolkit "
-                "pins no covered-microstrip equation, so the solve "
-                "reports the bare and declared linear-chord loaded "
-                "readings, claims no width between them, and does not "
-                "present them as proven physical bounds. A single "
+                "coated-microstrip is a MODEL enclosure: no "
+                "covered-microstrip point equation is dispatched in "
+                "production (the pinned Barbuto reference is evidence "
+                "with recorded obstacles, not a mapped model), so the "
+                "solve reports the bare and declared linear-chord "
+                "loaded readings, claims no width between them, and "
+                "does not present them as proven physical bounds. A single "
                 "coated width would require a printed covered-"
                 "microstrip form with reviewable equations and a "
                 "defensible mapping of the fabricator's three stated "
@@ -1020,9 +1038,9 @@ def _solve_coated(catalog, context, request, range_record, low, high,
         "ordering_verified": ordering_verified,
         "loaded_edge": edges["loaded"],
         "bare_edge": edges["bare"],
-        "note": ("the toolkit pins no covered-microstrip equation, so "
-                 "no width inside the model interval is claimed or "
-                 "preferred"),
+        "note": ("no covered-microstrip point equation is dispatched "
+                 "by this solve, so no width inside the model "
+                 "interval is claimed or preferred"),
     }
     if both_rooted and not ordering_verified:
         enclosure["failure"] = (
@@ -1043,16 +1061,20 @@ def _solve_coated(catalog, context, request, range_record, low, high,
         context, request, range_record, numeric=None,
         manufacturing=None, ambiguous=None,
         failure="coated-microstrip returns a MODEL enclosure, not a "
-                "point solution and not proven physical bounds: the "
-                "toolkit pins no covered-microstrip closed form. A "
-                "single coated width would require a printed "
-                "covered-microstrip equation transcribed with "
-                "reviewable variable definitions and validity domain, "
-                "plus a defensible mapping of the fabricator's three "
-                "stated mask thicknesses (over copper, on substrate, "
-                "between traces - a conformal profile, not one "
-                "uniform slab) onto that form's cover geometry, or "
-                "fabricator-published coated reference geometries",
+                "point solution and not proven physical bounds: no "
+                "covered-microstrip point equation is dispatched in "
+                "production. The Barbuto reference is pinned in "
+                "overlay_reference as evidence, with a documented "
+                "erratum and recorded mapping obstacles; a single "
+                "coated width would additionally require a declared "
+                "width mapping for this solver's finite-thickness "
+                "trapezoid geometry, a consistent bare baseline "
+                "across both enclosure edges, and a defensible "
+                "mapping of the fabricator's three stated mask "
+                "thicknesses (over copper, on substrate, between "
+                "traces - a conformal profile, not one uniform slab) "
+                "onto a cover model, or fabricator-published coated "
+                "reference geometries",
         enclosure=enclosure)
 
 
