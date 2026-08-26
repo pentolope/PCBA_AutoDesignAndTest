@@ -68,8 +68,15 @@ from .. import propagation
 #: the heuristic width-distance root merging that could have collapsed
 #: two genuinely distinct roots, and stopped the result claiming a
 #: requested target is a fabrication requirement when nothing binds it
-#: to any board- or order-side specification.
-MODEL_VERSION = "4"
+#: to any board- or order-side specification. Version 5 extended exact
+#: seam ownership to the closed search domain: a seam equal to either
+#: domain endpoint stays in the partition, its owner reduced to the one
+#: point it still holds there, so an endpoint seam can no longer lose
+#: its owned root, fabricate a root from the neighbouring branch's
+#: values, or collapse a two-root answer to one; and the published
+#: process tolerance was separated from any claim of applying to this
+#: still-unbound target.
+MODEL_VERSION = "5"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -698,7 +705,7 @@ def _solve(approved_snapshot, request):
 
 
 def _seam_positions(context, low, high):
-    """The top-level branch boundaries inside the domain, with owners.
+    """Top-level branch boundaries in the closed domain, with owners.
 
     Stated precisely: every impedance-model branch boundary CAPABLE OF
     CHANGING THE INVERSE is represented here - the stripline narrow/wide
@@ -717,7 +724,9 @@ def _seam_positions(context, low, high):
     Sampling is not used: a seam is a fact of the formula.
 
     Returns [(base_width, owner)] with owner "left" (the lower-width
-    branch owns the point) or "right".
+    branch owns the point) or "right". A seam equal to `low` or `high`
+    is returned too: the caller's domain is CLOSED, so its endpoints
+    are points like any other and each belongs to exactly one branch.
     """
     delta = context["trapezoid_delta_mm"]
     seams = []
@@ -743,7 +752,7 @@ def _seam_positions(context, low, high):
                 if c - a < 1e-12:
                     break
             seams.append(((a + c) / 2.0 + delta / 2.0, "left"))
-    return sorted((s, owner) for s, owner in seams if low < s < high)
+    return sorted((s, owner) for s, owner in seams if low <= s <= high)
 
 
 def _solve_width(context, low, high, target):
@@ -760,6 +769,13 @@ def _solve_width(context, low, high, target):
     second root on the neighbouring branch, however close in width, is
     reported alongside it, because two roots are only ever one root
     when they are the same point, not when they are near each other.
+
+    A seam equal to a domain endpoint keeps its owner: the owning
+    branch is reduced to a degenerate closed interval - the single
+    point it still holds inside the domain, where root existence is
+    decided exactly - while the neighbouring branch spans the rest, so
+    the closed domain [low, high] partitions without loss at its edges
+    and no bisection ever crosses an unrepresented branch change.
 
     Within one interval a single closed-form branch applies, and each
     implemented branch is strictly decreasing in width on its whole
@@ -785,6 +801,21 @@ def _solve_width(context, low, high, target):
     spans = []
     for a, a_closed, b, b_closed, branch in intervals:
         force = branch if seams else None
+        if a == b:
+            # A seam at a domain endpoint leaves its owner exactly one
+            # point. Open on either side the interval is empty; closed
+            # on both it is the owned point itself, where root
+            # existence is decided exactly - no bracketing, no
+            # bisection, no tolerance.
+            if not (a_closed and b_closed):
+                continue
+            z_point, eps_point = _impedance_at(context, a,
+                                               _force_branch=force)
+            spans.append("[{0:.4f}, {0:.4f}] mm is the owned seam "
+                         "point at {1:.2f} ohm".format(a, z_point))
+            if z_point == target:
+                roots.append((a, z_point, eps_point))
+            continue
         z_a, _e = _impedance_at(context, a, _force_branch=force)
         z_b, _e = _impedance_at(context, b, _force_branch=force)
         spans.append("[{:.4f}, {:.4f}] mm spans {:.2f} down to "
@@ -854,17 +885,40 @@ def _result(context, request, range_record, numeric, manufacturing,
     `numeric_solution` (the analytic root, diagnostics even when
     unbuildable), `geometry_feasible` (root exists AND the width
     survives the profile's published routing limits - the most a
-    nominal, uncontrolled calculation can ever establish), and
-    `fabrication_control.requested_impedance_established` (true ONLY
-    when the profile also selects controlled impedance, so the target
-    became a fabrication requirement rather than an analytic estimate).
-    "0.37 mm is manufacturable and analytically ~50 ohm" and "the
-    fabricator will control this line to 50 ohm" can no longer share a
-    flag.
+    nominal, uncontrolled calculation can ever establish),
+    `fabrication_control.target_eligible_for_controlled_fabrication`
+    (that same feasible geometry under a profile that also selects the
+    controlled-impedance process), and
+    `fabrication_control.target_bound_to_fabrication_specification`
+    (always false here: no board- or order-side specification binds a
+    solver-request target). The prose note is rendered from those same
+    booleans, so it can never call an ineligible result eligible.
     """
     geometry_feasible = bool(numeric) and bool(manufacturing) \
         and manufacturing.get("established", False)
     controlled = bool(context["profile"].get("impedance_control"))
+    if controlled and geometry_feasible:
+        control_note = (
+            "the profile selects the controlled-impedance process and "
+            "this target sits inside its stated range with a "
+            "manufacturable geometry, so it is ELIGIBLE for controlled "
+            "fabrication - but the target came from this solver "
+            "request, and no board- or order-side impedance "
+            "specification binds it yet; nothing here proves the "
+            "target has been specified to the fabricator")
+    elif controlled:
+        control_note = (
+            "the profile selects the controlled-impedance process, but "
+            "this result establishes no feasible geometry for the "
+            "target (see numeric_solution, ambiguous_roots, "
+            "manufacturing and failure), so the target is NOT eligible "
+            "for controlled fabrication on this result")
+    else:
+        control_note = (
+            "the profile does not select controlled impedance: a "
+            "feasible geometry is an analytic nominal estimate, and "
+            "nothing here establishes that the fabricated line meets "
+            "the requested impedance")
     return {
         "model": {
             "identity": context["topology"],
@@ -889,63 +943,59 @@ def _result(context, request, range_record, numeric, manufacturing,
             "target_eligible_for_controlled_fabrication":
                 geometry_feasible and controlled,
             "target_bound_to_fabrication_specification": False,
-            "note": ("the profile selects the controlled-impedance "
-                     "process and this target sits inside its stated "
-                     "range with a manufacturable geometry, so it is "
-                     "ELIGIBLE for controlled fabrication - but the "
-                     "target came from this solver request, and no "
-                     "board- or order-side impedance specification "
-                     "binds it yet; nothing here proves the target has "
-                     "been specified to the fabricator"
-                     if controlled else
-                     "the profile does not select controlled impedance: "
-                     "a feasible geometry is an analytic nominal "
-                     "estimate, and nothing here establishes that the "
-                     "fabricated line meets the requested impedance"),
+            "note": control_note,
         },
         "failure": failure,
     }
 
 
 def _fabrication_tolerance(approved_snapshot, context):
-    """The stated impedance tolerance, scoped to what was actually bought.
+    """Process tolerance capability, kept apart from target applicability.
 
-    JLCPCB's plus-minus figure describes its CONTROLLED-impedance
-    process. A profile that does not select impedance control gets an
-    ordinary build: the nominal analytic estimate is still meaningful,
-    but presenting the controlled-process tolerance as applying to it
-    would claim a control nobody ordered.
+    Three facts an autonomous caller must not conflate: the fabricator
+    PUBLISHES a standard tolerance for its controlled-impedance process
+    (`process_tolerance_published`, with the verbatim figure and its
+    source when it does); the profile SELECTS that process
+    (`impedance_control_selected`); and whether that tolerance applies
+    to THIS solver target (`applies_to_this_target`) - false in every
+    case, because no board- or order-side impedance specification binds
+    a solver-request target, exactly as
+    fabrication_control.target_bound_to_fabrication_specification
+    records. "The fabricator offers plus-minus ten percent" never
+    becomes "plus-minus ten percent applies to this line" without that
+    binding.
     """
     controlled = bool(context["profile"].get("impedance_control"))
     tolerance = approved_snapshot["normalized"]["capabilities"].get(
         "impedance_tolerance_standard_percent")
-    if not controlled:
-        return {
-            "impedance_control_selected": False,
-            "applicable": False,
-            "note": "the fabrication profile does not select controlled "
-                    "impedance, so the fabricator's stated "
-                    "controlled-impedance tolerance does NOT apply; the "
-                    "value above is an uncontrolled nominal analytic "
-                    "estimate only",
-        }
-    if tolerance is None:
-        return {
-            "impedance_control_selected": True,
-            "applicable": False,
-            "note": "no impedance tolerance is normalized from the "
-                    "approved sources; the value above is nominal only",
-        }
-    return {
-        "impedance_control_selected": True,
-        "applicable": True,
-        "stated_percent": tolerance["value"],
-        "source": tolerance["source"],
-        "note": "the fabricator's stated controlled-impedance tolerance, "
-                "quoted verbatim; it is NOT computed into an interval "
-                "here, and the value above remains the nominal analytic "
-                "estimate",
+    record = {
+        "impedance_control_selected": controlled,
+        "process_tolerance_published": tolerance is not None,
+        "applies_to_this_target": False,
     }
+    if not controlled:
+        record["note"] = (
+            "the fabrication profile does not select controlled "
+            "impedance, so the fabricator's stated controlled-impedance "
+            "tolerance does NOT apply; the value above is an "
+            "uncontrolled nominal analytic estimate only")
+        return record
+    if tolerance is None:
+        record["note"] = (
+            "no impedance tolerance is normalized from the approved "
+            "sources; the value above is nominal only")
+        return record
+    record["stated_percent"] = tolerance["value"]
+    record["source"] = tolerance["source"]
+    record["note"] = (
+        "the fabricator publishes this standard tolerance for its "
+        "controlled-impedance process, quoted verbatim and never "
+        "computed into an interval here, and the profile selects that "
+        "process - but this solver target is not bound into any "
+        "fabrication specification, so nothing here proves the "
+        "fabricator will hold THIS line to the stated percent; the "
+        "value above remains the nominal analytic estimate")
+    return record
 
 
 def solve(approved_snapshot, request):

@@ -92,24 +92,37 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
                          len(jlcpcb.SOURCES))
 
     def test_an_uncontrolled_profile_claims_no_fabrication_tolerance(self):
-        """The base profile states impedance_control=false: the nominal
-        estimate is available, but the fabricator's controlled-impedance
-        tolerance is explicitly NOT applicable and not quoted as such."""
+        """The base profile states impedance_control=false: the process
+        tolerance the fabricator publishes exists as a capability, but
+        it neither applies to this build nor is quoted as doing so."""
         result = impedance.solve(self.snapshot, _request())
         tolerance = result["fabrication_tolerance"]
         self.assertFalse(tolerance["impedance_control_selected"])
-        self.assertFalse(tolerance["applicable"])
+        self.assertTrue(tolerance["process_tolerance_published"])
+        self.assertFalse(tolerance["applies_to_this_target"])
         self.assertNotIn("stated_percent", tolerance)
+        self.assertNotIn("applicable", tolerance)
         self.assertIn("does NOT apply", tolerance["note"])
 
-    def test_a_controlled_profile_exposes_the_applicable_tolerance(self):
+    def test_a_controlled_profile_separates_capability_from_applicability(
+            self):
+        """Three facts, three fields: the fabricator publishes a
+        standard controlled-impedance tolerance (with the verbatim
+        figure and source), the profile selects that process, and the
+        tolerance still does NOT apply to this specific target - no
+        board- or order-side specification binds a solver-request
+        target, so claiming applicability would outrun the evidence."""
         requirements = _requirements(impedance_control=True)
         result = impedance.solve(self.snapshot, _request(
             requirements=requirements, stackup="JLC04161H-7628"))
         tolerance = result["fabrication_tolerance"]
         self.assertTrue(tolerance["impedance_control_selected"])
-        self.assertTrue(tolerance["applicable"])
+        self.assertTrue(tolerance["process_tolerance_published"])
+        self.assertFalse(tolerance["applies_to_this_target"])
         self.assertEqual(tolerance["stated_percent"], 10.0)
+        self.assertNotIn("applicable", tolerance)
+        self.assertIn("not bound into any fabrication specification",
+                      tolerance["note"])
         self.assertIn("nominal analytic estimate", tolerance["note"])
 
     def test_there_is_exactly_one_public_solve(self):
@@ -415,9 +428,93 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
             control["target_eligible_for_controlled_fabrication"])
         self.assertFalse(
             control["target_bound_to_fabrication_specification"])
+        self.assertIn("ELIGIBLE for controlled fabrication",
+                      control["note"])
         self.assertIn("nothing here proves the target has been "
                       "specified to the fabricator", control["note"])
         self.assertNotIn("requested_impedance_established", control)
+
+    def test_a_controlled_no_solution_is_not_called_eligible(self):
+        """impedance_control=true with no root in the domain: the
+        boolean says not eligible, and the prose must agree - selecting
+        the process is not eligibility of this target."""
+        result = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628", target_ohm=30.0,
+            width_search_mm={"min": 0.15, "max": 0.5}))
+        self.assertIsNone(result["numeric_solution"])
+        control = result["fabrication_control"]
+        self.assertTrue(control["impedance_control_selected"])
+        self.assertFalse(
+            control["target_eligible_for_controlled_fabrication"])
+        self.assertIn("NOT eligible", control["note"])
+        self.assertNotIn("so it is ELIGIBLE", control["note"])
+
+    def test_a_controlled_manufacturing_rejection_is_not_called_eligible(
+            self):
+        """The 90-ohm root on this construction is narrower than the
+        strictest published minimum track; a controlled profile does
+        not make an unroutable width eligible."""
+        result = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628", target_ohm=90.0,
+            width_search_mm={"min": 0.05, "max": 2.0}))
+        self.assertIsNotNone(result["numeric_solution"])
+        self.assertFalse(result["manufacturing"]["established"])
+        self.assertFalse(result["geometry_feasible"])
+        control = result["fabrication_control"]
+        self.assertFalse(
+            control["target_eligible_for_controlled_fabrication"])
+        self.assertIn("NOT eligible", control["note"])
+
+    def test_prose_always_agrees_with_the_boolean_state(self):
+        """Rendered through _result directly: for every controlled
+        failure shape (no root, ambiguous roots, manufacturing
+        rejection) the note says NOT eligible; only a feasible
+        controlled geometry reads ELIGIBLE."""
+        base = impedance.solve(self.snapshot, _request(
+            requirements=_requirements(impedance_control=True),
+            stackup="JLC04161H-7628"))
+        context = dict(base["context"])
+        context["notes"] = []
+        request = base["request"]
+        shapes = {
+            "no-root": dict(numeric=None, manufacturing=None,
+                            ambiguous=None, failure="no width"),
+            "ambiguous": dict(numeric=None, manufacturing=None,
+                              ambiguous=[{"width_mm": 0.1,
+                                          "impedance_ohm": 50.0},
+                                         {"width_mm": 0.2,
+                                          "impedance_ohm": 50.0}],
+                              failure="two distinct widths"),
+            "rejected": dict(numeric={"width_mm": 0.05,
+                                      "impedance_ohm": 50.0,
+                                      "epsilon_effective": 3.2},
+                             manufacturing={"established": False,
+                                            "issue": "too narrow"},
+                             ambiguous=None, failure=None),
+        }
+        for name, shape in shapes.items():
+            rendered = impedance._result(context, request,
+                                         base["target_range"], **shape)
+            control = rendered["fabrication_control"]
+            self.assertFalse(
+                control["target_eligible_for_controlled_fabrication"],
+                name)
+            self.assertIn("NOT eligible", control["note"], name)
+            self.assertNotIn("so it is ELIGIBLE", control["note"], name)
+        feasible = impedance._result(
+            context, request, base["target_range"],
+            numeric={"width_mm": 0.37, "impedance_ohm": 50.0,
+                     "epsilon_effective": 3.2},
+            manufacturing={"established": True,
+                           "minimum_track_mm": 0.09, "evidence": "x"},
+            ambiguous=None, failure=None)
+        control = feasible["fabrication_control"]
+        self.assertTrue(
+            control["target_eligible_for_controlled_fabrication"])
+        self.assertIn("ELIGIBLE for controlled fabrication",
+                      control["note"])
 
     def test_an_uncontrolled_root_never_reads_as_established(self):
         result = impedance.solve(self.snapshot, _request())
@@ -553,8 +650,10 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
         self.assertEqual(upper["topology"], "symmetric-stripline")
 
     def test_the_pinned_narrow_stripline_reference_vector(self):
-        """Hand-evaluated from the IPC-2141 / Wadell / MT-094 printed
-        form Z0 = 60/sqrt(er) * ln(4b/(0.67*pi*(0.8w+t))) at er=4.2,
+        """Hand-evaluated from the IPC-2141 / Wadell printed form
+        Z0 = 60/sqrt(er) * ln(4b/(0.67*pi*(0.8w+t))) at er=4.2 (MT-094
+        prints the near-equivalent 1.9b/(0.8w+t) argument; 4/(0.67*pi)
+        is 1.9004, so the two agree only to the rounded coefficient),
         w=0.2, b=1.0, t=0.03. The model-1 transcription (an equivalent-
         diameter expansion with an unpinnable 0.51*pi term) produced
         66.91 ohm here and fails this vector."""
@@ -827,6 +926,109 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
         self.assertEqual(len(roots), 1)
         self.assertGreater(roots[0][0], seam)
         self.assertLess(roots[0][0] - seam, 0.05)
+
+    @staticmethod
+    def _microstrip_context():
+        """A handcrafted bare-microstrip context for seam experiments."""
+        return {"topology": impedance.MICROSTRIP, "height_mm": 0.2104,
+                "epsilon_r": 4.4, "conductor_thickness_mm": 0.04064,
+                "trapezoid_delta_mm": 0.0}
+
+    def test_an_endpoint_seam_still_owns_its_point_stripline_low(self):
+        """seam == low: the wide branch owns the whole domain including
+        its first point, and the exact seam target resolves there."""
+        context = self._stripline_context(1e-9)
+        seam = 0.35 * (1.0 - 1e-9)
+        target, _e = impedance.stripline_z0(4.2, seam, 1.0, 1e-9,
+                                            _force_branch="wide")
+        roots, _diag = impedance._solve_width(context, seam, 0.8, target)
+        self.assertEqual(len(roots), 1)
+        self.assertLess(abs(roots[0][0] - seam), 1e-9)
+        self.assertAlmostEqual(roots[0][1], target, places=6)
+
+    def test_an_endpoint_seam_still_owns_its_point_stripline_high(self):
+        """seam == high: the wide branch is reduced to the single point
+        it owns, and the exact seam target returns BOTH that point and
+        the genuinely distinct narrow-branch root - model 4 dropped the
+        endpoint seam from the partition and lost the owned root."""
+        context = self._stripline_context(1e-9)
+        seam = 0.35 * (1.0 - 1e-9)
+        target, _e = impedance.stripline_z0(4.2, seam, 1.0, 1e-9,
+                                            _force_branch="wide")
+        roots, _diag = impedance._solve_width(context, 0.1, seam, target)
+        self.assertEqual(len(roots), 2)
+        self.assertLess(roots[0][0], seam)
+        self.assertEqual(roots[1][0], seam)
+        self.assertEqual(roots[1][1], target)
+
+    def test_an_endpoint_seam_still_owns_its_point_microstrip_low(self):
+        """seam == low: the narrow branch is reduced to the single point
+        it owns and the exact seam target resolves there EXACTLY -
+        model 4 bisected the wide branch's values instead and returned
+        a 'root' 0.32 ohm off target here."""
+        context = self._microstrip_context()
+        (seam, owner), = impedance._seam_positions(context, 0.05, 2.0)
+        self.assertEqual(owner, "left")
+        target, _e = impedance._impedance_at(context, seam,
+                                             _force_branch="narrow")
+        roots, _diag = impedance._solve_width(context, seam, 2.0, target)
+        self.assertEqual(len(roots), 1)
+        self.assertEqual(roots[0][0], seam)
+        self.assertEqual(roots[0][1], target)
+
+    def test_a_gap_target_at_an_endpoint_seam_has_no_fabricated_root(
+            self):
+        """A target strictly inside the downward seam step is attained
+        nowhere in [seam, high]; the honest answer is zero roots, never
+        a converged width whose impedance misses the target."""
+        context = self._microstrip_context()
+        (seam, _owner), = impedance._seam_positions(context, 0.05, 2.0)
+        narrow, _e = impedance._impedance_at(context, seam,
+                                             _force_branch="narrow")
+        wide, _e = impedance._impedance_at(context, seam,
+                                           _force_branch="wide")
+        self.assertLess(wide, narrow)
+        target = (narrow + wide) / 2.0
+        roots, _diag = impedance._solve_width(context, seam, 2.0, target)
+        self.assertEqual(roots, [])
+
+    def test_an_endpoint_seam_still_owns_its_point_microstrip_high(self):
+        """seam == high: the closed domain ends on the narrow side and
+        the production value at the endpoint is attained there."""
+        context = self._microstrip_context()
+        (seam, _owner), = impedance._seam_positions(context, 0.05, 2.0)
+        target, _e = impedance._impedance_at(context, seam)
+        roots, _diag = impedance._solve_width(context, 0.05, seam, target)
+        self.assertEqual(len(roots), 1)
+        self.assertLess(abs(roots[0][0] - seam), 1e-9)
+        self.assertAlmostEqual(roots[0][1], target, places=6)
+
+    def test_roots_inside_the_old_merge_threshold_both_survive(self):
+        """Two genuinely distinct roots separated by LESS than the
+        removed model-3 merge threshold of 1e-4 mm. Near the seam-step
+        minimum (t/b ~ 0.1164) on a thin 0.15 mm span the ambiguity
+        band is ~0.029 ohm wide, putting the two roots ~7e-5 mm apart -
+        inside the old threshold, far above the 1e-12 mm bisection
+        resolution. Multiplicity is mathematical identity: both come
+        back."""
+        span = 0.15
+        thickness = 0.116435 * span
+        context = self._stripline_context(thickness, span_mm=span)
+        seam = 0.35 * (span - thickness)
+        narrow, _e = impedance.stripline_z0(4.2, seam, span, thickness,
+                                            _force_branch="narrow")
+        wide, _e = impedance.stripline_z0(4.2, seam, span, thickness,
+                                          _force_branch="wide")
+        self.assertGreater(wide, narrow)
+        target = (narrow + wide) / 2.0
+        roots, _diag = impedance._solve_width(context, 0.02, 0.12,
+                                              target)
+        self.assertEqual(len(roots), 2)
+        gap = roots[1][0] - roots[0][0]
+        self.assertGreater(gap, 0.0)
+        self.assertLess(gap, 1e-4)
+        for _width, z, _eps in roots:
+            self.assertAlmostEqual(z, target, places=6)
 
     def test_gapless_result_values_never_carry_nan(self):
         snapshot = _snapshot()
