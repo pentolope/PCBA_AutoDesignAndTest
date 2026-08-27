@@ -494,7 +494,9 @@ def cmd_coherence(manifest_path):
 
 def cmd_extract(argv):
     """Geometry baseline extraction: run.py extract <manifest> --out F
-    --nets A,B --copper L=mm,... --board-thickness mm [--validation F]
+    --nets A,B (--copper L=mm,... --board-thickness mm |
+    --approved-copper L=pos:oz,... --board-thickness mm |
+    --physical-from-requirements FILE) [--validation F]
     """
     if len(argv) < 3:
         print("usage: run.py extract <manifest.json> --out FILE "
@@ -512,22 +514,54 @@ def cmd_extract(argv):
         elif key is not None:
             options[key] = token
             key = None
-    for required in ("out", "nets", "board-thickness"):
+    from_requirements = options.get("physical-from-requirements")
+    required_options = ["out", "nets"] if from_requirements         else ["out", "nets", "board-thickness"]
+    for required in required_options:
         if not options.get(required):
             print("extract: missing --{}".format(required))
             return 2
-    if bool(options.get("copper")) == bool(
-            options.get("approved-copper")):
-        print("extract: exactly one of --copper (caller-declared) or "
+    modes = [bool(options.get("copper")),
+             bool(options.get("approved-copper")),
+             bool(from_requirements)]
+    if sum(modes) != 1:
+        print("extract: exactly one of --copper (caller-declared), "
               "--approved-copper LAYER=position:oz,... (resolved "
-              "from approved evidence, needs --requirements) must "
-              "be given")
+              "from approved evidence), or "
+              "--physical-from-requirements FILE (assignments AND "
+              "board thickness derived from the board's declared "
+              "fabrication requirements plus the approved catalog) "
+              "must be given")
         return 2
     manifest, _layout = open_board(_find_manifest(argv[2]))
     board_file = manifest.resolve(manifest.get("sources.pcb"))
     import pcbnew
     board = pcbnew.LoadBoard(board_file)
-    if options.get("approved-copper"):
+    thickness = None
+    if from_requirements:
+        import hashlib
+        from pcbqa.fabricators.store import CatalogStore
+        fabricator = options.get("fabricator") or "jlcpcb"
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "profiles", fabricator)
+        approved = CatalogStore(root, fabricator).approved()
+        if approved is None:
+            print("extract: no approved catalog; refusing to invent "
+                  "physical inputs")
+            return 2
+        with open(from_requirements, "rb") as handle:
+            requirements_bytes = handle.read()
+        requirements = json_module.loads(
+            requirements_bytes.decode("utf-8"))
+        stack = [board.GetLayerName(layer) for layer in
+                 board.GetEnabledLayers().CuStack()]
+        assignments = extract.copper_assignments_from_requirements(
+            requirements, stack)
+        copper = extract.approved_finished_copper(approved,
+                                                  assignments)
+        thickness = extract.requirements_board_thickness(
+            requirements,
+            hashlib.sha256(requirements_bytes).hexdigest())
+    elif options.get("approved-copper"):
         from pcbqa.fabricators.store import CatalogStore
         fabricator = options.get("fabricator") or "jlcpcb"
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -550,10 +584,11 @@ def cmd_extract(argv):
             layer, _, value = pair.partition("=")
             declared[layer] = float(value)
         copper = extract.caller_declared_copper(declared)
-    thickness = extract.physical_parameter(
-        float(options["board-thickness"]), "mm", "caller-declared",
-        "caller-declared board thickness",
-        applicability="through-via barrel estimates only")
+    if thickness is None:
+        thickness = extract.physical_parameter(
+            float(options["board-thickness"]), "mm",
+            "caller-declared", "caller-declared board thickness",
+            applicability="through-via barrel estimates only")
     validation = None
     if options.get("validation"):
         with open(options["validation"], encoding="utf-8") as handle:

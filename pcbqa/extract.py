@@ -43,8 +43,16 @@ from __future__ import annotations
 import hashlib
 import json
 
+#: The extraction contract version: recorded in every baseline and
+#: in every derived simulation model, so a consumer can tell which
+#: semantics produced a number.
+EXTRACT_VERSION = "2"
+
 #: IEC 60028 International Annealed Copper Standard, 20 C.
 IACS_RESISTIVITY_OHM_M = 1.7241e-8
+
+#: The reference temperature of the IEC 60028 resistivity value.
+IACS_REFERENCE_TEMPERATURE_C = 20.0
 
 MIL_TO_MM = 0.0254
 
@@ -68,7 +76,21 @@ def _finite_positive(label, value):
 
 def physical_parameter(value, units, source_type, source,
                        digest=None, applicability=None):
-    """One provenance-bearing physical input."""
+    """One provenance-bearing physical input.
+
+    ``approved-evidence`` records cannot be minted here: only a
+    resolver that actually reads the approved catalog (such as
+    ``approved_finished_copper``) may produce them, so a caller can
+    never accidentally dress an arbitrary number up as fabricator
+    evidence. Everything else states what it is and stays
+    distinguishable forever.
+    """
+    if source_type == "approved-evidence":
+        raise ExtractionError(
+            "approved-evidence records are minted only by resolvers "
+            "that read the approved catalog (approved_finished_copper "
+            "and peers); a caller-assembled number can never carry "
+            "that label")
     _finite_positive("parameter value", value)
     if source_type not in _SOURCE_TYPES:
         raise ExtractionError(
@@ -85,6 +107,16 @@ def physical_parameter(value, units, source_type, source,
             "digest": digest, "applicability": applicability}
 
 
+def _approved_parameter(value, units, source, digest,
+                        applicability):
+    """Resolver-only minting of an approved-evidence record."""
+    _finite_positive("parameter value", value)
+    record = {"value": value, "units": units,
+              "source_type": "approved-evidence", "source": source,
+              "digest": digest, "applicability": applicability}
+    return validate_parameter(record, "approved parameter")
+
+
 def validate_parameter(record, label):
     if not isinstance(record, dict) or \
             set(record) != _PARAMETER_KEYS:
@@ -97,6 +129,20 @@ def validate_parameter(record, label):
         raise ExtractionError(
             "{} source_type {!r} is not one of {}".format(
                 label, record["source_type"], list(_SOURCE_TYPES)))
+    if record["source_type"] == "approved-evidence":
+        digest = record["digest"]
+        if not (isinstance(digest, str) and len(digest) == 64
+                and set(digest) <= set("0123456789abcdef")):
+            raise ExtractionError(
+                "{}: an approved-evidence record must carry the "
+                "approved catalog's 64-hex-character normalized "
+                "SHA-256 digest, not {!r}".format(label, digest))
+        for key in ("source", "applicability"):
+            if not isinstance(record[key], str) or not record[key]:
+                raise ExtractionError(
+                    "{}: an approved-evidence record needs a "
+                    "nonempty {} naming the canonical capability "
+                    "record it resolved".format(label, key))
     return record
 
 
@@ -140,12 +186,68 @@ def approved_finished_copper(approved_snapshot, assignments):
                 "rather than guessing".format(
                     len(matches), position, weight_oz))
         identity, record = matches[0]
-        parameters[layer] = physical_parameter(
+        parameters[layer] = _approved_parameter(
             round(record["value"] * MIL_TO_MM, 6), "mm",
-            "approved-evidence", identity, digest=digest,
-            applicability="{} {:g} oz finished copper".format(
-                position, weight_oz))
+            identity, digest,
+            "{} {:g} oz finished copper".format(position, weight_oz))
     return parameters
+
+
+def copper_assignments_from_requirements(requirements,
+                                         copper_layer_stack):
+    """(position, weight_oz) per layer, from declared requirements.
+
+    ``requirements`` is the board's own fabrication-requirements
+    document (copper_layers, outer_copper_oz, inner_copper_oz);
+    ``copper_layer_stack`` is the board's copper layer names in
+    front-to-back stack order. The first and last layers are
+    external, everything between is internal - and a stack whose
+    length contradicts the declared layer count refuses rather than
+    guessing which document is wrong.
+    """
+    for key in ("copper_layers", "outer_copper_oz",
+                "inner_copper_oz"):
+        if key not in requirements:
+            raise ExtractionError(
+                "the fabrication requirements declare no {}; copper "
+                "assignments are not invented".format(key))
+    if not isinstance(copper_layer_stack, (list, tuple))             or len(copper_layer_stack) < 2:
+        raise ExtractionError(
+            "copper_layer_stack must list at least the two external "
+            "layers in stack order")
+    if len(copper_layer_stack) != requirements["copper_layers"]:
+        raise ExtractionError(
+            "the board exposes {} copper layers but the fabrication "
+            "requirements declare {}; the contradiction blocks "
+            "rather than being resolved by guesswork".format(
+                len(copper_layer_stack),
+                requirements["copper_layers"]))
+    assignments = {}
+    last = len(copper_layer_stack) - 1
+    for index, layer in enumerate(copper_layer_stack):
+        if index in (0, last):
+            assignments[layer] = ("external",
+                                  requirements["outer_copper_oz"])
+        else:
+            assignments[layer] = ("internal",
+                                  requirements["inner_copper_oz"])
+    return assignments
+
+
+def requirements_board_thickness(requirements, requirements_digest):
+    """Board thickness as a parameter derived from the declared
+    fabrication requirements, digest-bound to that document."""
+    if "board_thickness_mm" not in requirements:
+        raise ExtractionError(
+            "the fabrication requirements declare no "
+            "board_thickness_mm; thickness is not invented")
+    return physical_parameter(
+        requirements["board_thickness_mm"], "mm", "derived",
+        "board fabrication requirements (board_thickness_mm)",
+        digest=requirements_digest,
+        applicability="the board's own declared fabrication "
+                      "requirement; through-via barrel estimates "
+                      "only")
 
 
 def caller_declared_copper(values_mm):
@@ -279,6 +381,7 @@ def baseline_report(board_file, board, net_names, copper_parameters,
                                  board_thickness_parameter)
     return {
         "kind": "board-geometry-baseline",
+        "extract_version": EXTRACT_VERSION,
         "board_file_sha256": board_sha,
         "physical_inputs": {
             "copper_thickness_mm": dict(sorted(
@@ -302,6 +405,7 @@ def baseline_report(board_file, board, net_names, copper_parameters,
 
 
 def interconnect_model_from_net(net_record, board_sha256,
+                                physical_inputs,
                                 two_terminal_asserted_by=None):
     """A simulation model record from one extracted net - DC only.
 
@@ -309,13 +413,76 @@ def interconnect_model_from_net(net_record, board_sha256,
     and covers EXACTLY the phenomenon the extraction supplies:
     interconnect_dc at evidence class geometry-derived. It cannot
     satisfy an interconnect_si or power_integrity requirement, by
-    construction of the coverage contract. A SPICE resistor
-    subcircuit is attached ONLY when the caller asserts the net is an
-    unbranched two-terminal run - that assertion is recorded as the
-    caller's, because the segment sum equals a two-terminal
-    resistance only then.
+    construction of the coverage contract.
+
+    The record carries its complete DERIVATION: approved fabrication
+    evidence -> physical parameters -> board geometry -> extracted
+    electrical quantity -> simulation model. ``physical_inputs`` is
+    the baseline's own block ({"copper_thickness_mm": {layer:
+    record}, "board_thickness_mm": record}); the copper records for
+    every layer the net actually uses are embedded, and a canonical
+    digest of the physical inputs and resistivity is part of the
+    model IDENTITY - two extractions of one board under different
+    physical assumptions are different models by name, everywhere
+    downstream.
+
+    The IEC 60028 resistivity is a 20 C value, so the model declares
+    ``temperature_c`` as fixed-reference 20 C; with a caller-supplied
+    resistivity no reference temperature is known, nothing is
+    declared, and condition coverage fails closed for any requested
+    temperature. A SPICE resistor subcircuit is attached ONLY when
+    the caller asserts the net is an unbranched two-terminal run -
+    that assertion is recorded as the caller's, because the segment
+    sum equals a two-terminal resistance only then.
     """
-    identity = "net:{}@{}".format(net_record["net"], board_sha256[:12])
+    if not isinstance(physical_inputs, dict) or \
+            set(physical_inputs) != {"copper_thickness_mm",
+                                     "board_thickness_mm"}:
+        raise ExtractionError(
+            "physical_inputs must be the baseline's own block with "
+            "exactly copper_thickness_mm and board_thickness_mm; a "
+            "model without its physical inputs would lose the "
+            "evidence chain")
+    validate_parameter(physical_inputs["board_thickness_mm"],
+                       "board thickness")
+    used_layers = sorted({segment["layer"]
+                          for segment in net_record["segments"]})
+    copper = {}
+    for layer in used_layers:
+        record = physical_inputs["copper_thickness_mm"].get(layer)
+        if record is None:
+            raise ExtractionError(
+                "the net uses layer {!r} but the physical inputs "
+                "carry no copper record for it; the derivation "
+                "chain refuses to drop a layer".format(layer))
+        copper[layer] = validate_parameter(
+            record, "copper thickness on {}".format(layer))
+    resistivity = {
+        "value_ohm_m": net_record["dc"]["resistivity_ohm_m"],
+        "source": net_record["dc"]["resistivity_source"],
+    }
+    physical_digest = hashlib.sha256(json.dumps(
+        {"copper_thickness_mm": copper,
+         "board_thickness_mm": physical_inputs["board_thickness_mm"],
+         "resistivity": resistivity},
+        sort_keys=True, separators=(",", ":")).encode(
+            "utf-8")).hexdigest()
+    identity = "net:{}@{}+phys:{}".format(
+        net_record["net"], board_sha256[:12], physical_digest[:12])
+    derivation = {
+        "chain": ["approved-fabrication-evidence",
+                  "physical-parameters", "board-geometry",
+                  "extracted-electrical-quantity",
+                  "simulation-model"],
+        "board_file_sha256": board_sha256,
+        "extract_version": EXTRACT_VERSION,
+        "physical_inputs_sha256": physical_digest,
+        "copper_thickness_mm": copper,
+        "board_thickness_mm": physical_inputs["board_thickness_mm"],
+        "resistivity": resistivity,
+        "two_terminal_assertion": two_terminal_asserted_by,
+        "assumptions": [net_record["dc"]["meaning"]],
+    }
     record = {
         "identity": identity,
         "kind": "board-interconnect",
@@ -326,13 +493,24 @@ def interconnect_model_from_net(net_record, board_sha256,
             "resistivity_source":
                 net_record["dc"]["resistivity_source"],
         },
+        "derivation": derivation,
         "omissions": [
             "inductance", "capacitance", "distributed effects",
             "frequency dependence", "temperature dependence beyond "
-            "the 20 C resistivity reference",
+            "the stated resistivity reference",
         ],
         "notes": [net_record["dc"]["meaning"]],
     }
+    if resistivity["value_ohm_m"] == IACS_RESISTIVITY_OHM_M:
+        record["conditions"] = {
+            "temperature_c": {
+                "kind": "fixed-reference",
+                "value": IACS_REFERENCE_TEMPERATURE_C,
+                "units": "C",
+                "source": "IEC 60028 resistivity reference "
+                          "temperature",
+            }
+        }
     if two_terminal_asserted_by:
         record["provenance"]["two_terminal_asserted_by"] = \
             two_terminal_asserted_by

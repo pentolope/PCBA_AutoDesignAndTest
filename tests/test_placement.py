@@ -128,3 +128,102 @@ class ConstraintsValidateStrictly(unittest.TestCase):
 
 if __name__ == "__main__":                        # pragma: no cover
     unittest.main()
+
+
+class EvaluationJudgesActualPositions(unittest.TestCase):
+
+    def _positions(self):
+        return {
+            "U1": {"x_mm": 0.0, "y_mm": 0.0, "rotation_deg": 0.0},
+            "C1": {"x_mm": 1.0, "y_mm": 0.0, "rotation_deg": 90.0},
+            "C2": {"x_mm": 30.0, "y_mm": 0.0, "rotation_deg": 0.0},
+            "J1": {"x_mm": 55.0, "y_mm": 0.0, "rotation_deg": 0.0},
+        }
+
+    def test_violations_are_detected_with_measurements(self):
+        outcome = placement.evaluate_placement(self._positions(), [
+            {"kind": "proximity", "reference": "C1", "anchor": "U1",
+             "max_distance_mm": 2.0},
+            {"kind": "proximity", "reference": "C2", "anchor": "U1",
+             "max_distance_mm": 2.0},
+            {"kind": "separation", "group_a": ["U1", "C1"],
+             "group_b": ["C2", "J1"], "min_distance_mm": 10.0},
+        ])
+        statuses = [entry["status"]
+                    for entry in outcome["results"]]
+        self.assertEqual(statuses,
+                         ["satisfied", "violated", "satisfied"])
+        self.assertEqual(outcome["summary"]["violated"], [1])
+        self.assertFalse(outcome["summary"]["ok"])
+        self.assertEqual(
+            outcome["results"][1]["measured"]["distance_mm"], 30.0)
+
+    def test_a_missing_reference_refuses_the_evaluation(self):
+        with self.assertRaises(PlacementError):
+            placement.evaluate_placement(self._positions(), [
+                {"kind": "proximity", "reference": "GHOST",
+                 "anchor": "U1", "max_distance_mm": 2.0}])
+
+    def test_board_edge_without_an_outline_blocks(self):
+        outcome = placement.evaluate_placement(self._positions(), [
+            {"kind": "board_edge", "reference": "J1",
+             "max_distance_mm": 5.0}])
+        self.assertEqual(outcome["results"][0]["status"],
+                         "not_evaluable")
+        self.assertFalse(outcome["summary"]["ok"])
+        with_outline = placement.evaluate_placement(
+            self._positions(), [
+                {"kind": "board_edge", "reference": "J1",
+                 "max_distance_mm": 6.0}],
+            outline={"kind": "circle", "center_mm": [0.0, 0.0],
+                     "radius_mm": 60.0})
+        self.assertEqual(with_outline["results"][0]["status"],
+                         "satisfied")
+
+    def test_ordering_projects_onto_the_axis(self):
+        ordered = placement.evaluate_placement(self._positions(), [
+            {"kind": "ordering", "path": "esd-then-connector",
+             "references": ["U1", "C2", "J1"]}])
+        self.assertEqual(ordered["results"][0]["status"],
+                         "satisfied")
+        scrambled = placement.evaluate_placement(self._positions(), [
+            {"kind": "ordering", "path": "esd-then-connector",
+             "references": ["C2", "U1", "J1"]}])
+        self.assertEqual(scrambled["results"][0]["status"],
+                         "violated")
+
+    def test_functional_block_reports_spread(self):
+        outcome = placement.evaluate_placement(self._positions(), [
+            {"kind": "functional_block", "name": "regulator",
+             "members": ["U1", "C1"], "max_spread_mm": 5.0},
+            {"kind": "functional_block", "name": "loose",
+             "members": ["U1", "C2"]},
+        ])
+        self.assertEqual(outcome["results"][0]["status"],
+                         "satisfied")
+        self.assertEqual(outcome["results"][1]["status"],
+                         "unthresholded")
+        self.assertEqual(
+            outcome["results"][1]["measured"]["max_pairwise_mm"],
+            30.0)
+
+
+class OverlapIsCheckedNotAssumed(unittest.TestCase):
+
+    def test_overlaps_and_touches_are_distinguished(self):
+        pairs = placement.overlapping_pairs({
+            "A": [0.0, 0.0, 2.0, 2.0],
+            "B": [1.0, 1.0, 3.0, 3.0],
+            "C": [2.0, 0.0, 4.0, 1.5],
+        })
+        self.assertEqual(pairs, [("A", "B"), ("B", "C")])
+        touching = placement.overlapping_pairs({
+            "A": [0.0, 0.0, 2.0, 2.0],
+            "B": [2.0, 0.0, 4.0, 2.0],
+        })
+        self.assertEqual(touching, [])
+
+    def test_degenerate_boxes_refuse(self):
+        with self.assertRaises(PlacementError):
+            placement.overlapping_pairs({
+                "A": [0.0, 0.0, 0.0, 2.0]})

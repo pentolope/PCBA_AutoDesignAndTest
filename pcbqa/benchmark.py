@@ -15,13 +15,23 @@ contract, and the shape itself enforces the honesty rules:
     the physical-evidence identity its measurements consumed, and
     this schema version.
 
-Comparison logic lives with the consumers; this module owns only the
-record shapes and their fail-closed validation.
+``compare_reports`` is the only sanctioned way to place two reports
+side by side: it verifies schema compatibility, structured
+physical-evidence identity and metric-shape agreement before any
+number meets another, and it fails closed on anything unknown. Two
+reports that merely LOOK similar never compare by accident.
 """
 
 from __future__ import annotations
 
-SCHEMA_VERSION = "ab-metrics-2"
+SCHEMA_VERSION = "ab-metrics-3"
+
+#: Schema versions this comparator understands. A version outside
+#: this set - older, newer, or foreign - fails closed; an explicit
+#: migration rule would extend this map, never a guess.
+_COMPARABLE_SCHEMAS = {SCHEMA_VERSION}
+
+_EVIDENCE_KEYS = {"kind", "digest", "detail"}
 
 _SCOPES = ("net", "electrical-path", "board", "process")
 
@@ -127,10 +137,10 @@ def report(binding, metrics):
             not set(sha) <= set("0123456789abcdef"):
         raise BenchmarkError(
             "board_file_sha256 must be a 64-hex-character digest")
-    for key in ("toolkit_commit", "physical_evidence"):
-        if not binding[key]:
-            raise BenchmarkError(
-                "report binding needs a nonempty {}".format(key))
+    if not binding["toolkit_commit"]:
+        raise BenchmarkError(
+            "report binding needs a nonempty toolkit_commit")
+    _validate_evidence(binding["physical_evidence"])
     names = set()
     for metric in metrics:
         validate_metric(metric)
@@ -141,6 +151,131 @@ def report(binding, metrics):
         names.add(key)
     return {"kind": "ab-benchmark-report", "binding": dict(binding),
             "metrics": list(metrics)}
+
+
+def _validate_evidence(evidence):
+    """Structured physical-evidence identity: kind, digest, detail."""
+    if not isinstance(evidence, dict) or \
+            set(evidence) != _EVIDENCE_KEYS:
+        raise BenchmarkError(
+            "physical_evidence must be a structured identity with "
+            "exactly keys {} - free text cannot be compared, so it "
+            "cannot bind a report".format(sorted(_EVIDENCE_KEYS)))
+    digest = evidence["digest"]
+    if not (isinstance(digest, str) and len(digest) == 64
+            and set(digest) <= set("0123456789abcdef")):
+        raise BenchmarkError(
+            "physical_evidence digest must be a 64-hex-character "
+            "SHA-256, not {!r}".format(digest))
+    for key in ("kind", "detail"):
+        if not isinstance(evidence[key], str) or not evidence[key]:
+            raise BenchmarkError(
+                "physical_evidence needs a nonempty {}".format(key))
+    return evidence
+
+
+def compare_reports(report_a, report_b):
+    """Compare two reports, refusing every incompatibility.
+
+    Checks, in order: both are reports of this module's kind; both
+    schema versions are known to this comparator and equal (an
+    unknown version fails closed - never assume a foreign contract
+    matches); the structured physical evidence is identical in kind
+    and digest (numbers measured under different physics never meet);
+    and every metric name shared by both carries the same scope and
+    units. Board SHAs are expected to differ - that is the point of
+    A/B. Toolkit commits may differ: the versioned metric schema is
+    the semantic contract, and both commits are recorded in the
+    result for the reviewer.
+
+    The result pairs measured metrics (with delta = b - a), lists
+    blocked pairs where one side is unmeasured (with blocked_on),
+    and lists metrics only one report carries. Nothing numeric is
+    synthesized for an unmeasured side.
+    """
+    for label, report in (("a", report_a), ("b", report_b)):
+        if not isinstance(report, dict) or \
+                report.get("kind") != "ab-benchmark-report":
+            raise BenchmarkError(
+                "report {} is not an ab-benchmark-report".format(
+                    label))
+    binding_a = report_a["binding"]
+    binding_b = report_b["binding"]
+    for label, binding in (("a", binding_a), ("b", binding_b)):
+        if binding["schema_version"] not in _COMPARABLE_SCHEMAS:
+            raise BenchmarkError(
+                "report {} carries schema_version {!r}, which this "
+                "comparator does not know; unknown compatibility "
+                "fails closed".format(label,
+                                      binding["schema_version"]))
+    if binding_a["schema_version"] != binding_b["schema_version"]:
+        raise BenchmarkError(
+            "the reports carry different schema versions ({!r} vs "
+            "{!r}) and no migration rule exists".format(
+                binding_a["schema_version"],
+                binding_b["schema_version"]))
+    evidence_a = _validate_evidence(binding_a["physical_evidence"])
+    evidence_b = _validate_evidence(binding_b["physical_evidence"])
+    if evidence_a["kind"] != evidence_b["kind"] or \
+            evidence_a["digest"] != evidence_b["digest"]:
+        raise BenchmarkError(
+            "the reports consumed different physical evidence "
+            "({}:{}... vs {}:{}...); comparing them would mix "
+            "physics".format(
+                evidence_a["kind"], evidence_a["digest"][:12],
+                evidence_b["kind"], evidence_b["digest"][:12]))
+    metrics_a = {(m["scope"], m["name"]): m
+                 for m in report_a["metrics"]}
+    metrics_b = {(m["scope"], m["name"]): m
+                 for m in report_b["metrics"]}
+    compared = []
+    blocked = []
+    for key in sorted(set(metrics_a) & set(metrics_b)):
+        metric_a, metric_b = metrics_a[key], metrics_b[key]
+        scope, name = key
+        if metric_a["status"] == "measured" and \
+                metric_b["status"] == "measured":
+            if metric_a["units"] != metric_b["units"]:
+                raise BenchmarkError(
+                    "metric {} carries units {!r} vs {!r}; one name "
+                    "with two units is a contract violation, not a "
+                    "conversion opportunity".format(
+                        key, metric_a["units"], metric_b["units"]))
+            compared.append({
+                "scope": scope, "name": name,
+                "units": metric_a["units"],
+                "a": metric_a["value"], "b": metric_b["value"],
+                "delta_b_minus_a": metric_b["value"]
+                - metric_a["value"],
+                "evidence_classes": [metric_a["evidence_class"],
+                                     metric_b["evidence_class"]],
+            })
+        else:
+            entry = {"scope": scope, "name": name}
+            for side, metric in (("a", metric_a), ("b", metric_b)):
+                if metric["status"] == "unmeasured":
+                    entry["{}_blocked_on".format(side)] = \
+                        metric["blocked_on"]
+                else:
+                    entry["{}_value".format(side)] = metric["value"]
+            blocked.append(entry)
+    return {
+        "kind": "ab-comparison",
+        "binding": {
+            "schema_version": binding_a["schema_version"],
+            "physical_evidence": evidence_a,
+            "board_file_sha256_a": binding_a["board_file_sha256"],
+            "board_file_sha256_b": binding_b["board_file_sha256"],
+            "toolkit_commit_a": binding_a["toolkit_commit"],
+            "toolkit_commit_b": binding_b["toolkit_commit"],
+        },
+        "compared": compared,
+        "blocked": blocked,
+        "only_a": sorted("{}:{}".format(*key) for key in
+                         set(metrics_a) - set(metrics_b)),
+        "only_b": sorted("{}:{}".format(*key) for key in
+                         set(metrics_b) - set(metrics_a)),
+    }
 
 
 def comparable(metric_a, metric_b):

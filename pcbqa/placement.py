@@ -227,3 +227,239 @@ def validate_constraint_set(constraints):
                 "orientation constraint allows only {}".format(
                     reference, rotation, allowed))
     return constraints
+
+
+_POSITION_KEYS = {"x_mm", "y_mm", "rotation_deg"}
+
+
+def _position(positions, reference, context):
+    record = positions.get(reference)
+    if record is None:
+        raise PlacementError(
+            "{} names component {!r}, which the position map does "
+            "not carry; evaluation refuses rather than skipping a "
+            "constrained part".format(context, reference))
+    if not isinstance(record, dict) or \
+            set(record) != _POSITION_KEYS:
+        raise PlacementError(
+            "position of {!r} must carry exactly {}".format(
+                reference, sorted(_POSITION_KEYS)))
+    for key in _POSITION_KEYS:
+        value = record[key]
+        if isinstance(value, bool) or \
+                not isinstance(value, (int, float)) or \
+                value != value or \
+                value in (float("inf"), float("-inf")):
+            raise PlacementError(
+                "position of {!r} has non-finite {}".format(
+                    reference, key))
+    return record
+
+
+def _distance(one, other):
+    return ((one["x_mm"] - other["x_mm"]) ** 2
+            + (one["y_mm"] - other["y_mm"]) ** 2) ** 0.5
+
+
+def evaluate_placement(positions, constraints, outline=None,
+                       fixed_tolerance_mm=0.001):
+    """Judge actual component positions against a constraint set.
+
+    This is the toolkit's half of the placement loop: an optimizer
+    may have produced the coordinates however it liked, but whether
+    the SEMANTIC constraints hold is decided here, deterministically,
+    from the candidate's own positions - never from the optimizer's
+    claims. ``positions`` maps reference -> {x_mm, y_mm,
+    rotation_deg}; a constrained reference missing from the map
+    refuses the whole evaluation.
+
+    Statuses per constraint:
+      * ``satisfied`` / ``violated`` - the constraint has a
+        threshold and the measurement answers it;
+      * ``unthresholded`` - measured (functional_block without
+        max_spread_mm reports its spread) but nothing to pass or
+        fail;
+      * ``not_applicable`` - nothing to evaluate on final positions
+        (swap_group: permutation freedom, not a geometric predicate);
+      * ``not_evaluable`` - the needed context is absent (board_edge
+        without an outline; a degenerate ordering axis). Fail-closed
+        callers treat these as blocking, and the summary's ``ok`` is
+        true only with zero violated AND zero not_evaluable.
+
+    ``outline`` currently supports {"kind": "circle", "center_mm":
+    [x, y], "radius_mm": r}; an unknown outline kind refuses.
+    """
+    validate_constraint_set(constraints)
+    if outline is not None:
+        if not isinstance(outline, dict) or \
+                outline.get("kind") != "circle":
+            raise PlacementError(
+                "outline kind {!r} is not supported; supported "
+                "outlines: circle".format(
+                    outline.get("kind") if isinstance(outline, dict)
+                    else outline))
+        center = {"x_mm": outline["center_mm"][0],
+                  "y_mm": outline["center_mm"][1],
+                  "rotation_deg": 0.0}
+        radius = outline["radius_mm"]
+    results = []
+    for index, constraint in enumerate(constraints):
+        kind = constraint["kind"]
+        entry = {"index": index, "kind": kind,
+                 "constraint": constraint}
+        context = "{} constraint #{}".format(kind, index)
+        if kind == "fixed":
+            record = _position(positions, constraint["reference"],
+                               context)
+            offset = _distance(record, {
+                "x_mm": constraint["position_mm"][0],
+                "y_mm": constraint["position_mm"][1],
+                "rotation_deg": 0.0})
+            rotation_ok = True
+            if "rotation_deg" in constraint:
+                rotation_ok = (record["rotation_deg"] % 360.0
+                               == constraint["rotation_deg"] % 360.0)
+            entry["measured"] = {"offset_mm": round(offset, 6),
+                                 "rotation_matches": rotation_ok}
+            entry["status"] = "satisfied" \
+                if offset <= fixed_tolerance_mm and rotation_ok \
+                else "violated"
+        elif kind == "proximity":
+            reference = _position(positions,
+                                  constraint["reference"], context)
+            anchor = _position(positions, constraint["anchor"],
+                               context)
+            distance = _distance(reference, anchor)
+            entry["measured"] = {"distance_mm": round(distance, 6)}
+            entry["status"] = "satisfied" \
+                if distance <= constraint["max_distance_mm"] \
+                else "violated"
+        elif kind == "functional_block":
+            members = [_position(positions, member, context)
+                       for member in constraint["members"]]
+            spread = max(
+                _distance(one, other)
+                for i, one in enumerate(members)
+                for other in members[i + 1:])
+            entry["measured"] = {"max_pairwise_mm": round(spread, 6)}
+            if "max_spread_mm" in constraint:
+                entry["status"] = "satisfied" \
+                    if spread <= constraint["max_spread_mm"] \
+                    else "violated"
+            else:
+                entry["status"] = "unthresholded"
+        elif kind == "separation":
+            group_a = [_position(positions, member, context)
+                       for member in constraint["group_a"]]
+            group_b = [_position(positions, member, context)
+                       for member in constraint["group_b"]]
+            closest = min(_distance(one, other)
+                          for one in group_a for other in group_b)
+            entry["measured"] = {"min_distance_mm": round(closest, 6)}
+            entry["status"] = "satisfied" \
+                if closest >= constraint["min_distance_mm"] \
+                else "violated"
+        elif kind == "orientation":
+            record = _position(positions, constraint["reference"],
+                               context)
+            allowed = {float(value) % 360.0 for value in
+                       constraint["allowed_rotations_deg"]}
+            entry["measured"] = {
+                "rotation_deg": record["rotation_deg"] % 360.0}
+            entry["status"] = "satisfied" \
+                if record["rotation_deg"] % 360.0 in allowed \
+                else "violated"
+        elif kind == "board_edge":
+            record = _position(positions, constraint["reference"],
+                               context)
+            if outline is None:
+                entry["status"] = "not_evaluable"
+                entry["measured"] = {
+                    "reason": "no board outline was supplied; edge "
+                              "distance cannot be measured"}
+            else:
+                edge = radius - _distance(record, center)
+                entry["measured"] = {
+                    "edge_distance_mm": round(edge, 6)}
+                entry["status"] = "satisfied" \
+                    if 0.0 <= edge <= constraint["max_distance_mm"] \
+                    else "violated"
+        elif kind == "ordering":
+            records = [_position(positions, reference, context)
+                       for reference in constraint["references"]]
+            first, last = records[0], records[-1]
+            axis = _distance(first, last)
+            if axis == 0.0:
+                entry["status"] = "not_evaluable"
+                entry["measured"] = {
+                    "reason": "the first and last components "
+                              "coincide; the ordering axis is "
+                              "degenerate"}
+            else:
+                unit = ((last["x_mm"] - first["x_mm"]) / axis,
+                        (last["y_mm"] - first["y_mm"]) / axis)
+                projections = [
+                    round((record["x_mm"] - first["x_mm"]) * unit[0]
+                          + (record["y_mm"] - first["y_mm"])
+                          * unit[1], 6)
+                    for record in records]
+                monotonic = all(
+                    earlier < later for earlier, later in
+                    zip(projections, projections[1:]))
+                entry["measured"] = {
+                    "projections_mm": projections}
+                entry["status"] = "satisfied" if monotonic \
+                    else "violated"
+        else:  # swap_group
+            entry["status"] = "not_applicable"
+            entry["measured"] = {
+                "reason": "swap groups grant permutation freedom; "
+                          "they impose no geometric predicate on "
+                          "final positions"}
+        results.append(entry)
+    violated = [entry["index"] for entry in results
+                if entry["status"] == "violated"]
+    not_evaluable = [entry["index"] for entry in results
+                     if entry["status"] == "not_evaluable"]
+    summary = {
+        "satisfied": sum(1 for entry in results
+                         if entry["status"] == "satisfied"),
+        "violated": violated,
+        "unthresholded": [entry["index"] for entry in results
+                          if entry["status"] == "unthresholded"],
+        "not_applicable": sum(1 for entry in results
+                              if entry["status"] == "not_applicable"),
+        "not_evaluable": not_evaluable,
+        "ok": not violated and not not_evaluable,
+    }
+    return {"results": results, "summary": summary}
+
+
+def overlapping_pairs(boxes):
+    """Strictly overlapping axis-aligned boxes among {ref: [minx,
+    miny, maxx, maxy]} (millimetres). Touching edges do not overlap.
+    The caller decides which geometry to box (courtyards where they
+    exist); this function only answers the collision question - a
+    scatter is called non-overlapping ONLY when this says so."""
+    for reference, box in boxes.items():
+        if not (isinstance(box, (list, tuple)) and len(box) == 4
+                and all(isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                        and value == value
+                        and value not in (float("inf"),
+                                          float("-inf"))
+                        for value in box)
+                and box[0] < box[2] and box[1] < box[3]):
+            raise PlacementError(
+                "box of {!r} must be finite [minx, miny, maxx, "
+                "maxy] with positive extent".format(reference))
+    pairs = []
+    names = sorted(boxes)
+    for i, one in enumerate(names):
+        a = boxes[one]
+        for other in names[i + 1:]:
+            b = boxes[other]
+            if a[0] < b[2] and b[0] < a[2] \
+                    and a[1] < b[3] and b[1] < a[3]:
+                pairs.append((one, other))
+    return pairs

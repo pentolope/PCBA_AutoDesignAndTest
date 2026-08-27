@@ -23,6 +23,13 @@ from __future__ import annotations
 
 from .fidelity import SimulationError, validate_requirement
 
+#: The reference node. Contribution closure does not propagate
+#: through it: two subcircuits that share only the reference are
+#: electrically independent for the measurements this contract
+#: supports (ideal sources pin their nodes), and over-merging them
+#: would let one subcircuit's strong model bless another's weak one.
+GROUND_NODE = "0"
+
 _KNOWN_SCENARIO_KEYS = {
     "name", "description", "elements", "analyses", "measurements",
     "operating_conditions", "required_coverage",
@@ -212,6 +219,11 @@ def validate_scenario(scenario):
         _require(isinstance(measurement["node"], str)
                  and measurement["node"],
                  "measurement {!r} needs a node".format(name))
+        _require(measurement["node"] != GROUND_NODE,
+                 "measurement {!r} measures the reference node, "
+                 "which is identically zero; a meaningless "
+                 "measurement refuses instead of trivially "
+                 "passing".format(name))
         assertion = measurement.get("assertion")
         if assertion is not None:
             _require(isinstance(assertion, dict)
@@ -256,3 +268,194 @@ def check_assertion(assertion, value):
     if assertion["op"] == ">=":
         return value >= assertion["value"]
     return abs(value - assertion["value"]) <= assertion["tolerance"]
+
+
+def measurement_contributors(scenario, measurement):
+    """The elements whose behavior can reach one measured node.
+
+    Connectivity closure from the measurement's node through every
+    non-reference node: an element touching a reachable node
+    contributes, and its other non-reference nodes become reachable.
+    This deliberately over-includes (an ideal source does isolate its
+    sides; inclusion is the conservative direction - it can only
+    demand MORE evidence, never less) and never propagates through
+    the reference node, so independent subcircuits stay independent.
+    """
+    adjacency = {}
+    for element in scenario["elements"]:
+        for node in element["nodes"]:
+            if node != GROUND_NODE:
+                adjacency.setdefault(node, []).append(element)
+    frontier = [measurement["node"]]
+    seen_nodes = set()
+    contributors = {}
+    while frontier:
+        node = frontier.pop()
+        if node in seen_nodes:
+            continue
+        seen_nodes.add(node)
+        for element in adjacency.get(node, []):
+            if element["name"] in contributors:
+                continue
+            contributors[element["name"]] = element
+            for other in element["nodes"]:
+                if other != GROUND_NODE and other not in seen_nodes:
+                    frontier.append(other)
+    return [contributors[name] for name in sorted(contributors)]
+
+
+def contributor_coverage_report(registry, scenario):
+    """Per-measurement, per-contributor coverage. No blessing.
+
+    The invariant this enforces: every model whose behavior
+    contributes to a claimed measurement must INDIVIDUALLY satisfy
+    the required evidence policy for each phenomenon it covers, and
+    each measurement needs at least one acceptable provider per
+    required phenomenon among ITS OWN contributors. Satisfaction is
+    therefore never existential over the whole scenario: one strong
+    vendor model can neither mask a weak model in the same path nor
+    stand in for evidence a different measurement's path lacks.
+    Ideal primitive elements (resistors, sources...) are part of the
+    declared question, exact by declaration; they are listed so a
+    reviewer sees them, and they neither provide nor require
+    phenomenon evidence.
+    """
+    validate_scenario(scenario)
+    requirement = scenario.get("required_coverage")
+    per_measurement = {}
+    satisfied = None if requirement is None else True
+    for measurement in scenario["measurements"]:
+        contributors = measurement_contributors(scenario, measurement)
+        models = {}
+        ideal = {}
+        for element in contributors:
+            if element["kind"] == "model_instance":
+                models[element["name"]] = registry.get(
+                    element["model"])
+            else:
+                ideal[element["name"]] = element["kind"]
+        entry = {
+            "contributing_elements": sorted(
+                element["name"] for element in contributors),
+            "ideal_elements": dict(sorted(ideal.items())),
+            "models": {name: model["identity"]
+                       for name, model in sorted(models.items())},
+            "per_phenomenon": None,
+            "met": None,
+        }
+        if requirement is not None:
+            per_phenomenon = {}
+            all_met = True
+            for phenomenon, accepted in sorted(requirement.items()):
+                providers = {}
+                violating = []
+                for name, model in sorted(models.items()):
+                    evidence = model["coverage"].get(phenomenon)
+                    if evidence is None:
+                        continue
+                    providers[name] = {
+                        "identity": model["identity"],
+                        "evidence_class": evidence,
+                        "accepted": evidence in accepted,
+                    }
+                    if evidence not in accepted:
+                        violating.append(name)
+                met = bool(providers) and not violating
+                all_met = all_met and met
+                per_phenomenon[phenomenon] = {
+                    "accepted_classes": list(accepted),
+                    "providers": providers,
+                    "violating": violating,
+                    "met": met,
+                    "why": ("every contributing provider is "
+                            "individually acceptable" if met else
+                            "contributor(s) {} cover this phenomenon "
+                            "at an unaccepted class".format(violating)
+                            if violating else
+                            "no contributing model covers this "
+                            "phenomenon at all"),
+                }
+            entry["per_phenomenon"] = per_phenomenon
+            entry["met"] = all_met
+            satisfied = satisfied and all_met
+        per_measurement[measurement["name"]] = entry
+    return {
+        "requirement": requirement,
+        "satisfied": satisfied,
+        "per_measurement": per_measurement,
+        "meaning": "coverage is judged per measurement over its own "
+                   "contribution closure: every contributing model "
+                   "covering a required phenomenon must be "
+                   "individually acceptable, and each measurement "
+                   "needs at least one acceptable provider of each "
+                   "required phenomenon among its own contributors",
+    }
+
+
+def condition_coverage(registry, scenario):
+    """How each referenced model relates to the requested conditions.
+
+    A condition a simulator applies (the ngspice backend genuinely
+    sets the simulator temperature) is NOT thereby covered by every
+    model in the scenario: a model fixed at a reference value is only
+    valid there, and a model that declares nothing about a condition
+    is NOT covered - undeclared never reads as insensitive. Ideal
+    scenario-declared elements are exact at their declared values by
+    definition and carry no condition dependence, which is stated
+    here rather than assumed silently.
+    """
+    validate_scenario(scenario)
+    requested_conditions = scenario.get("operating_conditions")
+    if requested_conditions is None:
+        return {"conditions": {}, "fully_covered": None,
+                "meaning": "no operating conditions were requested; "
+                           "nothing is claimed about any"}
+    models = {name: registry.get(name)
+              for name in referenced_models(scenario)}
+    conditions = {}
+    fully_covered = True
+    for name, requested in sorted(requested_conditions.items()):
+        per_model = {}
+        for identity, model in sorted(models.items()):
+            declared = (model.get("conditions") or {}).get(name)
+            if declared is None:
+                per_model[identity] = {
+                    "kind": "undeclared",
+                    "matches_requested": None,
+                    "detail": "the model declares nothing about this "
+                              "condition; undeclared is not covered "
+                              "and never reads as insensitive"}
+                fully_covered = False
+            elif declared["kind"] == "parameterized":
+                low, high = declared["range"]
+                inside = low <= requested <= high
+                per_model[identity] = {
+                    "kind": "parameterized",
+                    "range": [low, high],
+                    "matches_requested": inside}
+                fully_covered = fully_covered and inside
+            else:
+                matches = declared["value"] == requested
+                per_model[identity] = {
+                    "kind": "fixed-reference",
+                    "reference_value": declared["value"],
+                    "matches_requested": matches,
+                    "detail": None if matches else
+                    "the model is fixed at {} {} and the scenario "
+                    "requests {}; the result does NOT represent the "
+                    "requested condition for this model".format(
+                        declared["value"], declared["units"],
+                        requested)}
+                fully_covered = fully_covered and matches
+        conditions[name] = {"requested": requested,
+                            "models": per_model}
+    return {
+        "conditions": conditions,
+        "fully_covered": fully_covered,
+        "meaning": "a simulator-applied condition never implies "
+                   "model condition coverage; fully_covered is true "
+                   "only when every referenced model is parameterized "
+                   "over, or fixed exactly at, every requested "
+                   "condition (ideal declared elements are exact by "
+                   "declaration and are not model claims)",
+    }

@@ -388,3 +388,285 @@ class TheDigitalContractSeparatesDutFromChecker(unittest.TestCase):
 
 if __name__ == "__main__":                        # pragma: no cover
     unittest.main()
+
+
+def _interconnect(identity, evidence="geometry-derived",
+                  conditions=None):
+    record = {
+        "identity": identity, "kind": "board-interconnect",
+        "coverage": {"interconnect_dc": evidence},
+        "provenance": {"source": "test fixture"},
+        "spice": ".subckt {} a b\nR1 a b 0.01\n.ends".format(
+            identity),
+    }
+    if conditions is not None:
+        record["conditions"] = conditions
+    return record
+
+
+class CoverageIsContributorScoped(unittest.TestCase):
+    """The completeness invariant: every model contributing to a
+    measurement must individually satisfy the required policy."""
+
+    _REQUIRE_DC = {"interconnect_dc": ["geometry-derived"]}
+
+    def _two_link_scenario(self):
+        """Source -> strong link -> weak link -> load, measured at
+        the far end: both links contribute to the measurement."""
+        return {
+            "name": "two-links",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src",
+                 "nodes": ["in", "0"], "value": 5.0},
+                {"kind": "model_instance", "name": "strong_link",
+                 "nodes": ["in", "mid"], "model": "strong"},
+                {"kind": "model_instance", "name": "weak_link",
+                 "nodes": ["mid", "out"], "model": "weak"},
+                {"kind": "resistor", "name": "load",
+                 "nodes": ["out", "0"], "value": 50.0},
+            ],
+            "analyses": [{"kind": "op"}],
+            "measurements": [
+                {"name": "vout", "kind": "op_voltage",
+                 "node": "out"}],
+            "required_coverage": dict(self._REQUIRE_DC),
+        }
+
+    def test_one_strong_model_cannot_mask_a_weak_contributor(self):
+        registry = fidelity.ModelRegistry([
+            _interconnect("strong"),
+            _interconnect("weak", evidence="assumed-behavioral"),
+        ])
+        report = scenario.contributor_coverage_report(
+            registry, self._two_link_scenario())
+        self.assertFalse(report["satisfied"])
+        phenomenon = report["per_measurement"]["vout"][
+            "per_phenomenon"]["interconnect_dc"]
+        self.assertEqual(phenomenon["violating"], ["weak_link"])
+        with self.assertRaises(SimulationError):
+            ngspice.run_scenario(fidelity.ModelRegistry([
+                _interconnect("strong"),
+                _interconnect("weak",
+                              evidence="assumed-behavioral"),
+            ]), self._two_link_scenario(), tempfile.mkdtemp())
+
+    def _two_island_scenario(self, measure_node):
+        """Two subcircuits sharing only the reference node: a strong
+        link island and a weak link island."""
+        return {
+            "name": "two-islands",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src_a",
+                 "nodes": ["a_in", "0"], "value": 5.0},
+                {"kind": "model_instance", "name": "strong_link",
+                 "nodes": ["a_in", "a_out"], "model": "strong"},
+                {"kind": "resistor", "name": "load_a",
+                 "nodes": ["a_out", "0"], "value": 50.0},
+                {"kind": "vsource_dc", "name": "src_b",
+                 "nodes": ["b_in", "0"], "value": 5.0},
+                {"kind": "model_instance", "name": "weak_link",
+                 "nodes": ["b_in", "b_out"], "model": "weak"},
+                {"kind": "resistor", "name": "load_b",
+                 "nodes": ["b_out", "0"], "value": 50.0},
+            ],
+            "analyses": [{"kind": "op"}],
+            "measurements": [
+                {"name": "v", "kind": "op_voltage",
+                 "node": measure_node}],
+            "required_coverage": dict(self._REQUIRE_DC),
+        }
+
+    def test_an_unrelated_strong_model_satisfies_nothing(self):
+        """Measuring the weak island: the strong model elsewhere in
+        the scenario is not a contributor and cannot help."""
+        registry = fidelity.ModelRegistry([
+            _interconnect("strong"),
+            _interconnect("weak", evidence="assumed-behavioral"),
+        ])
+        report = scenario.contributor_coverage_report(
+            registry, self._two_island_scenario("b_out"))
+        self.assertFalse(report["satisfied"])
+        entry = report["per_measurement"]["v"]
+        self.assertNotIn("strong_link",
+                         entry["contributing_elements"])
+
+    def test_a_scoped_measurement_needs_only_its_own_path(self):
+        """Measuring the strong island: the weak model in the OTHER
+        island is not a contributor, so it is not required to be
+        strong - scoping never over-demands."""
+        registry = fidelity.ModelRegistry([
+            _interconnect("strong"),
+            _interconnect("weak", evidence="assumed-behavioral"),
+        ])
+        report = scenario.contributor_coverage_report(
+            registry, self._two_island_scenario("a_out"))
+        self.assertTrue(report["satisfied"])
+
+    def test_mixed_phenomena_stay_independent(self):
+        """A strong device_electrical contributor in the path never
+        answers an interconnect_dc requirement: with no DC provider
+        among the contributors the measurement is unmet."""
+        registry = fidelity.ModelRegistry([{
+            "identity": "vendor-part", "kind": "device",
+            "coverage": {"device_electrical": "vendor-spice"},
+            "provenance": {"source": "vendor model"},
+            "spice": ".subckt vendor-part a b\nR1 a b 10.0\n.ends",
+        }])
+        mixed = {
+            "name": "mixed",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src",
+                 "nodes": ["in", "0"], "value": 5.0},
+                {"kind": "model_instance", "name": "u1",
+                 "nodes": ["in", "out"], "model": "vendor-part"},
+                {"kind": "resistor", "name": "load",
+                 "nodes": ["out", "0"], "value": 50.0},
+            ],
+            "analyses": [{"kind": "op"}],
+            "measurements": [
+                {"name": "vout", "kind": "op_voltage",
+                 "node": "out"}],
+            "required_coverage": {
+                "interconnect_dc": ["geometry-derived"]},
+        }
+        report = scenario.contributor_coverage_report(
+            fidelity.ModelRegistry([{
+                "identity": "vendor-part", "kind": "device",
+                "coverage": {"device_electrical": "vendor-spice"},
+                "provenance": {"source": "vendor model"},
+            }]), mixed)
+        self.assertFalse(report["satisfied"])
+        phenomenon = report["per_measurement"]["vout"][
+            "per_phenomenon"]["interconnect_dc"]
+        self.assertEqual(phenomenon["providers"], {})
+        self.assertIn("no contributing model", phenomenon["why"])
+
+    def test_measuring_the_reference_node_refuses(self):
+        broken = _rc_scenario()
+        broken["measurements"][0]["node"] = "0"
+        with self.assertRaises(SimulationError):
+            scenario.validate_scenario(broken)
+
+
+class ConditionCoverageIsHonest(unittest.TestCase):
+
+    _FIXED_20C = {"temperature_c": {
+        "kind": "fixed-reference", "value": 20.0, "units": "C",
+        "source": "IEC 60028 reference temperature"}}
+
+    def _link_scenario(self, temperature, conditions):
+        return {
+            "name": "condition-check",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src",
+                 "nodes": ["in", "0"], "value": 5.0},
+                {"kind": "model_instance", "name": "link",
+                 "nodes": ["in", "out"], "model": "link-model"},
+                {"kind": "resistor", "name": "load",
+                 "nodes": ["out", "0"], "value": 50.0},
+            ],
+            "analyses": [{"kind": "op"}],
+            "measurements": [
+                {"name": "vout", "kind": "op_voltage",
+                 "node": "out"}],
+            "operating_conditions": {"temperature_c": temperature},
+        }, fidelity.ModelRegistry([
+            _interconnect("link-model", conditions=conditions)])
+
+    def test_simulator_condition_never_covers_undeclared_models(
+            self):
+        sim_scenario, registry = self._link_scenario(85.0, None)
+        coverage = scenario.condition_coverage(registry,
+                                               sim_scenario)
+        self.assertFalse(coverage["fully_covered"])
+        entry = coverage["conditions"]["temperature_c"]["models"][
+            "link-model"]
+        self.assertEqual(entry["kind"], "undeclared")
+
+    def test_a_fixed_reference_mismatch_is_flagged(self):
+        """An 85 C scenario with a 20 C-fixed interconnect model is
+        explicitly NOT fully covered, and the flag names the
+        mismatch."""
+        sim_scenario, registry = self._link_scenario(
+            85.0, self._FIXED_20C)
+        coverage = scenario.condition_coverage(registry,
+                                               sim_scenario)
+        self.assertFalse(coverage["fully_covered"])
+        entry = coverage["conditions"]["temperature_c"]["models"][
+            "link-model"]
+        self.assertIs(entry["matches_requested"], False)
+        self.assertIn("does NOT represent", entry["detail"])
+
+    def test_a_matching_reference_is_covered(self):
+        sim_scenario, registry = self._link_scenario(
+            20.0, self._FIXED_20C)
+        coverage = scenario.condition_coverage(registry,
+                                               sim_scenario)
+        self.assertTrue(coverage["fully_covered"])
+
+    def test_a_parameterized_model_covers_its_range_only(self):
+        parameterized = {"temperature_c": {
+            "kind": "parameterized", "range": [-40.0, 125.0],
+            "units": "C", "source": "vendor model card"}}
+        sim_scenario, registry = self._link_scenario(85.0,
+                                                     parameterized)
+        coverage = scenario.condition_coverage(registry,
+                                               sim_scenario)
+        self.assertTrue(coverage["fully_covered"])
+        sim_scenario, registry = self._link_scenario(150.0,
+                                                     parameterized)
+        coverage = scenario.condition_coverage(registry,
+                                               sim_scenario)
+        self.assertFalse(coverage["fully_covered"])
+
+    def test_the_result_carries_condition_coverage(self):
+        sim_scenario, registry = self._link_scenario(
+            85.0, self._FIXED_20C)
+        sim_scenario["required_coverage"] = {
+            "interconnect_dc": ["geometry-derived"]}
+        result = ngspice.run_scenario(registry, sim_scenario,
+                                      tempfile.mkdtemp())
+        self.assertFalse(
+            result["condition_coverage"]["fully_covered"])
+
+
+class TheRealEngineRunsTransients(unittest.TestCase):
+
+    def test_rc_charge_reaches_the_supply(self):
+        """With a real engine present: a 1 kohm / 1 uF lowpass driven
+        by 1 V DC sits at ~1 V after 10 time constants, and the
+        transient vector is read from the tran plot, not the op
+        plot."""
+        backend = ngspice.backend_identity()
+        if not backend["available"]:
+            self.skipTest("no ngspice engine on this machine")
+        lowpass = {
+            "name": "rc-lowpass-charge",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src",
+                 "nodes": ["in", "0"], "value": 1.0},
+                {"kind": "resistor", "name": "series",
+                 "nodes": ["in", "out"], "value": 1000.0},
+                {"kind": "capacitor", "name": "shunt",
+                 "nodes": ["out", "0"], "value": 1e-6},
+            ],
+            "analyses": [{"kind": "op"},
+                         {"kind": "tran", "step_s": 1e-5,
+                          "stop_s": 1e-2}],
+            "measurements": [
+                {"name": "settled", "kind": "op_voltage",
+                 "node": "out",
+                 "assertion": {"op": "within", "value": 1.0,
+                               "tolerance": 0.001}},
+                {"name": "charged", "kind": "tran_final_voltage",
+                 "node": "out",
+                 "assertion": {"op": ">=", "value": 0.99}},
+            ],
+        }
+        result = ngspice.run_scenario(
+            fidelity.ModelRegistry(), lowpass, tempfile.mkdtemp())
+        self.assertEqual(result["status"], "ran")
+        self.assertTrue(result["measurements"]["settled"]["passed"])
+        self.assertTrue(result["measurements"]["charged"]["passed"])
+        self.assertGreaterEqual(
+            result["measurements"]["charged"]["value"], 0.99)

@@ -160,13 +160,17 @@ class ExtractedInterconnectsEnterSimulationHonestly(unittest.TestCase):
         return extract.extract_net(_board_with_net(), "SIG", COPPER,
                                    THICKNESS)
 
+    def _physical_inputs(self):
+        return {"copper_thickness_mm": COPPER,
+                "board_thickness_mm": THICKNESS}
+
     def test_the_model_covers_only_dc(self):
         """The derived model registers cleanly, covers EXACTLY
         interconnect_dc at geometry-derived, and cannot satisfy an
         interconnect_si requirement - geometry-derived DC data never
         becomes a transmission-line model by renaming."""
         record = extract.interconnect_model_from_net(
-            self._net_record(), "a" * 64)
+            self._net_record(), "a" * 64, self._physical_inputs())
         registry = fidelity.ModelRegistry([record])
         self.assertEqual(record["coverage"],
                          {"interconnect_dc": "geometry-derived"})
@@ -183,10 +187,10 @@ class ExtractedInterconnectsEnterSimulationHonestly(unittest.TestCase):
 
     def test_spice_needs_the_two_terminal_assertion(self):
         without = extract.interconnect_model_from_net(
-            self._net_record(), "a" * 64)
+            self._net_record(), "a" * 64, self._physical_inputs())
         self.assertNotIn("spice", without)
         with_assertion = extract.interconnect_model_from_net(
-            self._net_record(), "a" * 64,
+            self._net_record(), "a" * 64, self._physical_inputs(),
             two_terminal_asserted_by="test author")
         self.assertIn(".subckt", with_assertion["spice"])
         self.assertEqual(
@@ -196,3 +200,126 @@ class ExtractedInterconnectsEnterSimulationHonestly(unittest.TestCase):
 
 if __name__ == "__main__":                        # pragma: no cover
     unittest.main()
+
+
+class TheEvidenceChainSurvivesIntoSimulation(unittest.TestCase):
+
+    def _net_record(self, copper=COPPER):
+        return extract.extract_net(_board_with_net(), "SIG", copper,
+                                   THICKNESS)
+
+    def _inputs(self, copper=COPPER):
+        return {"copper_thickness_mm": copper,
+                "board_thickness_mm": THICKNESS}
+
+    def test_the_model_carries_its_derivation(self):
+        record = extract.interconnect_model_from_net(
+            self._net_record(), "a" * 64, self._inputs())
+        derivation = record["derivation"]
+        self.assertEqual(derivation["chain"][0],
+                         "approved-fabrication-evidence")
+        self.assertEqual(derivation["chain"][-1],
+                         "simulation-model")
+        self.assertEqual(derivation["extract_version"],
+                         extract.EXTRACT_VERSION)
+        self.assertEqual(
+            sorted(derivation["copper_thickness_mm"]),
+            ["B.Cu", "F.Cu"])
+        self.assertEqual(len(derivation["physical_inputs_sha256"]),
+                         64)
+        self.assertIn("IEC 60028",
+                      derivation["resistivity"]["source"])
+
+    def test_different_physical_assumptions_are_different_models(
+            self):
+        """Two extractions of the same board under different copper
+        thicknesses must never be indistinguishable downstream: the
+        physical-input digest is part of the model identity."""
+        thick = extract.caller_declared_copper({"F.Cu": 0.04064,
+                                                "B.Cu": 0.04064})
+        one = extract.interconnect_model_from_net(
+            self._net_record(), "a" * 64, self._inputs())
+        other = extract.interconnect_model_from_net(
+            self._net_record(thick), "a" * 64, self._inputs(thick))
+        self.assertNotEqual(one["identity"], other["identity"])
+        self.assertIn("+phys:", one["identity"])
+
+    def test_a_missing_layer_refuses(self):
+        partial = extract.caller_declared_copper({"F.Cu": 0.035,
+                                                  "B.Cu": 0.035})
+        del partial["B.Cu"]
+        with self.assertRaises(ExtractionError):
+            extract.interconnect_model_from_net(
+                self._net_record(), "a" * 64,
+                {"copper_thickness_mm": partial,
+                 "board_thickness_mm": THICKNESS})
+
+    def test_the_iacs_reference_temperature_is_declared(self):
+        record = extract.interconnect_model_from_net(
+            self._net_record(), "a" * 64, self._inputs())
+        declared = record["conditions"]["temperature_c"]
+        self.assertEqual(declared["kind"], "fixed-reference")
+        self.assertEqual(declared["value"], 20.0)
+
+    def test_caller_resistivity_declares_no_temperature(self):
+        """With a caller-supplied resistivity no reference
+        temperature is known; the model declares nothing, and
+        condition coverage downstream fails closed instead of
+        assuming 20 C."""
+        board = _board_with_net()
+        net_record = extract.extract_net(
+            board, "SIG", COPPER, THICKNESS,
+            resistivity_ohm_m=1.68e-8)
+        record = extract.interconnect_model_from_net(
+            net_record, "a" * 64, self._inputs())
+        self.assertNotIn("conditions", record)
+
+
+class ApprovedEvidenceCannotBeForged(unittest.TestCase):
+
+    def test_the_public_constructor_refuses_the_label(self):
+        with self.assertRaises(ExtractionError):
+            extract.physical_parameter(
+                0.035, "mm", "approved-evidence",
+                "totally-real-catalog-record")
+
+    def test_a_hand_built_record_without_the_digest_refuses(self):
+        forged = {"value": 0.035, "units": "mm",
+                  "source_type": "approved-evidence",
+                  "source": "made-up", "digest": "short",
+                  "applicability": "none"}
+        with self.assertRaises(ExtractionError):
+            extract.validate_parameter(forged, "forged copper")
+
+    def test_the_real_resolver_still_mints(self):
+        parameters = extract.approved_finished_copper(
+            _snapshot(), {"F.Cu": ("external", 1.0)})
+        record = parameters["F.Cu"]
+        self.assertEqual(record["source_type"], "approved-evidence")
+        self.assertEqual(len(record["digest"]), 64)
+        self.assertEqual(record["value"], 0.04064)
+
+
+class RequirementsDeriveThePhysicalInputs(unittest.TestCase):
+
+    _REQUIREMENTS = {"copper_layers": 4, "board_thickness_mm": 1.6,
+                     "outer_copper_oz": 1.0, "inner_copper_oz": 0.5}
+
+    def test_assignments_follow_the_stack(self):
+        assignments = extract.copper_assignments_from_requirements(
+            self._REQUIREMENTS, ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
+        self.assertEqual(assignments["F.Cu"], ("external", 1.0))
+        self.assertEqual(assignments["B.Cu"], ("external", 1.0))
+        self.assertEqual(assignments["In1.Cu"], ("internal", 0.5))
+
+    def test_a_layer_count_contradiction_refuses(self):
+        with self.assertRaises(ExtractionError):
+            extract.copper_assignments_from_requirements(
+                self._REQUIREMENTS, ["F.Cu", "B.Cu"])
+
+    def test_thickness_is_derived_and_digest_bound(self):
+        parameter = extract.requirements_board_thickness(
+            self._REQUIREMENTS, "b" * 64)
+        self.assertEqual(parameter["source_type"], "derived")
+        self.assertEqual(parameter["value"], 1.6)
+        self.assertEqual(parameter["digest"], "b" * 64)

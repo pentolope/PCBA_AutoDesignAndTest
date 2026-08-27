@@ -59,7 +59,90 @@ EVIDENCE_CLASSES = (
 
 _REQUIRED_MODEL_KEYS = {"identity", "kind", "coverage", "provenance"}
 _KNOWN_MODEL_KEYS = _REQUIRED_MODEL_KEYS | {"ports", "spice", "notes",
-                                            "omissions"}
+                                            "omissions", "conditions",
+                                            "derivation"}
+
+#: Operating conditions the subsystem understands today. Deliberately
+#: small: temperature is the one condition a backend already applies.
+#: Supply voltage, corners, frequency ranges and load conditions join
+#: this tuple when a model class genuinely declares them.
+CONDITIONS = ("temperature_c",)
+
+_CONDITION_KINDS = ("fixed-reference", "parameterized")
+_CONDITION_KEYS = {
+    "fixed-reference": {"kind", "value", "units", "source"},
+    "parameterized": {"kind", "range", "units", "source"},
+}
+
+
+def _condition_finite(label, value):
+    if isinstance(value, bool) or not isinstance(value, (int, float))             or value != value             or value in (float("inf"), float("-inf")):
+        raise SimulationError(
+            "{} must be a finite number, not {!r}".format(label,
+                                                          value))
+    return value
+
+
+def validate_conditions(conditions):
+    """A model's operating-condition declarations, strictly.
+
+    Each entry states how the model relates to ONE condition:
+    ``fixed-reference`` (the model's numbers are valid at exactly the
+    stated value - using them at any other requested value is NOT
+    covered) or ``parameterized`` (the model genuinely responds to
+    the condition across the stated closed range). A missing entry is
+    an honest absence: condition coverage treats it as NOT covered,
+    never as insensitive.
+    """
+    if not isinstance(conditions, dict) or not conditions:
+        raise SimulationError(
+            "conditions must be a nonempty dict of "
+            "condition name -> declaration")
+    for name, declaration in conditions.items():
+        if name not in CONDITIONS:
+            raise SimulationError(
+                "condition {!r} is not one of {}".format(
+                    name, list(CONDITIONS)))
+        if not isinstance(declaration, dict):
+            raise SimulationError(
+                "condition {!r} declaration must be a dict".format(
+                    name))
+        kind = declaration.get("kind")
+        if kind not in _CONDITION_KINDS:
+            raise SimulationError(
+                "condition {!r} kind {!r} is not one of {}".format(
+                    name, kind, list(_CONDITION_KINDS)))
+        expected = _CONDITION_KEYS[kind]
+        unknown = sorted(set(declaration) - expected)
+        missing = sorted(expected - set(declaration))
+        if unknown or missing:
+            raise SimulationError(
+                "condition {!r} declaration must carry exactly keys "
+                "{} (unknown {}, missing {})".format(
+                    name, sorted(expected), unknown, missing))
+        for key in ("units", "source"):
+            if not isinstance(declaration[key], str)                     or not declaration[key]:
+                raise SimulationError(
+                    "condition {!r} needs a nonempty {}".format(
+                        name, key))
+        if kind == "fixed-reference":
+            _condition_finite("condition {!r} value".format(name),
+                              declaration["value"])
+        else:
+            bounds = declaration["range"]
+            if not (isinstance(bounds, list) and len(bounds) == 2):
+                raise SimulationError(
+                    "condition {!r} range must be [low, high]".format(
+                        name))
+            low = _condition_finite(
+                "condition {!r} range low".format(name), bounds[0])
+            high = _condition_finite(
+                "condition {!r} range high".format(name), bounds[1])
+            if not low < high:
+                raise SimulationError(
+                    "condition {!r} range must satisfy "
+                    "low < high".format(name))
+    return conditions
 
 
 def validate_coverage(coverage):
@@ -136,6 +219,13 @@ def validate_model(record):
         raise SimulationError(
             "model {!r} omissions must be a list of stated "
             "gaps".format(record["identity"]))
+    if "conditions" in record:
+        validate_conditions(record["conditions"])
+    if "derivation" in record and \
+            not isinstance(record["derivation"], dict):
+        raise SimulationError(
+            "model {!r} derivation must be a dict recording the "
+            "evidence chain".format(record["identity"]))
     return record
 
 

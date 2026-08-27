@@ -1,59 +1,251 @@
-"""The ngspice backend: deterministic decks, offline runs, honest results.
+"""The ngspice backend: deterministic decks, honest results, and a
+real engine wherever one exists.
 
-The result contract keeps four verdicts separate, because conflating
+The result contract keeps its verdicts separate, because conflating
 them is how a simulation quietly overstates itself:
 
-  * ``backend`` - whether ngspice exists here at all, and which
-    version ran. An absent backend yields status
-    ``backend-unavailable``: not a pass, not a fabricated failure -
-    policy decides what an optional backend's absence means.
+  * ``backend`` - whether an ngspice engine exists here at all, which
+    one, and its version. Discovery order: the ``NGSPICE_LIBRARY``
+    environment variable (an explicit path to the shared library),
+    the ``ngspice`` binary on PATH, then a shared library sitting
+    next to the running interpreter - which is exactly where KiCad's
+    own Python finds KiCad's bundled simulation engine. An absent
+    backend yields status ``backend-unavailable``: not a pass, not a
+    fabricated failure - policy decides what an optional backend's
+    absence means.
   * ``converged`` - whether the simulator itself completed.
   * ``measurements`` - the numerical values and their assertion
     verdicts, meaningful only when the run converged.
-  * ``model_coverage`` - which registered models, at which fidelity
-    classes, produced those numbers. A PASS never implies stronger
-    coverage than this block states, and ``significance`` says so in
-    the result itself, with ``release_grade`` unconditionally false
-    at this layer.
+  * ``model_coverage`` - the contributor-scoped coverage report:
+    which models, on which measurement's contribution closure, at
+    which evidence classes. Enforcement is per contributor - one
+    strong model never blesses a weak one - and the run refuses
+    BEFORE any simulator starts when the requirement is not met.
+  * ``condition_coverage`` - how each referenced model relates to the
+    requested operating conditions. A simulator-applied temperature
+    never implies every model represents that temperature; a model
+    fixed at its reference is flagged whenever the request differs.
 
 Decks are generated deterministically (sorted, fixed formatting) and
-hashed; the raw simulator log is captured and hashed; missing models
-refuse BEFORE any simulator runs.
+hashed. The shared-library engine executes the same netlist portion
+of the same deck with explicitly derived analysis commands and reads
+result vectors from the engine's own plot storage; the deck artifact
+and its hash stay identical across both execution modes.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
+import sys
 
 from .fidelity import SimulationError
 from . import scenario as scenario_module
 
 NGSPICE_BINARY = "ngspice"
 
+_SHARED_LIBRARY_NAMES = (
+    "ngspice.dll", "libngspice-0.dll", "libngspice.so.0",
+    "libngspice.so", "libngspice.dylib",
+)
+
+
+def _shared_library_candidates():
+    override = os.environ.get("NGSPICE_LIBRARY")
+    if override:
+        yield override
+        return
+    executable_dir = os.path.dirname(os.path.abspath(sys.executable))
+    for name in _SHARED_LIBRARY_NAMES:
+        yield os.path.join(executable_dir, name)
+
+
+class _SharedNgspice:
+    """One in-process libngspice engine, loaded lazily, reused.
+
+    The library keeps global state, so exactly one instance exists
+    per process; each run removes the previous circuit first. Runs
+    execute in the foreground with no timeout - callers keep
+    scenarios bounded, which the op/tran vocabulary already does.
+    """
+
+    _instance = None
+    _load_error = None
+
+    @classmethod
+    def instance(cls):
+        if cls._instance is not None or cls._load_error is not None:
+            return cls._instance, cls._load_error
+        for candidate in _shared_library_candidates():
+            if os.path.isfile(candidate):
+                try:
+                    cls._instance = cls(candidate)
+                except OSError as exc:
+                    cls._load_error = (
+                        "shared library {} exists but failed to "
+                        "load: {}".format(candidate, exc))
+                return cls._instance, cls._load_error
+        cls._load_error = "no ngspice shared library was found"
+        return None, cls._load_error
+
+    def __init__(self, library_path):
+        import ctypes
+        self._ctypes = ctypes
+        directory = os.path.dirname(os.path.abspath(library_path))
+        if hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(directory)
+        try:
+            self._lib = ctypes.CDLL(library_path, winmode=0) \
+                if os.name == "nt" else ctypes.CDLL(library_path)
+        except TypeError:
+            self._lib = ctypes.CDLL(library_path)
+        self.library_path = library_path
+        self._log = []
+        self._exited = False
+
+        send_char_type = ctypes.CFUNCTYPE(
+            ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+            ctypes.c_void_p)
+        exit_type = ctypes.CFUNCTYPE(
+            ctypes.c_int, ctypes.c_int, ctypes.c_bool, ctypes.c_bool,
+            ctypes.c_int, ctypes.c_void_p)
+
+        def _collect(line, _identifier, _user):
+            if line:
+                self._log.append(
+                    line.decode("utf-8", errors="replace"))
+            return 0
+
+        def _controlled_exit(_status, _immediate, _quit, _identifier,
+                             _user):
+            self._exited = True
+            return 0
+
+        # Kept as attributes: ctypes callbacks must outlive the
+        # library that holds pointers to them.
+        self._send_char = send_char_type(_collect)
+        self._send_stat = send_char_type(lambda *_args: 0)
+        self._controlled_exit = exit_type(_controlled_exit)
+
+        init = self._lib.ngSpice_Init
+        init.restype = ctypes.c_int
+        init.argtypes = [send_char_type, send_char_type, exit_type,
+                         ctypes.c_void_p, ctypes.c_void_p,
+                         ctypes.c_void_p, ctypes.c_void_p]
+        init(self._send_char, self._send_stat, self._controlled_exit,
+             None, None, None, None)
+
+        self._command = self._lib.ngSpice_Command
+        self._command.restype = ctypes.c_int
+        self._command.argtypes = [ctypes.c_char_p]
+
+        class _VectorInfo(ctypes.Structure):
+            _fields_ = [
+                ("v_name", ctypes.c_char_p),
+                ("v_type", ctypes.c_int),
+                ("v_flags", ctypes.c_short),
+                ("v_realdata", ctypes.POINTER(ctypes.c_double)),
+                ("v_compdata", ctypes.c_void_p),
+                ("v_length", ctypes.c_int),
+            ]
+
+        self._vector_info = _VectorInfo
+        self._get_vector = self._lib.ngGet_Vec_Info
+        self._get_vector.restype = ctypes.POINTER(_VectorInfo)
+        self._get_vector.argtypes = [ctypes.c_char_p]
+
+        self._circ = self._lib.ngSpice_Circ
+        self._circ.restype = ctypes.c_int
+
+        self._log = []
+        self._command(b"version -s")
+        joined = "\n".join(self._log)
+        match = re.search(r"ngspice-[0-9][^\s,)]*", joined)
+        self.version = match.group(0) if match else "unknown"
+
+    def run(self, netlist_lines, commands):
+        """Load one circuit, run the given commands, return the log.
+
+        Raises when the engine reported a controlled exit earlier -
+        a dead engine is reported, never silently reused.
+        """
+        ctypes = self._ctypes
+        if self._exited:
+            raise SimulationError(
+                "the in-process ngspice engine has exited; it cannot "
+                "be reused within this process")
+        self._log = []
+        self._command(b"remcirc")
+        self._log = []
+        encoded = [line.encode("utf-8") for line in netlist_lines]
+        array_type = ctypes.c_char_p * (len(encoded) + 1)
+        array = array_type(*encoded, None)
+        load_status = self._circ(array)
+        command_status = {}
+        values = {}
+        if load_status == 0:
+            for command, vector_names in commands:
+                command_status[command] = self._command(
+                    command.encode("utf-8"))
+                if command_status[command] != 0:
+                    continue
+                # Vectors are read immediately after their own
+                # analysis: each command replaces the current plot,
+                # so a later analysis must never answer for an
+                # earlier one's measurements.
+                for name in vector_names:
+                    values[name] = self.last_real_value(name)
+        return {"load_status": load_status,
+                "command_status": command_status,
+                "values": values,
+                "log": list(self._log)}
+
+    def last_real_value(self, vector_name):
+        """The final real value of one result vector, or None."""
+        pointer = self._get_vector(vector_name.encode("utf-8"))
+        if not pointer:
+            return None
+        vector = pointer.contents
+        if vector.v_length <= 0 or not vector.v_realdata:
+            return None
+        return float(vector.v_realdata[vector.v_length - 1])
+
 
 def backend_identity():
-    """Discover ngspice: availability, path and version string."""
+    """Discover an ngspice engine: what exists, where, which version."""
     import shutil
-    path = shutil.which(NGSPICE_BINARY)
-    if path is None:
-        return {"name": "ngspice", "available": False, "path": None,
-                "version": None,
-                "detail": "ngspice binary not found on PATH"}
-    try:
-        probe = subprocess.run(
-            [path, "--version"], capture_output=True, text=True,
-            timeout=30)
-        first = (probe.stdout or probe.stderr or "").strip()
-        version = first.splitlines()[0] if first else "unknown"
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"name": "ngspice", "available": False, "path": path,
-                "version": None,
-                "detail": "ngspice exists but did not answer "
-                          "--version: {}".format(exc)}
-    return {"name": "ngspice", "available": True, "path": path,
-            "version": version, "detail": "discovered on PATH"}
+    override = os.environ.get("NGSPICE_LIBRARY")
+    if not override:
+        binary = shutil.which(NGSPICE_BINARY)
+        if binary is not None:
+            try:
+                probe = subprocess.run(
+                    [binary, "--version"], capture_output=True,
+                    text=True, timeout=30)
+                first = (probe.stdout or probe.stderr or "").strip()
+                version = first.splitlines()[0] if first else "unknown"
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return {"name": "ngspice", "available": False,
+                        "mode": "binary", "path": binary,
+                        "version": None,
+                        "detail": "ngspice exists but did not answer "
+                                  "--version: {}".format(exc)}
+            return {"name": "ngspice", "available": True,
+                    "mode": "binary", "path": binary,
+                    "version": version, "detail": "discovered on PATH"}
+    engine, load_error = _SharedNgspice.instance()
+    if engine is not None:
+        return {"name": "ngspice", "available": True,
+                "mode": "shared-library",
+                "path": engine.library_path,
+                "version": engine.version,
+                "detail": "in-process shared-library engine"}
+    return {"name": "ngspice", "available": False, "mode": None,
+            "path": None, "version": None,
+            "detail": "no ngspice binary on PATH and {}".format(
+                load_error)}
 
 
 def _format_value(value):
@@ -84,33 +276,26 @@ def generate_deck(registry, sim_scenario):
                            sorted(model["coverage"].items())),
             model["provenance"]["source"]))
         lines.extend(line.rstrip() for line in spice.splitlines())
-    counters = {"resistor": 0, "capacitor": 0, "inductor": 0,
-                "vsource": 0, "instance": 0}
     for element in sim_scenario["elements"]:
         kind = element["kind"]
         nodes = " ".join(element["nodes"])
         if kind == "resistor":
-            counters["resistor"] += 1
             lines.append("R{} {} {}".format(
                 element["name"], nodes,
                 _format_value(element["value"])))
         elif kind == "capacitor":
-            counters["capacitor"] += 1
             lines.append("C{} {} {}".format(
                 element["name"], nodes,
                 _format_value(element["value"])))
         elif kind == "inductor":
-            counters["inductor"] += 1
             lines.append("L{} {} {}".format(
                 element["name"], nodes,
                 _format_value(element["value"])))
         elif kind == "vsource_dc":
-            counters["vsource"] += 1
             lines.append("V{} {} DC {}".format(
                 element["name"], nodes,
                 _format_value(element["value"])))
         elif kind == "vsource_pulse":
-            counters["vsource"] += 1
             pulse = element["pulse"]
             lines.append(
                 "V{} {} PULSE({} {} {} {} {} {} {})".format(
@@ -123,36 +308,57 @@ def generate_deck(registry, sim_scenario):
                     _format_value(pulse["width_s"]),
                     _format_value(pulse["period_s"])))
         else:  # model_instance
-            counters["instance"] += 1
             lines.append("X{} {} {}".format(
                 element["name"], nodes, element["model"]))
     conditions = sim_scenario.get("operating_conditions")
     if conditions is not None:
         # The declared condition genuinely reaches the simulator: this
         # is what licenses the scenario contract to accept it at all.
+        # Whether each MODEL represents that condition is a separate
+        # question, answered by condition_coverage - never here.
         lines.append(".options temp={}".format(
             _format_value(conditions["temperature_c"])))
     lines.append(".control")
     lines.append("set filetype=ascii")
-    for analysis in sim_scenario["analyses"]:
-        if analysis["kind"] == "op":
-            lines.append("op")
-            for m in sim_scenario["measurements"]:
-                if m["kind"] == "op_voltage":
-                    lines.append("wrdata op_{}.data v({})".format(
-                        m["name"], m["node"]))
-        else:
-            lines.append("tran {} {}".format(
-                _format_value(analysis["step_s"]),
-                _format_value(analysis["stop_s"])))
-            for m in sim_scenario["measurements"]:
-                if m["kind"] == "tran_final_voltage":
-                    lines.append("wrdata tran_{}.data v({})".format(
-                        m["name"], m["node"]))
+    for command in _analysis_commands(sim_scenario):
+        lines.append(command)
+        prefix = "op" if command == "op" else "tran"
+        kind = "op_voltage" if command == "op" \
+            else "tran_final_voltage"
+        for measurement in sim_scenario["measurements"]:
+            if measurement["kind"] == kind:
+                lines.append("wrdata {}_{}.data v({})".format(
+                    prefix, measurement["name"],
+                    measurement["node"]))
     lines.append("quit")
     lines.append(".endc")
     lines.append(".end")
     return "\n".join(lines) + "\n"
+
+
+def _analysis_commands(sim_scenario):
+    """The interactive commands one scenario's analyses map to."""
+    commands = []
+    for analysis in sim_scenario["analyses"]:
+        if analysis["kind"] == "op":
+            commands.append("op")
+        else:
+            commands.append("tran {} {}".format(
+                _format_value(analysis["step_s"]),
+                _format_value(analysis["stop_s"])))
+    return commands
+
+
+def _netlist_lines(deck):
+    """The netlist portion of a deck: everything before .control,
+    terminated with .end - what the in-process engine loads."""
+    lines = []
+    for line in deck.splitlines():
+        if line == ".control":
+            break
+        lines.append(line)
+    lines.append(".end")
+    return lines
 
 
 def _sha256_text(text):
@@ -173,21 +379,44 @@ def _read_last_column_value(path):
     return float(last[-1])
 
 
+def _assemble_measurements(sim_scenario, value_of):
+    """Measurement records from a value lookup; None value refuses."""
+    measurements = {}
+    for measurement in sim_scenario["measurements"]:
+        value = value_of(measurement)
+        if value is None:
+            raise SimulationError(
+                "the engine produced no result vector for "
+                "measurement {!r}; a missing result is a failure, "
+                "never a default".format(measurement["name"]))
+        assertion = measurement.get("assertion")
+        measurements[measurement["name"]] = {
+            "value": value,
+            "assertion": assertion,
+            "passed": scenario_module.check_assertion(assertion,
+                                                      value),
+        }
+    return measurements
+
+
 def run_scenario(registry, sim_scenario, workdir):
     """Run one scenario. Every outcome is explicit; nothing is faked."""
     scenario_module.validate_scenario(sim_scenario)
-    model_names = scenario_module.referenced_models(sim_scenario)
-    requirement = sim_scenario.get("required_coverage")
-    coverage = registry.coverage_report(model_names, requirement)
-    if requirement is not None and not coverage["satisfied"]:
+    coverage = scenario_module.contributor_coverage_report(
+        registry, sim_scenario)
+    if coverage["requirement"] is not None \
+            and not coverage["satisfied"]:
         unmet = sorted(
-            phenomenon for phenomenon, record in
-            coverage["per_phenomenon"].items() if not record["met"])
+            name for name, entry in
+            coverage["per_measurement"].items() if not entry["met"])
         raise SimulationError(
-            "scenario coverage requirement is not satisfied for "
-            "phenomen{} {}; a model never satisfies a phenomenon it "
-            "does not cover, and the run refuses before any simulator "
-            "starts".format("on" if len(unmet) == 1 else "a", unmet))
+            "scenario coverage is not satisfied for measurement(s) "
+            "{}: every model contributing to a measurement must "
+            "individually satisfy the required evidence policy, and "
+            "the run refuses before any simulator starts".format(
+                unmet))
+    conditions = scenario_module.condition_coverage(registry,
+                                                    sim_scenario)
     deck = generate_deck(registry, sim_scenario)
     backend = backend_identity()
     result = {
@@ -197,12 +426,15 @@ def run_scenario(registry, sim_scenario, workdir):
         "model_coverage": coverage,
         "operating_conditions_applied":
             sim_scenario.get("operating_conditions"),
+        "condition_coverage": conditions,
         "significance": {
             "release_grade": False,
             "meaning": "a numerical result under exactly the stated "
-                       "model coverage; convergence and assertion "
-                       "verdicts never imply stronger evidence than "
-                       "model_coverage records",
+                       "model coverage and condition coverage; "
+                       "convergence and assertion verdicts never "
+                       "imply stronger evidence than those blocks "
+                       "record, and a simulator-applied operating "
+                       "condition is not model condition coverage",
         },
     }
     if not backend["available"]:
@@ -214,6 +446,15 @@ def run_scenario(registry, sim_scenario, workdir):
     deck_path = os.path.join(workdir, "deck.cir")
     with open(deck_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(deck)
+    if backend["mode"] == "binary":
+        return _run_with_binary(backend, sim_scenario, workdir,
+                                deck_path, result)
+    return _run_with_shared_library(sim_scenario, deck, workdir,
+                                    result)
+
+
+def _run_with_binary(backend, sim_scenario, workdir, deck_path,
+                     result):
     run = subprocess.run(
         [backend["path"], "-b", deck_path], capture_output=True,
         text=True, timeout=600, cwd=workdir)
@@ -227,18 +468,66 @@ def run_scenario(registry, sim_scenario, workdir):
                        "unsupported": [],
                        "failure_log_tail": log[-2000:]})
         return result
-    measurements = {}
-    for m in sim_scenario["measurements"]:
-        prefix = "op" if m["kind"] == "op_voltage" else "tran"
+
+    def value_of(measurement):
+        prefix = "op" if measurement["kind"] == "op_voltage" \
+            else "tran"
         data_path = os.path.join(
-            workdir, "{}_{}.data".format(prefix, m["name"]))
-        value = _read_last_column_value(data_path)
-        assertion = m.get("assertion")
-        measurements[m["name"]] = {
-            "value": value,
-            "assertion": assertion,
-            "passed": scenario_module.check_assertion(assertion, value),
-        }
-    result.update({"status": "ran", "measurements": measurements,
+            workdir, "{}_{}.data".format(prefix,
+                                         measurement["name"]))
+        return _read_last_column_value(data_path)
+
+    result.update({"status": "ran",
+                   "measurements": _assemble_measurements(
+                       sim_scenario, value_of),
+                   "unsupported": []})
+    return result
+
+
+def _run_with_shared_library(sim_scenario, deck, workdir, result):
+    engine, load_error = _SharedNgspice.instance()
+    if engine is None:
+        raise SimulationError(
+            "the shared-library engine disappeared between discovery "
+            "and execution: {}".format(load_error))
+    plan = []
+    for command in _analysis_commands(sim_scenario):
+        kind = "op_voltage" if command == "op"             else "tran_final_voltage"
+        plan.append((command, sorted({
+            measurement["node"].lower()
+            for measurement in sim_scenario["measurements"]
+            if measurement["kind"] == kind})))
+    previous_directory = os.getcwd()
+    os.chdir(workdir)
+    try:
+        outcome = engine.run(_netlist_lines(deck), plan)
+    finally:
+        os.chdir(previous_directory)
+    log = "\n".join(outcome["log"])
+    result["raw_log_sha256"] = _sha256_text(log)
+    result["execution"] = {
+        "mode": "shared-library",
+        "commands": [command for command, _vectors in plan],
+        "load_status": outcome["load_status"],
+        "command_status": outcome["command_status"],
+    }
+    failed = (outcome["load_status"] != 0
+              or any(status != 0 for status in
+                     outcome["command_status"].values())
+              or "error" in log.lower())
+    result["converged"] = not failed
+    if failed:
+        result.update({"status": "simulation-failed",
+                       "measurements": None,
+                       "unsupported": [],
+                       "failure_log_tail": log[-2000:]})
+        return result
+
+    def value_of(measurement):
+        return outcome["values"].get(measurement["node"].lower())
+
+    result.update({"status": "ran",
+                   "measurements": _assemble_measurements(
+                       sim_scenario, value_of),
                    "unsupported": []})
     return result
