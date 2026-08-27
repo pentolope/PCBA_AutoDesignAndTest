@@ -492,6 +492,51 @@ def cmd_coherence(manifest_path):
     return 0
 
 
+def cmd_extract(argv):
+    """Geometry baseline extraction: run.py extract <manifest> --out F
+    --nets A,B --copper L=mm,... --board-thickness mm [--validation F]
+    """
+    if len(argv) < 3:
+        print("usage: run.py extract <manifest.json> --out FILE "
+              "--nets N1,N2 --copper LAYER=mm,... "
+              "--board-thickness MM [--validation FILE]")
+        return 2
+    import json as json_module
+    from pcbqa import extract
+    options = {}
+    key = None
+    for token in argv[3:]:
+        if token.startswith("--"):
+            key = token[2:]
+            options[key] = ""
+        elif key is not None:
+            options[key] = token
+            key = None
+    for required in ("out", "nets", "copper", "board-thickness"):
+        if not options.get(required):
+            print("extract: missing --{}".format(required))
+            return 2
+    manifest, _layout = open_board(_find_manifest(argv[2]))
+    board_file = manifest.resolve(manifest.get("sources.pcb"))
+    import pcbnew
+    board = pcbnew.LoadBoard(board_file)
+    copper = {}
+    for pair in options["copper"].split(","):
+        layer, _, value = pair.partition("=")
+        copper[layer] = float(value)
+    validation = None
+    if options.get("validation"):
+        with open(options["validation"], encoding="utf-8") as handle:
+            validation = json_module.load(handle)
+    report = extract.baseline_report(
+        board_file, board, options["nets"].split(","), copper,
+        float(options["board-thickness"]), validation)
+    extract.write_report(report, options["out"])
+    print("baseline: {} nets -> {}".format(len(report["nets"]),
+                                           options["out"]))
+    return 0
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
@@ -503,6 +548,8 @@ def main(argv):
         return cmd_selftest(argv)
     if cmd == "gates":
         return cmd_gates()
+    if cmd == "extract":
+        return cmd_extract(argv)
     if cmd == "fab":
         from pcbqa.fabricators import cli as fab_cli
         return fab_cli.main(argv[2:])

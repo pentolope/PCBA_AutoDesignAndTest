@@ -48,6 +48,16 @@ mixed-dielectric stripline, embedded microstrip, and every
 differential topology are recognized and reported as unsupported by
 this pass, never silently approximated.
 
+Asymmetric stripline candidates, researched and recorded (no text in
+hand pins any of them, so the refusal stands): IPC-2141A section
+4.2.5 prints a correction-based offset form whose accuracy the
+literature bounds usefully only near 50 ohm; Wadell's handbook
+carries a fuller treatment (text not held); and Polar Instruments'
+open IPC-1999 conference paper on PCB track impedance is the concrete
+acquisition target for a future transcription pass, under the same
+discipline the Barbuto reference established: pin exactly, or keep
+refusing.
+
 What a result does NOT claim: reference-plane continuity (the named
 planes are taken as the caller's electrical intent; whether they are
 whole under the route is the board-side reference-continuity machinery's
@@ -169,8 +179,19 @@ from .. import propagation
 #: (7 to 48 percent on widths over the calibration domain) apart from
 #: the model-family leg (under 0.2 percent) - as model/convention
 #: sensitivity, not a physical error bound. Production roots are
-#: unchanged.
-MODEL_VERSION = "13"
+#: unchanged. Version 14 finished the hardening: design resolution
+#: and fabrication resolution are separate requirements (a bare
+#: nominal resolves the design question while the fabrication chain
+#: stays open), the action invariants are structural (drawing
+#: requires a nominal, reserving requires a domain, and provisional
+#: is no longer a synonym for usable - a bare nominal reserves no
+#: region), route_this_interconnect was separated from
+#: continue_board_routing, the calibration record now states its
+#: SAMPLE GRID with observed extrema apart from regression envelopes
+#: and per-measurement applicability computed from the active target
+#: and solved edge widths, and the remaining causal wording was
+#: reduced to sensitivity language. Production roots are unchanged.
+MODEL_VERSION = "14"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -1023,51 +1044,96 @@ def _enclosure_manufacturing(capabilities, context, lower, upper):
 
 
 #: Measured characterization of the declared loaded chord against the
-#: pinned Barbuto reference - over EXACTLY this domain, and nothing
-#: wider. Measurements, not universal model properties; every figure
-#: is asserted in the tests. The A/B/C decomposition separates the
-#: thickness/width-convention sensitivity (A: thickness-aware chord ->
-#: B: zero-thickness chord, same family) from the model-family
-#: difference (B -> C: zero-thickness Barbuto equation (8)); neither
-#: is a physical error bound.
+#: pinned Barbuto reference - AT THE STATED SAMPLE GRID, and nowhere
+#: else. Sampled evidence: no continuous-domain claim is made, the
+#: observed extrema are recorded apart from the regression envelopes
+#: the tests enforce, and every figure is asserted in the tests. The
+#: A/B/C decomposition separates the finite-thickness/width-convention
+#: sensitivity (A: thickness-aware chord -> B: zero-thickness chord,
+#: same family) from the model-family difference (B -> C:
+#: zero-thickness Barbuto equation (8)); neither is a physical error
+#: bound, and no physical finite-conductor contribution has been
+#: isolated.
 _CHORD_CALIBRATION = {
-    "kind": "measured characterization over the stated domain only; "
-            "not a universal model property",
+    "kind": "measured characterization at the stated sample grid "
+            "only; no continuous-domain claim is made, and no figure "
+            "is a universal model property",
     "reference_id": "barbuto-2013-overlay+r5+sha256:618bce2839878e77"
                     "25f14ec7264d70a666116e505744290d0b4d953714e4cad4",
-    "domain": {
-        "substrate_dk": {"min": 3.91, "max": 4.6},
-        "mask_dk": 3.8,
-        "substrate_height_mm": 0.2104,
-        "conductor_thickness_mm": 0.04064,
-        "width_mm": {"min": 0.06, "max": 1.6},
-        "targets_ohm": {"min": 35.0, "max": 75.0},
+    "sample_grid": {
+        "substrate_dk": [3.91, 4.4, 4.6],
+        "mask_dk": [3.8],
+        "substrate_height_mm": [0.2104],
+        "conductor_thickness_mm": [0.04064],
     },
-    "epsilon_agreement_bound": 0.004,
+    "epsilon_agreement": {
+        "width_samples_mm": [0.06, 0.1, 0.15, 0.21, 0.2104, 0.25,
+                             0.37, 0.6, 1.0, 1.6],
+        "observed": {"max_relative_difference": 0.00223},
+        "regression_envelope": {"max": 0.004, "min": 0.0005},
+    },
     "width_sensitivity": {
-        "thickness_convention_shift": {"min": 0.05, "max": 0.60},
-        "family_shift_bound": 0.005,
-        "total_shift": {"min": 0.05, "max": 0.60},
-        "note": "model/convention sensitivity measurements, not "
-                "physical error bounds",
+        "substrate_dk_samples": [3.91, 4.4],
+        "target_samples_ohm": [35.0, 50.0, 75.0],
+        "thickness_convention_shift": {
+            "observed": {"min": 0.0717, "max": 0.4818},
+            "regression_envelope": {"min": 0.05, "max": 0.60},
+        },
+        "family_shift": {
+            "observed": {"max": 0.00176},
+            "regression_envelope": {"max": 0.005},
+        },
+        "total_shift": {
+            "observed": {"min": 0.0710, "max": 0.4792},
+            "regression_envelope": {"min": 0.05, "max": 0.60},
+        },
+        "note": "finite-thickness/width-convention and model-family "
+                "SENSITIVITY measurements at the sample grid; not "
+                "physical error bounds, and no physical "
+                "finite-conductor contribution has been isolated",
     },
     "asserted_in": "tests/test_impedance.py",
 }
 
 
-def _calibration_applicable(context):
-    """Whether the active construction lies inside the calibration
-    record's stated domain. Outside it the record's figures say
-    nothing about this construction, and the flag says so."""
-    domain = _CHORD_CALIBRATION["domain"]
-    return bool(
-        domain["substrate_dk"]["min"] <= context["epsilon_r"]
-        <= domain["substrate_dk"]["max"]
-        and context.get("epsilon_mask") == domain["mask_dk"]
-        and context.get("height_mm")
-        == domain["substrate_height_mm"]
+def _calibration_applicability(context, target, widths):
+    """Per-measurement applicability of the calibration to this solve.
+
+    The two measurements have different sampled domains, so each gets
+    its own fact: the epsilon-agreement comparison needs the solved
+    edge widths inside the span of its width samples, and the
+    width-sensitivity comparison needs the substrate at one of ITS
+    sampled Dk points and the target inside the span of its target
+    samples. Spans are ranges between tested sample points; the
+    measurements themselves exist only at the grid, and the flags say
+    where this solve stands relative to it.
+    """
+    grid = _CHORD_CALIBRATION["sample_grid"]
+    construction = bool(
+        context["epsilon_r"] in grid["substrate_dk"]
+        and context.get("epsilon_mask") in grid["mask_dk"]
+        and context.get("height_mm") in grid["substrate_height_mm"]
         and context.get("conductor_thickness_mm")
-        == domain["conductor_thickness_mm"])
+        in grid["conductor_thickness_mm"])
+    epsilon_samples = _CHORD_CALIBRATION["epsilon_agreement"][
+        "width_samples_mm"]
+    epsilon_ok = bool(
+        construction and widths
+        and min(epsilon_samples) <= min(widths)
+        and max(widths) <= max(epsilon_samples))
+    sensitivity = _CHORD_CALIBRATION["width_sensitivity"]
+    sensitivity_ok = bool(
+        construction
+        and context["epsilon_r"] in sensitivity["substrate_dk_samples"]
+        and min(sensitivity["target_samples_ohm"]) <= target
+        <= max(sensitivity["target_samples_ohm"]))
+    return {
+        "construction_at_sample_point": construction,
+        "epsilon_agreement_within_sampled_span": epsilon_ok,
+        "width_sensitivity_within_sampled_span": sensitivity_ok,
+        "note": "spans are ranges between tested sample points; the "
+                "measurements themselves exist only at the grid",
+    }
 
 
 def _solve_coated(catalog, context, request, range_record, low, high,
@@ -1168,7 +1234,8 @@ def _solve_coated(catalog, context, request, range_record, low, high,
                 round(raw_roots["bare"], 6)))
     enclosure["loaded_edge_calibration"] = dict(
         _CHORD_CALIBRATION,
-        applies_to_this_construction=_calibration_applicable(context))
+        applicability=_calibration_applicability(
+            context, target, sorted(raw_roots.values())))
     if model_established:
         enclosure["width_mm"] = {
             "lower": edges["loaded"]["width_mm"],
@@ -1474,10 +1541,11 @@ def _result(context, request, range_record, numeric, manufacturing,
              "meaning": "no pinned finite-cover point model exists, "
                         "so no single coated width is claimed"},
             {"code": "FINITE_CONDUCTOR_COATED_VALIDATION",
-             "meaning": "the finite-conductor contribution to the "
-                        "coated reading is unvalidated; its magnitude "
-                        "is measured only over the calibration "
-                        "record's stated domain"},
+             "meaning": "no finite-conductor validation of the coated "
+                        "reading exists; only a finite-thickness/"
+                        "width-convention SENSITIVITY has been "
+                        "characterized, at the calibration sample "
+                        "grid"},
         ])
         manufacturing_record = enclosure.get("manufacturing") or {}
         if enclosure.get("model_enclosure_established") and \
@@ -1499,22 +1567,22 @@ def _result(context, request, range_record, numeric, manufacturing,
         confidence = "model-interval-reversible-estimate"
     else:
         confidence = "not-usable"
-    nominal_usable = geometry_feasible
-    provisional_usable = geometry_feasible \
-        or provisional_domain is not None
+    nominal_width = numeric["width_mm"] if geometry_feasible else None
+    nominal_usable = nominal_width is not None
+    provisional_usable = provisional_domain is not None
     design_guidance = {
         "confidence_class": confidence,
         "usable_for_autonomous_nominal_design": nominal_usable,
         "usable_for_autonomous_provisional_layout":
             provisional_usable,
-        "nominal_width_mm":
-            numeric["width_mm"] if geometry_feasible else None,
+        "nominal_width_mm": nominal_width,
         "provisional_width_domain_mm": provisional_domain,
-        "requires_resolution_before_fabrication":
-            provisional_usable and not nominal_usable,
+        "requires_design_resolution": not nominal_usable,
+        "requires_fabrication_resolution": bool(not_established),
         "allowed_actions": {
             "draw_nominal_width": nominal_usable,
             "reserve_provisional_width_region": provisional_usable,
+            "route_this_interconnect": nominal_usable,
             "continue_board_routing":
                 nominal_usable or provisional_usable,
             "mark_target_fabrication_ready": False,
@@ -1523,13 +1591,15 @@ def _result(context, request, range_record, numeric, manufacturing,
         "release_grade": False,
         "not_established": not_established,
         "meaning": ("the structured fields and codes govern; this "
-                    "prose is commentary. Usable means safe as a "
-                    "REVERSIBLE engineering act inside the stated "
-                    "class - a nominal an autonomous designer may "
-                    "draw, or a provisional region it may reserve, "
-                    "and later revise - never a release-grade claim; "
-                    "every coded item stays unestablished regardless "
-                    "of class"),
+                    "prose is commentary. Drawing a nominal or "
+                    "reserving a provisional corridor is a REVERSIBLE "
+                    "engineering act inside the stated class. "
+                    "route_this_interconnect requires a resolved "
+                    "nominal; continue_board_routing means only that "
+                    "the SURROUNDING board may proceed while any "
+                    "provisional corridor stays reserved - it never "
+                    "resolves this interconnect. Every coded item "
+                    "stays unestablished regardless of class"),
     }
     return {
         "model": {

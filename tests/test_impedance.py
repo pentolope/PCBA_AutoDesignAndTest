@@ -216,18 +216,19 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         guidance = bare["design_guidance"]
         self.assertTrue(
             guidance["usable_for_autonomous_nominal_design"])
-        self.assertTrue(
+        self.assertFalse(
             guidance["usable_for_autonomous_provisional_layout"])
         self.assertEqual(guidance["confidence_class"],
                          "uncontrolled-analytic-nominal")
         self.assertEqual(guidance["nominal_width_mm"],
                          bare["numeric_solution"]["width_mm"])
         self.assertIsNone(guidance["provisional_width_domain_mm"])
-        self.assertFalse(
-            guidance["requires_resolution_before_fabrication"])
+        self.assertFalse(guidance["requires_design_resolution"])
+        self.assertTrue(guidance["requires_fabrication_resolution"])
         actions = guidance["allowed_actions"]
         self.assertTrue(actions["draw_nominal_width"])
-        self.assertTrue(actions["reserve_provisional_width_region"])
+        self.assertFalse(actions["reserve_provisional_width_region"])
+        self.assertTrue(actions["route_this_interconnect"])
         self.assertTrue(actions["continue_board_routing"])
         self.assertFalse(actions["mark_target_fabrication_ready"])
         self.assertFalse(actions["release_design"])
@@ -253,10 +254,11 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
             guidance["provisional_width_domain_mm"],
             coated["enclosure"]["manufacturing"][
                 "model_interval_routable_intersection_mm"])
-        self.assertTrue(
-            guidance["requires_resolution_before_fabrication"])
+        self.assertTrue(guidance["requires_design_resolution"])
+        self.assertTrue(guidance["requires_fabrication_resolution"])
         actions = guidance["allowed_actions"]
         self.assertFalse(actions["draw_nominal_width"])
+        self.assertFalse(actions["route_this_interconnect"])
         self.assertTrue(actions["reserve_provisional_width_region"])
         self.assertTrue(actions["continue_board_routing"])
         codes = {item["code"] for item in guidance["not_established"]}
@@ -278,7 +280,9 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         actions = guidance["allowed_actions"]
         self.assertFalse(actions["draw_nominal_width"])
         self.assertFalse(actions["reserve_provisional_width_region"])
+        self.assertFalse(actions["route_this_interconnect"])
         self.assertFalse(actions["continue_board_routing"])
+        self.assertTrue(guidance["requires_design_resolution"])
 
     def test_nominal_usability_is_bound_to_a_nominal_width(self):
         """The finding-one invariant, structural: nominal usability
@@ -295,12 +299,28 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         )
         for result in results:
             guidance = result["design_guidance"]
+            actions = guidance["allowed_actions"]
+            has_nominal = guidance["nominal_width_mm"] is not None
+            has_domain = \
+                guidance["provisional_width_domain_mm"] is not None
             self.assertEqual(
                 guidance["usable_for_autonomous_nominal_design"],
-                guidance["nominal_width_mm"] is not None)
+                has_nominal)
+            self.assertEqual(actions["draw_nominal_width"],
+                             has_nominal)
+            self.assertEqual(actions["route_this_interconnect"],
+                             has_nominal)
             self.assertEqual(
-                guidance["allowed_actions"]["draw_nominal_width"],
-                guidance["nominal_width_mm"] is not None)
+                guidance["usable_for_autonomous_provisional_layout"],
+                has_domain)
+            self.assertEqual(
+                actions["reserve_provisional_width_region"],
+                has_domain)
+            self.assertEqual(guidance["requires_design_resolution"],
+                             not has_nominal)
+            self.assertEqual(
+                guidance["requires_fabrication_resolution"],
+                bool(guidance["not_established"]))
 
     def test_calibration_record_is_scoped_and_bound(self):
         """The chord characterization lives in an explicit record with
@@ -313,16 +333,26 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         record = enclosure["loaded_edge_calibration"]
         self.assertEqual(record["reference_id"],
                          overlay_reference.REFERENCE_ID)
-        self.assertIn("not a universal", record["kind"])
+        self.assertIn("sample grid", record["kind"])
+        self.assertIn("no continuous-domain claim", record["kind"])
         for key in ("substrate_dk", "mask_dk", "substrate_height_mm",
-                    "conductor_thickness_mm", "width_mm",
-                    "targets_ohm"):
-            self.assertIn(key, record["domain"])
-        self.assertIs(record["applies_to_this_construction"], True)
-        self.assertIn("not", record["width_sensitivity"]["note"])
+                    "conductor_thickness_mm"):
+            self.assertIsInstance(record["sample_grid"][key], list)
+        applicability = record["applicability"]
+        self.assertIs(
+            applicability["construction_at_sample_point"], True)
+        self.assertIs(
+            applicability["epsilon_agreement_within_sampled_span"],
+            True)
+        self.assertIs(
+            applicability["width_sensitivity_within_sampled_span"],
+            True)
         out_of_domain = dict(coated["context"], epsilon_r=3.0)
+        flags = impedance._calibration_applicability(
+            out_of_domain, 50.0, [0.3, 0.37])
+        self.assertFalse(flags["construction_at_sample_point"])
         self.assertFalse(
-            impedance._calibration_applicable(out_of_domain))
+            flags["epsilon_agreement_within_sampled_span"])
         self.assertNotIn("0.4", enclosure["note"])
         self.assertNotIn("percent", enclosure["note"])
         meanings = " ".join(
@@ -330,6 +360,24 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
             for item in coated["design_guidance"]["not_established"])
         self.assertNotIn("7 to 50", meanings)
         self.assertNotIn("percent", meanings)
+        self.assertNotIn("contribution is unvalidated", meanings)
+
+    def test_an_out_of_sample_target_is_not_covered_by_calibration(
+            self):
+        """An 85-ohm solve sits outside the 35-to-75 span of the
+        width-sensitivity target samples: its calibration record must
+        say the sensitivity measurement does not cover it, while the
+        construction and epsilon flags remain honest independently."""
+        result = impedance.solve(self.snapshot, _request(
+            target_ohm=85.0, width_search_mm={"min": 0.05, "max": 2.0},
+            soldermask_present=True))
+        applicability = result["enclosure"][
+            "loaded_edge_calibration"]["applicability"]
+        self.assertIs(
+            applicability["construction_at_sample_point"], True)
+        self.assertIs(
+            applicability["width_sensitivity_within_sampled_span"],
+            False)
 
     def test_guidance_never_claims_release_grade(self):
         """Every class, every state: release_grade is false, the
@@ -1926,7 +1974,7 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
         (revision, artifact-hash) pair is pinned, and REFERENCE_ID is
         composed from that same pair so the two can never drift
         apart."""
-        self.assertEqual(impedance.MODEL_VERSION, "13")
+        self.assertEqual(impedance.MODEL_VERSION, "14")
         expected_sha = ("618bce2839878e7725f14ec7264d70a666116e5057"
                         "44290d0b4d953714e4cad4")
         self.assertEqual(
@@ -1961,10 +2009,13 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
                 pinned = overlay_reference.immersed_epsilon(
                     er, 3.8, width / 0.2104)
                 worst = max(worst, abs(chord - pinned) / pinned)
-        self.assertLess(
-            worst,
-            impedance._CHORD_CALIBRATION["epsilon_agreement_bound"])
-        self.assertGreater(worst, 0.0005)
+        envelope = impedance._CHORD_CALIBRATION["epsilon_agreement"][
+            "regression_envelope"]
+        observed = impedance._CHORD_CALIBRATION["epsilon_agreement"][
+            "observed"]["max_relative_difference"]
+        self.assertLess(worst, envelope["max"])
+        self.assertGreater(worst, envelope["min"])
+        self.assertLessEqual(worst, observed + 1e-5)
 
     def test_the_sensitivity_decomposition_isolates_each_leg(self):
         """The promotion decision's second measurement, decomposed so
@@ -1996,6 +2047,17 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
         height, thickness = 0.2104, 0.04064
         sensitivity = impedance._CHORD_CALIBRATION[
             "width_sensitivity"]
+        for measurement in ("thickness_convention_shift",
+                            "total_shift"):
+            record = sensitivity[measurement]
+            self.assertLessEqual(
+                record["regression_envelope"]["min"],
+                record["observed"]["min"])
+            self.assertLessEqual(record["observed"]["max"],
+                                 record["regression_envelope"]["max"])
+        self.assertLessEqual(
+            sensitivity["family_shift"]["observed"]["max"],
+            sensitivity["family_shift"]["regression_envelope"]["max"])
         for er in (3.91, 4.4):
             def chord_eps(width_for_eps):
                 bare = propagation.hammerstad_effective_permittivity(
@@ -2025,18 +2087,18 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
                 leg_ab = abs(b - a) / a
                 leg_bc = abs(c - b) / b
                 leg_ac = abs(c - a) / a
-                self.assertGreater(
-                    leg_ab,
-                    sensitivity["thickness_convention_shift"]["min"])
+                convention = sensitivity[
+                    "thickness_convention_shift"]["regression_envelope"]
+                self.assertGreater(leg_ab, convention["min"])
+                self.assertLess(leg_ab, convention["max"])
                 self.assertLess(
-                    leg_ab,
-                    sensitivity["thickness_convention_shift"]["max"])
-                self.assertLess(leg_bc,
-                                sensitivity["family_shift_bound"])
-                self.assertGreater(leg_ac,
-                                   sensitivity["total_shift"]["min"])
-                self.assertLess(leg_ac,
-                                sensitivity["total_shift"]["max"])
+                    leg_bc,
+                    sensitivity["family_shift"][
+                        "regression_envelope"]["max"])
+                total = sensitivity["total_shift"][
+                    "regression_envelope"]
+                self.assertGreater(leg_ac, total["min"])
+                self.assertLess(leg_ac, total["max"])
                 self.assertLess(abs(leg_ac - leg_ab), 0.01)
 
     def test_production_does_not_dispatch_the_reference(self):

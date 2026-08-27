@@ -1,0 +1,197 @@
+"""Board-level digital contract models: the Verilator foundation.
+
+Repository ownership, stated once and bindingly:
+
+  * The PCBA repository owns the board's physical/electrical interface
+    contract and its BEHAVIORAL board models (SystemVerilog that says
+    what the board expects of its digital neighbors: clock ratios,
+    strobe ordering, protocol envelopes).
+  * A firmware repository owns production FPGA RTL / MCU firmware, and
+    may consume the PCBA repository as a submodule to obtain the
+    contract. The same behavioral contract is never maintained as two
+    independently edited copies.
+  * MCUs/SoCs are represented by boundary/protocol behavioral models,
+    never transistor-level simulation.
+
+The eventual invariant this foundation serves:
+
+    production RTL satisfies the behavioral contract the board was
+    designed against -
+
+by compiling the behavioral model and, later, the production RTL under
+Verilator against THE SAME board-level assertions. This module
+provides the generic pieces only: contract validation, deterministic
+harness generation, backend discovery, and the same honest status
+vocabulary the SPICE backend uses (``backend-unavailable`` is neither
+a pass nor a fabricated failure). Board-specific contracts and RTL
+live in the board and firmware repositories.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import subprocess
+
+from .fidelity import SimulationError
+
+VERILATOR_BINARY = "verilator"
+
+_REQUIRED_CONTRACT_KEYS = {"name", "top_module", "sources",
+                           "assertion_summary"}
+_KNOWN_CONTRACT_KEYS = _REQUIRED_CONTRACT_KEYS | {
+    "description", "ports", "cycles"}
+
+
+def backend_identity():
+    """Discover Verilator: availability, path and version string."""
+    import shutil
+    path = shutil.which(VERILATOR_BINARY)
+    if path is None:
+        return {"name": "verilator", "available": False, "path": None,
+                "version": None,
+                "detail": "verilator binary not found on PATH"}
+    try:
+        probe = subprocess.run(
+            [path, "--version"], capture_output=True, text=True,
+            timeout=30)
+        version = (probe.stdout or "").strip() or "unknown"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"name": "verilator", "available": False, "path": path,
+                "version": None,
+                "detail": "verilator exists but did not answer "
+                          "--version: {}".format(exc)}
+    return {"name": "verilator", "available": True, "path": path,
+            "version": version, "detail": "discovered on PATH"}
+
+
+def validate_contract(contract, base_directory):
+    """One behavioral-contract declaration, strictly.
+
+    Sources must exist and are fingerprinted, so the contract a
+    firmware repository tests against is identified by content, not
+    by path. ``assertion_summary`` is the human statement of what the
+    model asserts; the assertions themselves live IN the SystemVerilog
+    (SVA / immediate assertions), which is what keeps one copy of the
+    contract authoritative.
+    """
+    if not isinstance(contract, dict):
+        raise SimulationError("a digital contract must be a dict")
+    unknown = sorted(set(contract) - _KNOWN_CONTRACT_KEYS)
+    if unknown:
+        raise SimulationError(
+            "digital contract carries unknown key(s) {}".format(unknown))
+    missing = sorted(_REQUIRED_CONTRACT_KEYS - set(contract))
+    if missing:
+        raise SimulationError(
+            "digital contract is missing key(s) {}".format(missing))
+    sources = contract["sources"]
+    if not isinstance(sources, list) or not sources:
+        raise SimulationError(
+            "digital contract needs a nonempty list of SystemVerilog "
+            "sources")
+    fingerprints = []
+    for source in sources:
+        path = os.path.join(base_directory, source)
+        if not os.path.isfile(path):
+            raise SimulationError(
+                "contract source {!r} does not exist; a contract "
+                "whose model is absent proves nothing".format(source))
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        fingerprints.append({"source": source, "sha256": digest})
+    return {"name": contract["name"],
+            "top_module": contract["top_module"],
+            "sources": fingerprints,
+            "assertion_summary": contract["assertion_summary"]}
+
+
+def generate_harness(contract, cycles=64):
+    """A deterministic C++ Verilator harness for a validated contract.
+
+    Drives a clock for the stated number of cycles and reports PASS
+    only if no $stop/$fatal assertion fired. The harness is content -
+    generated, hashed, reviewable - not behavior hidden in a runner.
+    """
+    top = contract["top_module"]
+    lines = [
+        "// deterministic Verilator harness generated by",
+        "// pcbqa.sim.digital for contract {}".format(contract["name"]),
+        "#include \"V{}.h\"".format(top),
+        "#include \"verilated.h\"",
+        "int main(int argc, char** argv) {",
+        "    VerilatedContext context;",
+        "    context.commandArgs(argc, argv);",
+        "    V{} model{{&context}};".format(top),
+        "    model.rst = 1; model.clk = 0; model.eval();",
+        "    for (int cycle = 0; cycle < {}; ++cycle) {{".format(
+            int(cycles)),
+        "        if (cycle == 2) model.rst = 0;",
+        "        model.clk = 1; context.timeInc(1); model.eval();",
+        "        model.clk = 0; context.timeInc(1); model.eval();",
+        "        if (context.gotFinish() || context.gotError())",
+        "            break;",
+        "    }",
+        "    model.final();",
+        "    if (context.gotError()) return 1;",
+        "    return 0;",
+        "}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def run_contract(contract_record, base_directory, workdir, cycles=64):
+    """Compile and run one behavioral contract under Verilator.
+
+    Statuses mirror the SPICE backend: ``backend-unavailable`` when
+    Verilator is absent, ``build-failed`` / ``assertions-failed`` /
+    ``ran`` otherwise. Nothing is fabricated in any branch, and the
+    result records exactly which fingerprinted sources were tested.
+    """
+    backend = backend_identity()
+    harness = generate_harness(contract_record, cycles)
+    result = {
+        "contract": contract_record["name"],
+        "sources": contract_record["sources"],
+        "backend": backend,
+        "harness_sha256": hashlib.sha256(
+            harness.encode("utf-8")).hexdigest(),
+        "significance": {
+            "release_grade": False,
+            "meaning": "a behavioral-contract run under the stated "
+                       "fingerprinted sources; it never establishes "
+                       "electrical behavior or production RTL "
+                       "equivalence by itself",
+        },
+    }
+    if not backend["available"]:
+        result.update({"status": "backend-unavailable",
+                       "assertions_passed": None})
+        return result
+    os.makedirs(workdir, exist_ok=True)
+    harness_path = os.path.join(workdir, "harness.cpp")
+    with open(harness_path, "w", encoding="utf-8",
+              newline="\n") as handle:
+        handle.write(harness)
+    sources = [os.path.join(base_directory, item["source"])
+               for item in contract_record["sources"]]
+    build = subprocess.run(
+        [backend["path"], "--binary", "--assert", "-Wall",
+         "--top-module", contract_record["top_module"],
+         "-o", "contract_model"] + sources + [harness_path],
+        capture_output=True, text=True, timeout=600, cwd=workdir)
+    if build.returncode != 0:
+        result.update({"status": "build-failed",
+                       "assertions_passed": None,
+                       "build_log_tail":
+                           (build.stdout + build.stderr)[-2000:]})
+        return result
+    binary = os.path.join(workdir, "obj_dir", "contract_model")
+    run = subprocess.run([binary], capture_output=True, text=True,
+                         timeout=600, cwd=workdir)
+    result.update({
+        "status": "ran" if run.returncode == 0 else "assertions-failed",
+        "assertions_passed": run.returncode == 0,
+        "run_log_tail": (run.stdout + run.stderr)[-2000:],
+    })
+    return result
