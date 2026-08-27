@@ -48,15 +48,23 @@ mixed-dielectric stripline, embedded microstrip, and every
 differential topology are recognized and reported as unsupported by
 this pass, never silently approximated.
 
-Asymmetric stripline candidates, researched and recorded (no text in
-hand pins any of them, so the refusal stands): IPC-2141A section
-4.2.5 prints a correction-based offset form whose accuracy the
-literature bounds usefully only near 50 ohm; Wadell's handbook
-carries a fuller treatment (text not held); and Polar Instruments'
-open IPC-1999 conference paper on PCB track impedance is the concrete
-acquisition target for a future transcription pass, under the same
-discipline the Barbuto reference established: pin exactly, or keep
-refusing.
+Asymmetric stripline: the refusal STANDS, now confirmed by acquired
+evidence rather than absence of it. The Polar Instruments IPC-1999
+conference paper (Burkhardt, Gregg, Staniforth, "Calculation of PCB
+Track Impedance"; SHA-256 f986bbb58f87690b3ee37c69036736c11a9411b1502e5a7d71ba49a0acd9894f) was
+obtained and read: it prints Cohn's exact elliptic form for the
+CENTRED zero-thickness stripline - the same reference this module
+already measures its symmetric branches against - and states
+explicitly that when the track is offset from centre the published
+equations become more complicated with a REDUCED range of validity,
+offering the numerical boundary-element approach instead of any
+offset closed form. IPC-2141A's 4.2.5 correction form remains
+accuracy-bounded usefully only near 50 ohm per the literature, and
+Wadell's fuller treatment remains unheld. Conclusion recorded: the
+honest path to asymmetric-stripline support is a numerically
+validated field-solver backend entering through the simulation
+fidelity contract, not a transcribed closed form; until then the
+topology refuses.
 
 What a result does NOT claim: reference-plane continuity (the named
 planes are taken as the caller's electrical intent; whether they are

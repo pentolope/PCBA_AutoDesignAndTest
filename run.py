@@ -512,25 +512,55 @@ def cmd_extract(argv):
         elif key is not None:
             options[key] = token
             key = None
-    for required in ("out", "nets", "copper", "board-thickness"):
+    for required in ("out", "nets", "board-thickness"):
         if not options.get(required):
             print("extract: missing --{}".format(required))
             return 2
+    if bool(options.get("copper")) == bool(
+            options.get("approved-copper")):
+        print("extract: exactly one of --copper (caller-declared) or "
+              "--approved-copper LAYER=position:oz,... (resolved "
+              "from approved evidence, needs --requirements) must "
+              "be given")
+        return 2
     manifest, _layout = open_board(_find_manifest(argv[2]))
     board_file = manifest.resolve(manifest.get("sources.pcb"))
     import pcbnew
     board = pcbnew.LoadBoard(board_file)
-    copper = {}
-    for pair in options["copper"].split(","):
-        layer, _, value = pair.partition("=")
-        copper[layer] = float(value)
+    if options.get("approved-copper"):
+        from pcbqa.fabricators.store import CatalogStore
+        fabricator = options.get("fabricator") or "jlcpcb"
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "profiles", fabricator)
+        approved = CatalogStore(root, fabricator).approved()
+        if approved is None:
+            print("extract: no approved catalog; refusing to invent "
+                  "physical inputs")
+            return 2
+        assignments = {}
+        for pair in options["approved-copper"].split(","):
+            layer, _, spec = pair.partition("=")
+            position, _, weight = spec.partition(":")
+            assignments[layer] = (position, float(weight))
+        copper = extract.approved_finished_copper(approved,
+                                                  assignments)
+    else:
+        declared = {}
+        for pair in options["copper"].split(","):
+            layer, _, value = pair.partition("=")
+            declared[layer] = float(value)
+        copper = extract.caller_declared_copper(declared)
+    thickness = extract.physical_parameter(
+        float(options["board-thickness"]), "mm", "caller-declared",
+        "caller-declared board thickness",
+        applicability="through-via barrel estimates only")
     validation = None
     if options.get("validation"):
         with open(options["validation"], encoding="utf-8") as handle:
             validation = json_module.load(handle)
     report = extract.baseline_report(
         board_file, board, options["nets"].split(","), copper,
-        float(options["board-thickness"]), validation)
+        thickness, validation)
     extract.write_report(report, options["out"])
     print("baseline: {} nets -> {}".format(len(report["nets"]),
                                            options["out"]))

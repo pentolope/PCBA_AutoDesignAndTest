@@ -31,6 +31,15 @@ Constraint kinds, deliberately few and each with a stated shape:
 Trial-route quality is the intended primary routability signal; net
 counts and ratline lengths are inputs, not verdicts. Score plumbing
 lives with the optimizer integration, not here.
+
+The validator's boundary, stated explicitly: it rejects OBVIOUS
+contradictions deterministically - a fixed rotation outside the same
+part's allowed orientations, self-proximity and self-separation,
+overlapping swap groups, duplicate fixes, non-finite numbers. It does
+NOT attempt constraint satisfiability: geometric infeasibility that
+needs the outline, courtyards or an ordering axis is the OPTIMIZER'S
+to discover and report separately. A set this validator accepts may
+still be infeasible; a set it rejects is wrong on its face.
 """
 
 from __future__ import annotations
@@ -111,9 +120,26 @@ def validate_constraint(constraint):
         if not (isinstance(position, list) and len(position) == 2
                 and all(isinstance(value, (int, float))
                         and not isinstance(value, bool)
-                        and value == value for value in position)):
+                        and value == value
+                        and value not in (float("inf"),
+                                          float("-inf"))
+                        for value in position)):
             raise PlacementError(
-                "fixed position_mm must be [x, y] in millimetres")
+                "fixed position_mm must be two finite millimetre "
+                "coordinates")
+        rotation = constraint.get("rotation_deg")
+        if rotation is not None and (
+                isinstance(rotation, bool)
+                or not isinstance(rotation, (int, float))
+                or rotation != rotation
+                or rotation in (float("inf"), float("-inf"))):
+            raise PlacementError(
+                "fixed rotation_deg must be a finite number")
+    if kind == "proximity" and \
+            constraint["reference"] == constraint["anchor"]:
+        raise PlacementError(
+            "component {!r} cannot be proximity-constrained to "
+            "itself".format(constraint["reference"]))
     if kind in ("board_edge", "proximity"):
         _finite_positive("max_distance_mm",
                          constraint["max_distance_mm"])
@@ -132,6 +158,13 @@ def validate_constraint(constraint):
     if kind == "separation":
         _reference_list("group_a", constraint["group_a"])
         _reference_list("group_b", constraint["group_b"])
+        shared = sorted(set(constraint["group_a"])
+                        & set(constraint["group_b"]))
+        if shared:
+            raise PlacementError(
+                "component(s) {} appear on both sides of a "
+                "separation; a part cannot be kept away from "
+                "itself".format(shared))
     if kind == "orientation":
         rotations = constraint["allowed_rotations_deg"]
         if not (isinstance(rotations, list) and rotations
@@ -145,13 +178,22 @@ def validate_constraint(constraint):
 
 
 def validate_constraint_set(constraints):
-    """A whole constraint set: each member valid, fixed refs unique."""
+    """A whole constraint set: obvious cross-contradictions refuse.
+
+    Deterministic pairwise checks only - see the module docstring for
+    the boundary between this validator and the optimizer's
+    infeasibility reporting.
+    """
     if not isinstance(constraints, list):
         raise PlacementError("a constraint set must be a list")
+    fixed_rotation = {}
     fixed = set()
+    orientations = {}
+    swap_membership = {}
     for constraint in constraints:
         validate_constraint(constraint)
-        if constraint["kind"] == "fixed":
+        kind = constraint["kind"]
+        if kind == "fixed":
             reference = constraint["reference"]
             if reference in fixed:
                 raise PlacementError(
@@ -159,4 +201,29 @@ def validate_constraint_set(constraints):
                     "part is a contradiction, not an "
                     "average".format(reference))
             fixed.add(reference)
+            if "rotation_deg" in constraint:
+                fixed_rotation[reference] = \
+                    constraint["rotation_deg"]
+        if kind == "orientation":
+            orientations[constraint["reference"]] = \
+                constraint["allowed_rotations_deg"]
+        if kind == "swap_group":
+            for reference in constraint["references"]:
+                if reference in swap_membership:
+                    raise PlacementError(
+                        "component {!r} belongs to swap groups {!r} "
+                        "and {!r}; overlapping swap groups make the "
+                        "permutation ill-defined".format(
+                            reference, swap_membership[reference],
+                            constraint["name"]))
+                swap_membership[reference] = constraint["name"]
+    for reference, rotation in sorted(fixed_rotation.items()):
+        allowed = orientations.get(reference)
+        if allowed is not None and \
+                float(rotation) % 360.0 not in \
+                {float(value) % 360.0 for value in allowed}:
+            raise PlacementError(
+                "component {!r} is fixed at {} degrees but its "
+                "orientation constraint allows only {}".format(
+                    reference, rotation, allowed))
     return constraints

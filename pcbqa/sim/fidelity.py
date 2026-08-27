@@ -1,13 +1,23 @@
-"""Model registry: every model carries provenance and a fidelity class.
+"""Model registry with phenomenon-aware coverage. No universal ladder.
 
-The fidelity vocabulary is shared across the simulation subsystem so
-results can be compared and gated on one axis. The classes are a TRUST
-DESCRIPTION, not a quality score: they say where a model's numbers
-come from, and the registry refuses anything that does not declare
-itself. ``FIDELITY_CLASSES`` is ordered from the strongest evidence to
-the weakest; ``weakest_of`` uses that order to summarize a set of
-models by its least-established member, mirroring the fail-closed
-philosophy used elsewhere in the toolkit.
+A model describes SOME phenomena and is silent about the rest, and the
+registry never lets strength in one domain stand in for another: RTL
+says nothing about pin electrical behavior, IBIS says nothing about
+internal logic, a full-wave interconnect extraction says nothing about
+device function, and a DC-resistance extraction is not a transmission
+line. Coverage is therefore a mapping
+
+    phenomenon -> evidence class
+
+and a scenario requirement names, per phenomenon, the SET of evidence
+classes it accepts. Satisfaction is computed per phenomenon; a model
+with no entry for a phenomenon never satisfies it, whatever else it
+covers. There is deliberately NO ordering across phenomena and no
+default acceptability within one: the requirement spells out what it
+accepts, so acceptability is reviewable instead of implied.
+
+Every model still carries provenance (a source at minimum), because an
+evidence class without an origin is not evidence.
 """
 
 from __future__ import annotations
@@ -17,58 +27,84 @@ class SimulationError(Exception):
     """The simulation subsystem cannot proceed as asked. Always blocks."""
 
 
-#: Strongest evidence first. The order is part of the contract: a
-#: scenario's required_fidelity names the weakest class it accepts.
-FIDELITY_CLASSES = (
+#: The phenomena this subsystem currently distinguishes - the set
+#: needed by ngspice, Verilator, IBIS and extracted interconnect
+#: models. Deliberately small; a new phenomenon is added when a model
+#: class genuinely introduces one.
+PHENOMENA = (
+    "functional_behavior",
+    "device_electrical",
+    "digital_io",
+    "interconnect_dc",
+    "interconnect_si",
+    "power_integrity",
+)
+
+#: Evidence classes a coverage entry may carry. A vocabulary, not a
+#: ladder: no cross-phenomenon comparison exists, and within one
+#: phenomenon a requirement lists exactly the classes it accepts.
+EVIDENCE_CLASSES = (
     "measured",
     "vendor-spice",
     "vendor-ibis",
     "rtl",
+    "behavioral-contract",
     "full-wave-extracted",
     "quasi-static-extracted",
-    "analytic-interconnect",
+    "analytic",
+    "geometry-derived",
     "datasheet-behavioral",
     "assumed-behavioral",
-    "unsupported",
 )
 
-_REQUIRED_MODEL_KEYS = {"identity", "kind", "fidelity", "provenance"}
-_KNOWN_MODEL_KEYS = _REQUIRED_MODEL_KEYS | {"ports", "spice", "notes"}
+_REQUIRED_MODEL_KEYS = {"identity", "kind", "coverage", "provenance"}
+_KNOWN_MODEL_KEYS = _REQUIRED_MODEL_KEYS | {"ports", "spice", "notes",
+                                            "omissions"}
 
 
-def rank(fidelity_class):
-    """Position of a class in the trust order (0 is strongest)."""
-    if fidelity_class not in FIDELITY_CLASSES:
+def validate_coverage(coverage):
+    """A coverage mapping: known phenomena, known evidence classes."""
+    if not isinstance(coverage, dict) or not coverage:
         raise SimulationError(
-            "fidelity {!r} is not one of the declared classes "
-            "{}".format(fidelity_class, list(FIDELITY_CLASSES)))
-    return FIDELITY_CLASSES.index(fidelity_class)
+            "coverage must be a nonempty dict of "
+            "phenomenon -> evidence class")
+    for phenomenon, evidence in coverage.items():
+        if phenomenon not in PHENOMENA:
+            raise SimulationError(
+                "phenomenon {!r} is not one of {}".format(
+                    phenomenon, list(PHENOMENA)))
+        if evidence not in EVIDENCE_CLASSES:
+            raise SimulationError(
+                "evidence class {!r} is not one of {}".format(
+                    evidence, list(EVIDENCE_CLASSES)))
+    return coverage
 
 
-def weakest_of(fidelity_classes):
-    """The least-established class among those given."""
-    members = list(fidelity_classes)
-    if not members:
+def validate_requirement(requirement):
+    """A requirement: phenomenon -> nonempty list of accepted classes."""
+    if not isinstance(requirement, dict) or not requirement:
         raise SimulationError(
-            "no fidelity classes were given; an empty model set has "
-            "no coverage summary and is not silently strong")
-    return max(members, key=rank)
-
-
-def meets(fidelity_class, required):
-    """Whether a class is at least as established as `required`."""
-    return rank(fidelity_class) <= rank(required)
+            "required_coverage must be a nonempty dict of "
+            "phenomenon -> accepted evidence classes")
+    for phenomenon, accepted in requirement.items():
+        if phenomenon not in PHENOMENA:
+            raise SimulationError(
+                "required phenomenon {!r} is not one of {}".format(
+                    phenomenon, list(PHENOMENA)))
+        if not isinstance(accepted, list) or not accepted:
+            raise SimulationError(
+                "requirement for {!r} must list at least one accepted "
+                "evidence class".format(phenomenon))
+        for evidence in accepted:
+            if evidence not in EVIDENCE_CLASSES:
+                raise SimulationError(
+                    "accepted class {!r} is not one of {}".format(
+                        evidence, list(EVIDENCE_CLASSES)))
+    return requirement
 
 
 def validate_model(record):
-    """One model record, strictly.
-
-    Required: identity (unique name), kind (free-form device class),
-    fidelity (from FIDELITY_CLASSES), provenance (dict stating where
-    the model came from - a source name at minimum). Optional: ports
-    (list of port names), spice (the subcircuit text a SPICE backend
-    may instantiate), notes.
-    """
+    """One model record, strictly."""
     if not isinstance(record, dict):
         raise SimulationError(
             "a model record must be a dict, not {!r}".format(
@@ -84,7 +120,7 @@ def validate_model(record):
             "model record is missing required key(s) {}".format(missing))
     if not isinstance(record["identity"], str) or not record["identity"]:
         raise SimulationError("model identity must be a nonempty string")
-    rank(record["fidelity"])
+    validate_coverage(record["coverage"])
     provenance = record["provenance"]
     if not isinstance(provenance, dict) or not provenance.get("source"):
         raise SimulationError(
@@ -95,6 +131,11 @@ def validate_model(record):
         raise SimulationError(
             "model {!r} spice text must be a string".format(
                 record["identity"]))
+    if "omissions" in record and not isinstance(record["omissions"],
+                                                list):
+        raise SimulationError(
+            "model {!r} omissions must be a list of stated "
+            "gaps".format(record["identity"]))
     return record
 
 
@@ -128,18 +169,49 @@ class ModelRegistry:
     def identities(self):
         return sorted(self._models)
 
-    def coverage(self, identities):
-        """Machine-readable coverage summary for the referenced set."""
+    def coverage_report(self, identities, requirement=None):
+        """Per-phenomenon coverage of the referenced model set.
+
+        For each phenomenon of an (optional) requirement: which models
+        satisfy it with an ACCEPTED evidence class, which referenced
+        models cover the phenomenon at an unaccepted class, and
+        whether the requirement is met. A model never satisfies a
+        phenomenon it does not cover - there is no substitution across
+        domains, by construction.
+        """
         models = {name: self.get(name) for name in identities}
         summary = {
             name: {"kind": model["kind"],
-                   "fidelity": model["fidelity"],
-                   "provenance": model["provenance"]}
+                   "coverage": dict(sorted(
+                       model["coverage"].items())),
+                   "provenance": model["provenance"],
+                   "omissions": model.get("omissions", [])}
             for name, model in sorted(models.items())
         }
-        return {
-            "models": summary,
-            "weakest_fidelity":
-                weakest_of(m["fidelity"] for m in models.values())
-                if models else None,
-        }
+        report = {"models": summary, "requirement": None,
+                  "satisfied": None, "per_phenomenon": None}
+        if requirement is None:
+            return report
+        validate_requirement(requirement)
+        per_phenomenon = {}
+        satisfied = True
+        for phenomenon, accepted in sorted(requirement.items()):
+            satisfying = sorted(
+                name for name, model in models.items()
+                if model["coverage"].get(phenomenon) in accepted)
+            covering_unaccepted = sorted(
+                name for name, model in models.items()
+                if phenomenon in model["coverage"]
+                and model["coverage"][phenomenon] not in accepted)
+            met = bool(satisfying)
+            satisfied = satisfied and met
+            per_phenomenon[phenomenon] = {
+                "accepted_classes": list(accepted),
+                "satisfied_by": satisfying,
+                "covered_at_unaccepted_class": covering_unaccepted,
+                "met": met,
+            }
+        report.update({"requirement": requirement,
+                       "satisfied": satisfied,
+                       "per_phenomenon": per_phenomenon})
+        return report

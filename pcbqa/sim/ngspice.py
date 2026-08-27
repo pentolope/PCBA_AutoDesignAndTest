@@ -27,7 +27,7 @@ import hashlib
 import os
 import subprocess
 
-from .fidelity import SimulationError, meets
+from .fidelity import SimulationError
 from . import scenario as scenario_module
 
 NGSPICE_BINARY = "ngspice"
@@ -79,8 +79,10 @@ def generate_deck(registry, sim_scenario):
             raise SimulationError(
                 "model {!r} carries no spice text; it cannot be "
                 "instantiated by this backend".format(name))
-        lines.append("* model {} fidelity={} source={}".format(
-            name, model["fidelity"], model["provenance"]["source"]))
+        lines.append("* model {} coverage={} source={}".format(
+            name, ",".join("{}:{}".format(k, v) for k, v in
+                           sorted(model["coverage"].items())),
+            model["provenance"]["source"]))
         lines.extend(line.rstrip() for line in spice.splitlines())
     counters = {"resistor": 0, "capacitor": 0, "inductor": 0,
                 "vsource": 0, "instance": 0}
@@ -124,6 +126,12 @@ def generate_deck(registry, sim_scenario):
             counters["instance"] += 1
             lines.append("X{} {} {}".format(
                 element["name"], nodes, element["model"]))
+    conditions = sim_scenario.get("operating_conditions")
+    if conditions is not None:
+        # The declared condition genuinely reaches the simulator: this
+        # is what licenses the scenario contract to accept it at all.
+        lines.append(".options temp={}".format(
+            _format_value(conditions["temperature_c"])))
     lines.append(".control")
     lines.append("set filetype=ascii")
     for analysis in sim_scenario["analyses"]:
@@ -169,15 +177,17 @@ def run_scenario(registry, sim_scenario, workdir):
     """Run one scenario. Every outcome is explicit; nothing is faked."""
     scenario_module.validate_scenario(sim_scenario)
     model_names = scenario_module.referenced_models(sim_scenario)
-    coverage = registry.coverage(model_names)
-    required = sim_scenario.get("required_fidelity")
-    if required is not None and coverage["weakest_fidelity"] is not None:
-        if not meets(coverage["weakest_fidelity"], required):
-            raise SimulationError(
-                "scenario requires fidelity {!r} but the weakest "
-                "referenced model is {!r}; refusing before any "
-                "simulator runs".format(
-                    required, coverage["weakest_fidelity"]))
+    requirement = sim_scenario.get("required_coverage")
+    coverage = registry.coverage_report(model_names, requirement)
+    if requirement is not None and not coverage["satisfied"]:
+        unmet = sorted(
+            phenomenon for phenomenon, record in
+            coverage["per_phenomenon"].items() if not record["met"])
+        raise SimulationError(
+            "scenario coverage requirement is not satisfied for "
+            "phenomen{} {}; a model never satisfies a phenomenon it "
+            "does not cover, and the run refuses before any simulator "
+            "starts".format("on" if len(unmet) == 1 else "a", unmet))
     deck = generate_deck(registry, sim_scenario)
     backend = backend_identity()
     result = {
@@ -185,6 +195,8 @@ def run_scenario(registry, sim_scenario, workdir):
         "backend": backend,
         "deck_sha256": _sha256_text(deck),
         "model_coverage": coverage,
+        "operating_conditions_applied":
+            sim_scenario.get("operating_conditions"),
         "significance": {
             "release_grade": False,
             "meaning": "a numerical result under exactly the stated "

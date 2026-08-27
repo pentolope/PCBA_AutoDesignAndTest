@@ -72,6 +72,49 @@ class ConstraintsValidateStrictly(unittest.TestCase):
                 {"kind": "functional_block", "name": "dup",
                  "members": ["U1", "U1"]})
 
+    def test_cross_constraint_contradictions_refuse(self):
+        with self.assertRaises(PlacementError):
+            placement.validate_constraint_set([
+                {"kind": "fixed", "reference": "U2",
+                 "position_mm": [10.0, 10.0], "rotation_deg": 90.0},
+                {"kind": "orientation", "reference": "U2",
+                 "allowed_rotations_deg": [0.0, 180.0]},
+            ])
+        placement.validate_constraint_set([
+            {"kind": "fixed", "reference": "U2",
+             "position_mm": [10.0, 10.0], "rotation_deg": 180.0},
+            {"kind": "orientation", "reference": "U2",
+             "allowed_rotations_deg": [0.0, 180.0]},
+        ])
+        with self.assertRaises(PlacementError):
+            placement.validate_constraint_set([
+                {"kind": "swap_group", "name": "a",
+                 "references": ["RC1", "RC2"]},
+                {"kind": "swap_group", "name": "b",
+                 "references": ["RC2", "RC3"]},
+            ])
+
+    def test_self_referential_constraints_refuse(self):
+        with self.assertRaises(PlacementError):
+            placement.validate_constraint(
+                {"kind": "proximity", "reference": "C1",
+                 "anchor": "C1", "max_distance_mm": 1.0})
+        with self.assertRaises(PlacementError):
+            placement.validate_constraint(
+                {"kind": "separation", "group_a": ["U1", "U2"],
+                 "group_b": ["U2", "U3"], "min_distance_mm": 5.0})
+
+    def test_non_finite_coordinates_and_rotations_refuse(self):
+        with self.assertRaises(PlacementError):
+            placement.validate_constraint(
+                {"kind": "fixed", "reference": "J1",
+                 "position_mm": [1.0, float("inf")]})
+        with self.assertRaises(PlacementError):
+            placement.validate_constraint(
+                {"kind": "fixed", "reference": "J1",
+                 "position_mm": [1.0, 1.0],
+                 "rotation_deg": float("nan")})
+
     def test_fixing_a_component_twice_refuses(self):
         constraints = [
             {"kind": "fixed", "reference": "J1",

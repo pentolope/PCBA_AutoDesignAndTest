@@ -67,6 +67,17 @@ xnet level and does its job there.
    the optimization loop. Only the toolkit's gates turn copper into
    accepted evidence.
 
+## Discovered limitations (verified by invocation, not assumed)
+
+- `place_optimize.py` boundary detection (`placement/quench.py` via
+  `kicad_parser.extract_board_bounds`) reads gr_rect/gr_line/gr_arc/
+  gr_poly on Edge.Cuts but NOT `gr_circle`: a circular board outline
+  raises "No board boundary (Edge.Cuts) found". The Board B candidate
+  generator works around it by converting the CANDIDATE's circle to
+  two semicircular arcs (geometrically identical; the authoritative
+  board is untouched). Upstreamable.
+- `--lock REF ...` works as advertised for requirement-fixed parts.
+
 ## Routability signal
 
 Use trial-route outcome quality (completion rate, via count, ripped

@@ -1,30 +1,37 @@
-"""Board-level digital contract models: the Verilator foundation.
+"""Board-level digital contracts: separate stimulus, DUT and checker.
 
 Repository ownership, stated once and bindingly:
 
-  * The PCBA repository owns the board's physical/electrical interface
-    contract and its BEHAVIORAL board models (SystemVerilog that says
-    what the board expects of its digital neighbors: clock ratios,
-    strobe ordering, protocol envelopes).
-  * A firmware repository owns production FPGA RTL / MCU firmware, and
-    may consume the PCBA repository as a submodule to obtain the
-    contract. The same behavioral contract is never maintained as two
-    independently edited copies.
+  * The PCBA repository owns the board's interface contract: the
+    CHECKER module (SystemVerilog assertions stating what the board
+    expects) and the behavioral reference DUT.
+  * A firmware repository owns production RTL and may consume the
+    PCBA repository as a submodule; it substitutes its RTL as the DUT
+    while the checker - the contract - stays exactly the PCBA's. One
+    fingerprinted contract, never two independently edited copies.
   * MCUs/SoCs are represented by boundary/protocol behavioral models,
     never transistor-level simulation.
 
-The eventual invariant this foundation serves:
+The architecture keeps three interchangeable-by-role pieces:
 
-    production RTL satisfies the behavioral contract the board was
-    designed against -
+    stimulus/harness  - generated here from the contract's DECLARED
+                        clocking (no hidden port-name assumptions);
+    DUT               - behavioral board model OR production RTL,
+                        selected per run;
+    checker           - PCBA-owned assertions, identical for every DUT.
 
-by compiling the behavioral model and, later, the production RTL under
-Verilator against THE SAME board-level assertions. This module
-provides the generic pieces only: contract validation, deterministic
-harness generation, backend discovery, and the same honest status
-vocabulary the SPICE backend uses (``backend-unavailable`` is neither
-a pass nor a fabricated failure). Board-specific contracts and RTL
-live in the board and firmware repositories.
+A generated SystemVerilog wrapper instantiates DUT and checker side by
+side on the same declared ports; a generated C++ main (built with
+Verilator's --cc --exe --build flow, which expects exactly one
+caller-supplied main) drives the declared clock and reset. The
+eventual invariant this serves: production RTL satisfies the
+behavioral contract the board was designed against, under the same
+assertions.
+
+Statuses mirror the SPICE backend: an absent Verilator is
+``backend-unavailable`` (neither a pass nor a fabricated failure), a
+present one that cannot build is ``build-failed``, a fired assertion
+is ``assertions-failed``, and only a clean run is ``ran``.
 """
 
 from __future__ import annotations
@@ -37,10 +44,12 @@ from .fidelity import SimulationError
 
 VERILATOR_BINARY = "verilator"
 
-_REQUIRED_CONTRACT_KEYS = {"name", "top_module", "sources",
-                           "assertion_summary"}
-_KNOWN_CONTRACT_KEYS = _REQUIRED_CONTRACT_KEYS | {
-    "description", "ports", "cycles"}
+_REQUIRED_CONTRACT_KEYS = {"name", "checker_module", "checker_sources",
+                           "ports", "clocking", "assertion_summary"}
+_KNOWN_CONTRACT_KEYS = _REQUIRED_CONTRACT_KEYS | {"description"}
+
+_REQUIRED_CLOCKING_KEYS = {"clock_port", "reset_port",
+                           "reset_active_high", "reset_cycles"}
 
 
 def backend_identity():
@@ -65,15 +74,32 @@ def backend_identity():
             "version": version, "detail": "discovered on PATH"}
 
 
-def validate_contract(contract, base_directory):
-    """One behavioral-contract declaration, strictly.
+def _fingerprint_sources(sources, base_directory, role):
+    if not isinstance(sources, list) or not sources:
+        raise SimulationError(
+            "{} needs a nonempty list of SystemVerilog "
+            "sources".format(role))
+    fingerprints = []
+    for source in sources:
+        path = os.path.join(base_directory, source)
+        if not os.path.isfile(path):
+            raise SimulationError(
+                "{} source {!r} does not exist; a contract whose "
+                "model is absent proves nothing".format(role, source))
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        fingerprints.append({"source": source, "sha256": digest})
+    return fingerprints
 
-    Sources must exist and are fingerprinted, so the contract a
-    firmware repository tests against is identified by content, not
-    by path. ``assertion_summary`` is the human statement of what the
-    model asserts; the assertions themselves live IN the SystemVerilog
-    (SVA / immediate assertions), which is what keeps one copy of the
-    contract authoritative.
+
+def validate_contract(contract, base_directory):
+    """The PCBA-owned contract: checker, shared ports, clocking.
+
+    The clocking block DECLARES the stimulus interface - clock port,
+    reset port, reset polarity, reset cycles - so nothing about
+    stimulus is assumed from port names. Ports are the shared
+    interface every DUT and the checker present; each entry is
+    {name, dir(in|out), width}.
     """
     if not isinstance(contract, dict):
         raise SimulationError("a digital contract must be a dict")
@@ -85,54 +111,105 @@ def validate_contract(contract, base_directory):
     if missing:
         raise SimulationError(
             "digital contract is missing key(s) {}".format(missing))
-    sources = contract["sources"]
-    if not isinstance(sources, list) or not sources:
+    clocking = contract["clocking"]
+    if not isinstance(clocking, dict) or \
+            set(clocking) != _REQUIRED_CLOCKING_KEYS:
         raise SimulationError(
-            "digital contract needs a nonempty list of SystemVerilog "
-            "sources")
-    fingerprints = []
-    for source in sources:
-        path = os.path.join(base_directory, source)
-        if not os.path.isfile(path):
+            "clocking must declare exactly {}".format(
+                sorted(_REQUIRED_CLOCKING_KEYS)))
+    if not isinstance(clocking["reset_active_high"], bool):
+        raise SimulationError("reset_active_high must be a bool")
+    if isinstance(clocking["reset_cycles"], bool) or \
+            not isinstance(clocking["reset_cycles"], int) or \
+            clocking["reset_cycles"] < 1:
+        raise SimulationError("reset_cycles must be a positive int")
+    ports = contract["ports"]
+    if not isinstance(ports, list) or not ports:
+        raise SimulationError("ports must be a nonempty list")
+    for port in ports:
+        if not isinstance(port, dict) or \
+                set(port) != {"name", "dir", "width"}:
             raise SimulationError(
-                "contract source {!r} does not exist; a contract "
-                "whose model is absent proves nothing".format(source))
-        with open(path, "rb") as handle:
-            digest = hashlib.sha256(handle.read()).hexdigest()
-        fingerprints.append({"source": source, "sha256": digest})
+                "each port declares exactly name, dir and width")
+        if port["dir"] not in ("in", "out"):
+            raise SimulationError(
+                "port {!r} dir must be in or out".format(port["name"]))
+        if isinstance(port["width"], bool) or \
+                not isinstance(port["width"], int) or port["width"] < 1:
+            raise SimulationError(
+                "port {!r} width must be a positive int".format(
+                    port["name"]))
     return {"name": contract["name"],
-            "top_module": contract["top_module"],
-            "sources": fingerprints,
+            "checker_module": contract["checker_module"],
+            "checker_sources": _fingerprint_sources(
+                contract["checker_sources"], base_directory,
+                "checker"),
+            "ports": contract["ports"],
+            "clocking": dict(clocking),
             "assertion_summary": contract["assertion_summary"]}
 
 
-def generate_harness(contract, cycles=64):
-    """A deterministic C++ Verilator harness for a validated contract.
-
-    Drives a clock for the stated number of cycles and reports PASS
-    only if no $stop/$fatal assertion fired. The harness is content -
-    generated, hashed, reviewable - not behavior hidden in a runner.
-    """
-    top = contract["top_module"]
+def generate_wrapper(contract, dut_module):
+    """Deterministic SV wrapper: DUT and checker on the same ports."""
+    clocking = contract["clocking"]
     lines = [
-        "// deterministic Verilator harness generated by",
-        "// pcbqa.sim.digital for contract {}".format(contract["name"]),
-        "#include \"V{}.h\"".format(top),
+        "// deterministic wrapper generated by pcbqa.sim.digital",
+        "// contract {} with DUT {}".format(contract["name"],
+                                            dut_module),
+        "module contract_top (",
+        "    input  logic {},".format(clocking["clock_port"]),
+        "    input  logic {}".format(clocking["reset_port"]),
+        ");",
+    ]
+    for port in contract["ports"]:
+        lines.append("    logic [{}:0] {};".format(
+            port["width"] - 1, port["name"]))
+    connections = ["        .{0}({0})".format(clocking["clock_port"]),
+                   "        .{0}({0})".format(clocking["reset_port"])]
+    connections += ["        .{0}({0})".format(port["name"])
+                    for port in contract["ports"]]
+    joined = ",\n".join(connections)
+    lines.append("    {} dut (\n{}\n    );".format(dut_module, joined))
+    lines.append("    {} checker_instance (\n{}\n    );".format(
+        contract["checker_module"], joined))
+    lines.append("endmodule")
+    return "\n".join(lines) + "\n"
+
+
+def generate_main(contract, cycles):
+    """Deterministic C++ main for the --cc --exe --build flow.
+
+    Drives exactly the DECLARED clock and reset ports at the declared
+    polarity for the declared reset duration; nothing about the
+    interface is assumed.
+    """
+    clocking = contract["clocking"]
+    asserted = "1" if clocking["reset_active_high"] else "0"
+    released = "0" if clocking["reset_active_high"] else "1"
+    lines = [
+        "// deterministic Verilator main generated by pcbqa.sim.digital",
+        "#include \"Vcontract_top.h\"",
         "#include \"verilated.h\"",
         "int main(int argc, char** argv) {",
         "    VerilatedContext context;",
         "    context.commandArgs(argc, argv);",
-        "    V{} model{{&context}};".format(top),
-        "    model.rst = 1; model.clk = 0; model.eval();",
+        "    Vcontract_top top{&context};",
+        "    top.{} = {};".format(clocking["reset_port"], asserted),
+        "    top.{} = 0;".format(clocking["clock_port"]),
+        "    top.eval();",
         "    for (int cycle = 0; cycle < {}; ++cycle) {{".format(
             int(cycles)),
-        "        if (cycle == 2) model.rst = 0;",
-        "        model.clk = 1; context.timeInc(1); model.eval();",
-        "        model.clk = 0; context.timeInc(1); model.eval();",
+        "        if (cycle == {}) top.{} = {};".format(
+            int(clocking["reset_cycles"]), clocking["reset_port"],
+            released),
+        "        top.{} = 1; context.timeInc(1); top.eval();".format(
+            clocking["clock_port"]),
+        "        top.{} = 0; context.timeInc(1); top.eval();".format(
+            clocking["clock_port"]),
         "        if (context.gotFinish() || context.gotError())",
         "            break;",
         "    }",
-        "    model.final();",
+        "    top.final();",
         "    if (context.gotError()) return 1;",
         "    return 0;",
         "}",
@@ -140,28 +217,40 @@ def generate_harness(contract, cycles=64):
     return "\n".join(lines) + "\n"
 
 
-def run_contract(contract_record, base_directory, workdir, cycles=64):
-    """Compile and run one behavioral contract under Verilator.
+def run_contract(contract_record, dut, base_directory, workdir,
+                 cycles=64):
+    """Run one DUT against the PCBA-owned checker under Verilator.
 
-    Statuses mirror the SPICE backend: ``backend-unavailable`` when
-    Verilator is absent, ``build-failed`` / ``assertions-failed`` /
-    ``ran`` otherwise. Nothing is fabricated in any branch, and the
-    result records exactly which fingerprinted sources were tested.
+    `dut` declares the substitutable half: {"module": name,
+    "sources": [paths]} - the behavioral board model or production
+    RTL. The checker travels with the contract and is identical for
+    every DUT, which is the whole point.
     """
+    if not isinstance(dut, dict) or set(dut) != {"module", "sources"}:
+        raise SimulationError(
+            "dut must declare exactly module and sources")
+    dut_sources = _fingerprint_sources(dut["sources"], base_directory,
+                                       "dut")
     backend = backend_identity()
-    harness = generate_harness(contract_record, cycles)
+    wrapper = generate_wrapper(contract_record, dut["module"])
+    main_text = generate_main(contract_record, cycles)
     result = {
         "contract": contract_record["name"],
-        "sources": contract_record["sources"],
+        "checker_sources": contract_record["checker_sources"],
+        "dut_module": dut["module"],
+        "dut_sources": dut_sources,
         "backend": backend,
-        "harness_sha256": hashlib.sha256(
-            harness.encode("utf-8")).hexdigest(),
+        "wrapper_sha256": hashlib.sha256(
+            wrapper.encode("utf-8")).hexdigest(),
+        "main_sha256": hashlib.sha256(
+            main_text.encode("utf-8")).hexdigest(),
         "significance": {
             "release_grade": False,
             "meaning": "a behavioral-contract run under the stated "
-                       "fingerprinted sources; it never establishes "
-                       "electrical behavior or production RTL "
-                       "equivalence by itself",
+                       "fingerprinted checker and DUT; it never "
+                       "establishes electrical behavior, and only a "
+                       "production-RTL DUT run makes any claim about "
+                       "production RTL",
         },
     }
     if not backend["available"]:
@@ -169,16 +258,22 @@ def run_contract(contract_record, base_directory, workdir, cycles=64):
                        "assertions_passed": None})
         return result
     os.makedirs(workdir, exist_ok=True)
-    harness_path = os.path.join(workdir, "harness.cpp")
-    with open(harness_path, "w", encoding="utf-8",
+    wrapper_path = os.path.join(workdir, "contract_top.sv")
+    with open(wrapper_path, "w", encoding="utf-8",
               newline="\n") as handle:
-        handle.write(harness)
+        handle.write(wrapper)
+    main_path = os.path.join(workdir, "contract_main.cpp")
+    with open(main_path, "w", encoding="utf-8",
+              newline="\n") as handle:
+        handle.write(main_text)
     sources = [os.path.join(base_directory, item["source"])
-               for item in contract_record["sources"]]
+               for item in contract_record["checker_sources"]]
+    sources += [os.path.join(base_directory, item["source"])
+                for item in dut_sources]
     build = subprocess.run(
-        [backend["path"], "--binary", "--assert", "-Wall",
-         "--top-module", contract_record["top_module"],
-         "-o", "contract_model"] + sources + [harness_path],
+        [backend["path"], "--cc", "--exe", "--build", "--assert",
+         "-Wall", "--top-module", "contract_top",
+         "-o", "contract_model", wrapper_path, main_path] + sources,
         capture_output=True, text=True, timeout=600, cwd=workdir)
     if build.returncode != 0:
         result.update({"status": "build-failed",
