@@ -205,21 +205,32 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
                       mode="differential", target_ohm=100.0)
 
     def test_design_guidance_separates_use_from_establishment(self):
-        """The machine-facing contract for an autonomous designer:
-        a feasible bare solve is an analytic nominal (controlled adds
-        eligibility, nothing more), a coated solve offers only a
-        reversible-choice interval with no nominal, a no-solution
-        result is not usable - and nothing, in any class, is
-        release-grade or establishes what the not_established list
-        names."""
+        """The machine-facing contract: a feasible bare solve is a
+        nominal (and also trivially provisional); a coated solve is
+        PROVISIONAL ONLY - no nominal exists, the provisional domain
+        is the model-only routable intersection, and resolution is
+        required before fabrication; a no-solution result grants
+        nothing. Policy is carried by structured fields and codes,
+        never inferred from prose."""
         bare = impedance.solve(self.snapshot, _request())
         guidance = bare["design_guidance"]
-        self.assertTrue(guidance["usable_for_autonomous_nominal_design"])
+        self.assertTrue(
+            guidance["usable_for_autonomous_nominal_design"])
+        self.assertTrue(
+            guidance["usable_for_autonomous_provisional_layout"])
         self.assertEqual(guidance["confidence_class"],
                          "uncontrolled-analytic-nominal")
         self.assertEqual(guidance["nominal_width_mm"],
                          bare["numeric_solution"]["width_mm"])
-        self.assertIsNone(guidance["reversible_choice_interval_mm"])
+        self.assertIsNone(guidance["provisional_width_domain_mm"])
+        self.assertFalse(
+            guidance["requires_resolution_before_fabrication"])
+        actions = guidance["allowed_actions"]
+        self.assertTrue(actions["draw_nominal_width"])
+        self.assertTrue(actions["reserve_provisional_width_region"])
+        self.assertTrue(actions["continue_board_routing"])
+        self.assertFalse(actions["mark_target_fabrication_ready"])
+        self.assertFalse(actions["release_design"])
 
         controlled = impedance.solve(self.snapshot, _request(
             requirements=_requirements(impedance_control=True),
@@ -231,17 +242,28 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         coated = impedance.solve(self.snapshot,
                                  _request(soldermask_present=True))
         guidance = coated["design_guidance"]
-        self.assertTrue(guidance["usable_for_autonomous_nominal_design"])
+        self.assertFalse(
+            guidance["usable_for_autonomous_nominal_design"])
+        self.assertTrue(
+            guidance["usable_for_autonomous_provisional_layout"])
         self.assertEqual(guidance["confidence_class"],
                          "model-interval-reversible-estimate")
         self.assertIsNone(guidance["nominal_width_mm"])
         self.assertEqual(
-            guidance["reversible_choice_interval_mm"],
+            guidance["provisional_width_domain_mm"],
             coated["enclosure"]["manufacturing"][
                 "model_interval_routable_intersection_mm"])
-        joined = " ".join(guidance["not_established"])
-        self.assertIn("finite-conductor", joined)
-        self.assertIn("physical enclosure", joined)
+        self.assertTrue(
+            guidance["requires_resolution_before_fabrication"])
+        actions = guidance["allowed_actions"]
+        self.assertFalse(actions["draw_nominal_width"])
+        self.assertTrue(actions["reserve_provisional_width_region"])
+        self.assertTrue(actions["continue_board_routing"])
+        codes = {item["code"] for item in guidance["not_established"]}
+        self.assertLessEqual(
+            {"FABRICATION_TARGET_BINDING", "PHYSICAL_COATED_BOUNDS",
+             "COATED_POINT_MODEL",
+             "FINITE_CONDUCTOR_COATED_VALIDATION"}, codes)
 
         unsolved = impedance.solve(self.snapshot, _request(
             requirements=_requirements(impedance_control=True),
@@ -250,15 +272,72 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         guidance = unsolved["design_guidance"]
         self.assertFalse(
             guidance["usable_for_autonomous_nominal_design"])
+        self.assertFalse(
+            guidance["usable_for_autonomous_provisional_layout"])
         self.assertEqual(guidance["confidence_class"], "not-usable")
-        self.assertIsNone(guidance["nominal_width_mm"])
+        actions = guidance["allowed_actions"]
+        self.assertFalse(actions["draw_nominal_width"])
+        self.assertFalse(actions["reserve_provisional_width_region"])
+        self.assertFalse(actions["continue_board_routing"])
+
+    def test_nominal_usability_is_bound_to_a_nominal_width(self):
+        """The finding-one invariant, structural: nominal usability
+        and the presence of a nominal width are the same fact, in
+        every result state."""
+        results = (
+            impedance.solve(self.snapshot, _request()),
+            impedance.solve(self.snapshot,
+                            _request(soldermask_present=True)),
+            impedance.solve(self.snapshot, _request(
+                requirements=_requirements(impedance_control=True),
+                stackup="JLC04161H-7628", target_ohm=30.0,
+                width_search_mm={"min": 0.15, "max": 0.5})),
+        )
+        for result in results:
+            guidance = result["design_guidance"]
+            self.assertEqual(
+                guidance["usable_for_autonomous_nominal_design"],
+                guidance["nominal_width_mm"] is not None)
+            self.assertEqual(
+                guidance["allowed_actions"]["draw_nominal_width"],
+                guidance["nominal_width_mm"] is not None)
+
+    def test_calibration_record_is_scoped_and_bound(self):
+        """The chord characterization lives in an explicit record with
+        its measured domain, reference identity and applicability
+        flag; the sample-domain figures no longer leak into generic
+        prose."""
+        coated = impedance.solve(self.snapshot,
+                                 _request(soldermask_present=True))
+        enclosure = coated["enclosure"]
+        record = enclosure["loaded_edge_calibration"]
+        self.assertEqual(record["reference_id"],
+                         overlay_reference.REFERENCE_ID)
+        self.assertIn("not a universal", record["kind"])
+        for key in ("substrate_dk", "mask_dk", "substrate_height_mm",
+                    "conductor_thickness_mm", "width_mm",
+                    "targets_ohm"):
+            self.assertIn(key, record["domain"])
+        self.assertIs(record["applies_to_this_construction"], True)
+        self.assertIn("not", record["width_sensitivity"]["note"])
+        out_of_domain = dict(coated["context"], epsilon_r=3.0)
+        self.assertFalse(
+            impedance._calibration_applicable(out_of_domain))
+        self.assertNotIn("0.4", enclosure["note"])
+        self.assertNotIn("percent", enclosure["note"])
+        meanings = " ".join(
+            item["meaning"]
+            for item in coated["design_guidance"]["not_established"])
+        self.assertNotIn("7 to 50", meanings)
+        self.assertNotIn("percent", meanings)
 
     def test_guidance_never_claims_release_grade(self):
         """Every class, every state: release_grade is false, the
-        fabrication binding stays in not_established, and a
-        controlled profile cannot turn an unbound analytic model into
-        an established fabrication target or upgrade a coated model
-        interval beyond a reversible estimate."""
+        FABRICATION_TARGET_BINDING code is present, fabrication-ready
+        and release actions are denied, and a controlled profile
+        cannot upgrade coated provisional guidance into a nominal or
+        a fabrication-ready state. Policy reads codes and actions,
+        so prose rewording cannot break it."""
         results = (
             impedance.solve(self.snapshot, _request()),
             impedance.solve(self.snapshot, _request(
@@ -273,12 +352,20 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
         for result in results:
             guidance = result["design_guidance"]
             self.assertIs(guidance["release_grade"], False)
-            self.assertIn("fabrication binding of the requested "
-                          "target", guidance["not_established"])
+            codes = {item["code"]
+                     for item in guidance["not_established"]}
+            self.assertIn("FABRICATION_TARGET_BINDING", codes)
+            actions = guidance["allowed_actions"]
+            self.assertFalse(actions["mark_target_fabrication_ready"])
+            self.assertFalse(actions["release_design"])
             self.assertIn("REVERSIBLE", guidance["meaning"])
         controlled_coated = results[3]["design_guidance"]
         self.assertEqual(controlled_coated["confidence_class"],
                          "model-interval-reversible-estimate")
+        self.assertFalse(
+            controlled_coated["usable_for_autonomous_nominal_design"])
+        self.assertFalse(controlled_coated["allowed_actions"][
+            "draw_nominal_width"])
         self.assertFalse(results[3]["fabrication_control"][
             "target_bound_to_fabrication_specification"])
 
@@ -1839,16 +1926,19 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
         (revision, artifact-hash) pair is pinned, and REFERENCE_ID is
         composed from that same pair so the two can never drift
         apart."""
-        self.assertEqual(impedance.MODEL_VERSION, "12")
+        self.assertEqual(impedance.MODEL_VERSION, "13")
         expected_sha = ("618bce2839878e7725f14ec7264d70a666116e5057"
                         "44290d0b4d953714e4cad4")
         self.assertEqual(
             (overlay_reference.REFERENCE_VERSION,
              overlay_reference.SOURCE_ARTIFACT["sha256"]),
-            ("4", expected_sha))
+            ("5", expected_sha))
         self.assertEqual(
             overlay_reference.REFERENCE_ID,
-            "barbuto-2013-overlay+r4+sha256:" + expected_sha)
+            "barbuto-2013-overlay+r5+sha256:" + expected_sha)
+        self.assertEqual(
+            impedance._CHORD_CALIBRATION["reference_id"],
+            overlay_reference.REFERENCE_ID)
         source = inspect.getsource(impedance)
         self.assertIn("REFERENCE_VERSION", source)
         self.assertIn("PRODUCTION", source)
@@ -1871,18 +1961,22 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
                 pinned = overlay_reference.immersed_epsilon(
                     er, 3.8, width / 0.2104)
                 worst = max(worst, abs(chord - pinned) / pinned)
-        self.assertLess(worst, 0.004)
+        self.assertLess(
+            worst,
+            impedance._CHORD_CALIBRATION["epsilon_agreement_bound"])
         self.assertGreater(worst, 0.0005)
 
-    def test_the_thickness_mapping_question_is_material(self):
-        """The promotion decision's second measurement: a hypothetical
-        fully-promoted zero-thickness Barbuto edge (raw w/h in both
-        the geometry factor and the permittivity) moves the loaded
-        width by between 5 and 60 percent across representative
-        targets - two orders of magnitude beyond the family
-        difference. That shift IS the finite-conductor contribution
-        no source licenses a mapping for, and it is why the reference
-        is not dispatched."""
+    def test_the_sensitivity_decomposition_isolates_each_leg(self):
+        """The promotion decision's second measurement, decomposed so
+        the two effects cannot be conflated. A = thickness-aware
+        production chord; B = zero-thickness chord in the SAME family;
+        C = zero-thickness Barbuto equation (8). Measured over the
+        calibration domain: the A-to-B leg (thickness/width-convention
+        sensitivity - a model/convention measurement, NOT a physical
+        error bound) moves the loaded width by 5 to 60 percent; the
+        B-to-C leg (model family) stays under 0.5 percent; and the
+        total A-to-C hypothetical-promotion shift is dominated by the
+        first leg."""
         def z_air(u):
             if u <= 1.0:
                 return 60.0 * math.log(8.0 / u + u / 4.0)
@@ -1900,28 +1994,50 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
             return (low + high) / 2.0
 
         height, thickness = 0.2104, 0.04064
+        sensitivity = impedance._CHORD_CALIBRATION[
+            "width_sensitivity"]
         for er in (3.91, 4.4):
-            def chord_z(width):
+            def chord_eps(width_for_eps):
+                bare = propagation.hammerstad_effective_permittivity(
+                    er, width_for_eps, height)
+                q = (bare - 1.0) / (er - 1.0)
+                return q * er + (1.0 - q) * 3.8
+
+            def z_thick_chord(width):
                 effective = propagation.thickness_corrected_width(
                     width, height, thickness)
-                bare = propagation.hammerstad_effective_permittivity(
-                    er, effective, height)
-                q = (bare - 1.0) / (er - 1.0)
-                chord = q * er + (1.0 - q) * 3.8
-                return z_air(effective / height) / math.sqrt(chord)
+                return z_air(effective / height) / math.sqrt(
+                    chord_eps(effective))
 
-            def barbuto_z(width):
-                ratio = width / height
-                pinned = overlay_reference.immersed_epsilon(
-                    er, 3.8, ratio)
-                return z_air(ratio) / math.sqrt(pinned)
+            def z_zero_chord(width):
+                return z_air(width / height) / math.sqrt(
+                    chord_eps(width))
+
+            def z_zero_barbuto(width):
+                return z_air(width / height) / math.sqrt(
+                    overlay_reference.immersed_epsilon(
+                        er, 3.8, width / height))
 
             for target in (75.0, 50.0, 35.0):
-                production = solve(chord_z, target)
-                promoted = solve(barbuto_z, target)
-                shift = abs(promoted - production) / production
-                self.assertGreater(shift, 0.05)
-                self.assertLess(shift, 0.60)
+                a = solve(z_thick_chord, target)
+                b = solve(z_zero_chord, target)
+                c = solve(z_zero_barbuto, target)
+                leg_ab = abs(b - a) / a
+                leg_bc = abs(c - b) / b
+                leg_ac = abs(c - a) / a
+                self.assertGreater(
+                    leg_ab,
+                    sensitivity["thickness_convention_shift"]["min"])
+                self.assertLess(
+                    leg_ab,
+                    sensitivity["thickness_convention_shift"]["max"])
+                self.assertLess(leg_bc,
+                                sensitivity["family_shift_bound"])
+                self.assertGreater(leg_ac,
+                                   sensitivity["total_shift"]["min"])
+                self.assertLess(leg_ac,
+                                sensitivity["total_shift"]["max"])
+                self.assertLess(abs(leg_ac - leg_ab), 0.01)
 
     def test_production_does_not_dispatch_the_reference(self):
         """The reference is evidence: the impedance module never

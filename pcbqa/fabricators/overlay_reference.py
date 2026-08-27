@@ -34,6 +34,15 @@ What the paper provides:
     with eps_rc replaced by the cover permittivity;
   * Figures 4-10: comparisons against full-wave simulations.
 
+The paper additionally presents the full characteristic-impedance
+framework - Z0 = Z0,air / sqrt(eps_eff), with Z0,air obtained from
+its Schwarz-Christoffel conformal chain (its equations (1)-(7), whose
+mapping parameters are carried in Callarotti and Gallo, 1984). THIS
+TOOLKIT REFERENCE does not independently pin that air-line chain: the
+limitation is of this transcription, not of the paper, and it is why
+no production-dispatchable Barbuto characteristic impedance exists
+here.
+
 Measured against the paper's own figures (the tests carry the
 numbers): equation (8) reproduces every readable anchor, on both of
 its Corr branches. Equation (10) AS PRINTED does not: with the printed
@@ -119,8 +128,12 @@ K11, K12, K13 = 1.782, 0.782, 0.214
 #: the zero-thickness width convention it requires shifts the loaded
 #: width by roughly 7 to 50 percent - the unlicensed finite-conductor
 #: mapping - as asserted in the tests. The transcribed artifact itself
-#: is anchored by SOURCE_ARTIFACT["sha256"].
-REFERENCE_VERSION = "4"
+#: is anchored by SOURCE_ARTIFACT["sha256"]. Revision 5 corrected the
+#: Z0 provenance statement - the paper presents the full
+#: characteristic-impedance framework; it is this transcription that
+#: does not pin the air-line conformal chain - with no change to any
+#: transcribed equation or constant.
+REFERENCE_VERSION = "5"
 
 PAPER = {
     "authors": "Barbuto, Alu, Bilotti, Toscano, Vegni",

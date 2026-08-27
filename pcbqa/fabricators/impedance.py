@@ -157,7 +157,20 @@ from .. import propagation
 #: every result now carries `design_guidance`, separating what an
 #: autonomous designer may use as a reversible choice from what
 #: remains unestablished. Production roots are unchanged.
-MODEL_VERSION = "12"
+#: Version 13 hardened the autonomy contract: nominal design and
+#: provisional layout are separate machine-readable capabilities (a
+#: coated model interval is provisionally routable but never a
+#: nominal), every unestablished item carries a stable blocker CODE
+#: alongside its prose, allowed actions are enumerated structurally,
+#: the chord characterization moved into a calibration record with
+#: its exact measured domain and reference identity instead of
+#: unconditional numbers in generic results, and the sensitivity
+#: measurement was decomposed - the thickness/width-convention leg
+#: (7 to 48 percent on widths over the calibration domain) apart from
+#: the model-family leg (under 0.2 percent) - as model/convention
+#: sensitivity, not a physical error bound. Production roots are
+#: unchanged.
+MODEL_VERSION = "13"
 
 FREE_SPACE_ETA_OHM = 376.730313668
 
@@ -299,8 +312,11 @@ def coated_microstrip_epsilon(epsilon_r, epsilon_mask, epsilon_bare):
     accuracy. The zero-thickness width convention the reference
     requires would instead shift the loaded width by roughly 7 to 50
     percent across representative targets (measured, asserted in the
-    tests): that shift IS the finite-conductor contribution no source
-    licenses a mapping for, and dispatching the reference would trade
+    tests): that shift is dominated by the thickness/width-convention
+    leg of the decomposition (the model-family leg stays under half a
+    percent on widths - see _CHORD_CALIBRATION), a sensitivity no
+    source licenses a mapping across, and dispatching the reference
+    would trade
     a sub-percent sourced refinement for a double-digit unmodeled
     geometry change. The chord stays, characterized instead of
     floating; the reference stays evidence.
@@ -1006,6 +1022,54 @@ def _enclosure_manufacturing(capabilities, context, lower, upper):
     return record
 
 
+#: Measured characterization of the declared loaded chord against the
+#: pinned Barbuto reference - over EXACTLY this domain, and nothing
+#: wider. Measurements, not universal model properties; every figure
+#: is asserted in the tests. The A/B/C decomposition separates the
+#: thickness/width-convention sensitivity (A: thickness-aware chord ->
+#: B: zero-thickness chord, same family) from the model-family
+#: difference (B -> C: zero-thickness Barbuto equation (8)); neither
+#: is a physical error bound.
+_CHORD_CALIBRATION = {
+    "kind": "measured characterization over the stated domain only; "
+            "not a universal model property",
+    "reference_id": "barbuto-2013-overlay+r5+sha256:618bce2839878e77"
+                    "25f14ec7264d70a666116e505744290d0b4d953714e4cad4",
+    "domain": {
+        "substrate_dk": {"min": 3.91, "max": 4.6},
+        "mask_dk": 3.8,
+        "substrate_height_mm": 0.2104,
+        "conductor_thickness_mm": 0.04064,
+        "width_mm": {"min": 0.06, "max": 1.6},
+        "targets_ohm": {"min": 35.0, "max": 75.0},
+    },
+    "epsilon_agreement_bound": 0.004,
+    "width_sensitivity": {
+        "thickness_convention_shift": {"min": 0.05, "max": 0.60},
+        "family_shift_bound": 0.005,
+        "total_shift": {"min": 0.05, "max": 0.60},
+        "note": "model/convention sensitivity measurements, not "
+                "physical error bounds",
+    },
+    "asserted_in": "tests/test_impedance.py",
+}
+
+
+def _calibration_applicable(context):
+    """Whether the active construction lies inside the calibration
+    record's stated domain. Outside it the record's figures say
+    nothing about this construction, and the flag says so."""
+    domain = _CHORD_CALIBRATION["domain"]
+    return bool(
+        domain["substrate_dk"]["min"] <= context["epsilon_r"]
+        <= domain["substrate_dk"]["max"]
+        and context.get("epsilon_mask") == domain["mask_dk"]
+        and context.get("height_mm")
+        == domain["substrate_height_mm"]
+        and context.get("conductor_thickness_mm")
+        == domain["conductor_thickness_mm"])
+
+
 def _solve_coated(catalog, context, request, range_record, low, high,
                   target):
     """Solve both model edges of the coated enclosure; claim no width.
@@ -1089,14 +1153,11 @@ def _solve_coated(catalog, context, request, range_record, low, high,
         "note": ("no covered-microstrip point equation is dispatched "
                  "by this solve, so no width inside the model "
                  "interval is claimed or preferred. The loaded chord "
-                 "is measured against the pinned Barbuto "
-                 "infinite-superstrate reference: effective "
-                 "permittivities agree within 0.4 percent across this "
-                 "fabricator's constructions, while the "
-                 "finite-conductor contribution the zero-thickness "
-                 "reference omits shifts the loaded width by roughly "
-                 "7 to 50 percent - which is why the reference is not "
-                 "dispatched (bounds asserted in tests)"),
+                 "is characterized against the pinned Barbuto "
+                 "infinite-superstrate reference over a stated "
+                 "calibration domain - see loaded_edge_calibration, "
+                 "whose figures are measurements over that domain, "
+                 "never universal model properties"),
     }
     if both_rooted and not ordering_verified:
         enclosure["failure"] = (
@@ -1105,6 +1166,9 @@ def _solve_coated(catalog, context, request, range_record, low, high,
             "relation here, so no interval is presented".format(
                 round(raw_roots["loaded"], 6),
                 round(raw_roots["bare"], 6)))
+    enclosure["loaded_edge_calibration"] = dict(
+        _CHORD_CALIBRATION,
+        applies_to_this_construction=_calibration_applicable(context))
     if model_established:
         enclosure["width_mm"] = {
             "lower": edges["loaded"]["width_mm"],
@@ -1394,49 +1458,78 @@ def _result(context, request, range_record, numeric, manufacturing,
             "feasible geometry is an analytic nominal estimate, and "
             "nothing here establishes that the fabricated line meets "
             "the requested impedance")
-    not_established = ["fabrication binding of the requested target"]
-    interval = None
+    not_established = [
+        {"code": "FABRICATION_TARGET_BINDING",
+         "meaning": "no board- or order-side specification binds the "
+                    "requested target to fabrication"},
+    ]
+    provisional_domain = None
     if enclosure is not None:
         not_established.extend([
-            "physical enclosure bounds on the fabricated line",
-            "the finite-conductor-thickness contribution to the "
-            "coated reading (measured to move the loaded width by "
-            "roughly 7 to 50 percent)",
-            "a single point width (no pinned finite-cover model)",
+            {"code": "PHYSICAL_COATED_BOUNDS",
+             "meaning": "no physical bounds on the fabricated coated "
+                        "line are established; the interval is "
+                        "model-only"},
+            {"code": "COATED_POINT_MODEL",
+             "meaning": "no pinned finite-cover point model exists, "
+                        "so no single coated width is claimed"},
+            {"code": "FINITE_CONDUCTOR_COATED_VALIDATION",
+             "meaning": "the finite-conductor contribution to the "
+                        "coated reading is unvalidated; its magnitude "
+                        "is measured only over the calibration "
+                        "record's stated domain"},
         ])
         manufacturing_record = enclosure.get("manufacturing") or {}
         if enclosure.get("model_enclosure_established") and \
                 manufacturing_record.get(
                     "model_interval_has_routable_widths"):
-            interval = manufacturing_record[
+            provisional_domain = manufacturing_record[
                 "model_interval_routable_intersection_mm"]
     elif geometry_feasible:
         not_established.append(
-            "physical tolerance on the fabricated line (the nominal "
-            "is analytic)")
+            {"code": "PHYSICAL_TOLERANCE",
+             "meaning": "no physical tolerance on the fabricated "
+                        "line is established; the nominal is an "
+                        "analytic estimate"})
     if geometry_feasible and controlled:
         confidence = "controlled-eligible-analytic-nominal"
     elif geometry_feasible:
         confidence = "uncontrolled-analytic-nominal"
-    elif interval is not None:
+    elif provisional_domain is not None:
         confidence = "model-interval-reversible-estimate"
     else:
         confidence = "not-usable"
+    nominal_usable = geometry_feasible
+    provisional_usable = geometry_feasible \
+        or provisional_domain is not None
     design_guidance = {
-        "usable_for_autonomous_nominal_design":
-            confidence != "not-usable",
         "confidence_class": confidence,
+        "usable_for_autonomous_nominal_design": nominal_usable,
+        "usable_for_autonomous_provisional_layout":
+            provisional_usable,
         "nominal_width_mm":
             numeric["width_mm"] if geometry_feasible else None,
-        "reversible_choice_interval_mm": interval,
+        "provisional_width_domain_mm": provisional_domain,
+        "requires_resolution_before_fabrication":
+            provisional_usable and not nominal_usable,
+        "allowed_actions": {
+            "draw_nominal_width": nominal_usable,
+            "reserve_provisional_width_region": provisional_usable,
+            "continue_board_routing":
+                nominal_usable or provisional_usable,
+            "mark_target_fabrication_ready": False,
+            "release_design": False,
+        },
         "release_grade": False,
         "not_established": not_established,
-        "meaning": ("usable means safe as a REVERSIBLE engineering "
-                    "choice inside the stated class - a width an "
-                    "autonomous designer may draw and later revise - "
-                    "never a release-grade claim; everything in "
-                    "not_established stays unestablished regardless "
-                    "of the class"),
+        "meaning": ("the structured fields and codes govern; this "
+                    "prose is commentary. Usable means safe as a "
+                    "REVERSIBLE engineering act inside the stated "
+                    "class - a nominal an autonomous designer may "
+                    "draw, or a provisional region it may reserve, "
+                    "and later revise - never a release-grade claim; "
+                    "every coded item stays unestablished regardless "
+                    "of class"),
     }
     return {
         "model": {
