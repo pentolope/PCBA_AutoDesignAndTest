@@ -1,0 +1,159 @@
+# Autonomous PCBA development — architecture
+
+**Status:** maintained architecture and roadmap. This supersedes the
+2026-08-26 planning brief (`AUTONOMOUS_PCBA_AGENT_ARCHITECTURE.md`,
+retired) — reconciled against the system that now exists. Where this
+document and the code disagree, the code and its tests are the
+authority; fix the document.
+
+**Goal:** a toolkit that lets an AI develop functional PCBAs with
+minimal human interaction, using structured evidence to decide what
+is known, what is unresolved, what action is allowed, what design to
+try next, and whether a board is ready for fabrication.
+
+## 1. Division of labor (durable)
+
+- **AI agent** — electrical intent, constraint authorship, failure
+  interpretation, architecture choice. It does not draw copper and
+  does not hand-place parts except deliberately fixed structures.
+- **Numerical engines** — placement search, routing, tuning
+  (currently KiCadRoutingTools). Their claims are never trusted:
+  the board file is the arbiter, and every invocation carries an
+  attempt identity (input SHA, tool SHA, configuration, unique
+  output) so a stale artifact can never masquerade as fresh work.
+- **Simulation engines** — ngspice for board-level electrical
+  simulation (a real engine is discovered via `NGSPICE_LIBRARY`,
+  PATH, or the shared library beside the interpreter — KiCad's own
+  bundled engine under KiCad's python); Verilator for RTL execution
+  (`VERILATOR` override or PATH). Absence is
+  `backend-unavailable` — never a pass, never a fabricated failure.
+- **This toolkit** — the authority for provenance, constraints,
+  connectivity, coverage, condition semantics, validation gates and
+  release lifecycle. Fail-closed everywhere: refusals over guesses,
+  unknown keys refuse, silence never reads as evidence.
+- **KiCad** — the authoritative board representation. Native files
+  are the design authority; generators produce candidates.
+
+## 2. Repository organization (durable)
+
+The PCBA repository owns the physical/electrical contract: board,
+schematic, fabrication profile, constraints, behavioral boundary
+models (the board's expectations at its interfaces), simulation
+scenarios, extracted parasitics, and the assumptions and coverage of
+every model. A firmware repository owns production RTL/firmware and
+may consume the PCBA repository as a submodule, substituting its RTL
+as the DUT while the PCBA-owned checker — the contract — stays
+byte-identical (implemented: `pcbqa/sim/digital.py`; a fingerprinted
+contract, a generated wrapper and main, DUT swapped per run).
+
+## 3. Evidence contracts (implemented; extend, do not weaken)
+
+- **Connectivity** (`pcbqa/connectivity.py`): a net's real state is
+  computed from copper intersection — `no-pads`, `no-copper`,
+  `partial-copper`, `connectivity-complete` (every pad in ONE
+  connected component; filled zones participate). Completeness never
+  implies required topology — `NetTopologyRule` and the
+  electrical-path gates own that judgment. "Has tracks" is never
+  routing completion, and router logs are never the arbiter.
+- **Coverage** (`pcbqa/sim/fidelity.py`, `scenario.py`): phenomenon
+  → evidence class, judged per measurement over its contribution
+  closure. Every contributor must account for each required
+  phenomenon: covered at an accepted class, explicitly
+  `not-applicable`, or explicitly `unsupported` — an unaccounted
+  phenomenon blocks. One strong model never blesses a weak or
+  silent one. (This supersedes the planning brief's flat fidelity
+  ladder.)
+- **Operating conditions**: models declare `fixed-reference` or
+  `parameterized` condition support; undeclared is not insensitive.
+  Results carry a usability policy — assertions passing never
+  overrides an inapplicable condition, `usable_for_release` is
+  false at this layer, always.
+- **Physical provenance** (`pcbqa/extract.py`): every physical
+  input is a provenance record; `approved-evidence` can only be
+  minted by resolvers that read the approved catalog, and TRUST is
+  verified against the actual snapshot (`verify_approved_parameter`)
+  — a well-shaped forgery refuses. Derived models embed their full
+  derivation with truthful roots (mixed stays mixed) and carry the
+  physical-input digest in their identity.
+- **Benchmark** (`pcbqa/benchmark.py`): typed measured/unmeasured
+  metrics with stable semantic definition identities;
+  `compare_reports` is the only comparison path and refuses unknown
+  schemas, different resolved physical constructions, different
+  metric definitions, or mismatched units. Unmeasured never becomes
+  zero; partial copper never pairs with a complete route.
+- **Zone inheritance** (`pcbqa/zone_inheritance.py`): a declarative,
+  EXECUTABLE policy decides which zones a derived candidate inherits
+  as architecture and which placement-derived zones survive only
+  near requirement-fixed geometry; an unclassified zone refuses.
+
+## 4. Placement and routing (implemented core, open frontier)
+
+Implemented: a semantic constraint vocabulary
+(`pcbqa/placement.py`) with `evaluate_placement` judging actual
+candidate positions and courtyard collision checking; consumers
+build constraint-satisfying seed placements (fanout-aware series
+parts facing their targets), translate constraints into optimizer
+locks, let the quench move the rest, and repair what it breaks —
+the toolkit proves the result or the candidate fails.
+
+Routing is staged by board semantics with bounded runtimes,
+checkpointed per attempt, judged by connectivity classification,
+finished by a scoped cleanup stage. Router parameters derive from
+the board's own declared fabrication minimums; router heuristics
+that misclassify parts (e.g. BGA auto-detection walling a
+microphone's own clock pad) are disabled with the finding recorded.
+
+Open frontier, in the brief's durable ordering: a critical topology
+planner for structures a net-oriented router cannot own
+(ElectricalPaths across series parts, matched/differential
+structures), length/time tuning mapped from electrical intent, and
+richer optimizer freedom (constraint-preserving perturbations,
+block moves) beyond lock-and-repair.
+
+## 5. Simulation strategy (durable, partially implemented)
+
+Mixed-fidelity composite board model: each element at the strongest
+justified coverage, every model carrying provenance, coverage
+dispositions and condition declarations. Implemented today:
+deterministic ngspice decks (op/tran), extracted DC interconnect
+models entering scenarios with automatic or recorded two-terminal
+assertions, and Verilator behavioral-contract execution. The
+planning brief's scenario families (power sequencing, clock
+networks, digital interfaces, sensor models) and the digital↔
+electrical bridge (RTL transitions driving electrical boundary
+models through extracted interconnect) remain the roadmap — each
+lands only with its evidence contract.
+
+Targeted EM (openEMS) stays the intended producer for
+`interconnect_si`: extract specific structures (ports, meshes,
+geometry from the board), never whole-board full-wave. Nothing may
+claim SI coverage until that producer exists.
+
+## 6. The A/B benchmark (running)
+
+Board A — the frozen authoritative consumer board — against Board B
+candidates generated by the autonomous workflow under identical
+requirements, measured by the identical extractor under the
+identical resolved physical construction, compared only through the
+typed contract. Ranking is completeness-first: critical-path
+connectivity, overall connectivity, gates, then electrical and
+geometric quality — a candidate with partial routes never beats a
+complete one by carrying less copper.
+
+## 7. The loop (target invariant)
+
+```text
+candidate has proven electrical connectivity
+    → valid topology
+    → DRC/process compliance
+    → extracted evidence
+    → applicable simulation
+    → comparable metrics
+    → autonomous design decision
+    → next candidate
+```
+
+A board graduates from one confidence level to the next only when
+the corresponding evidence exists; every failure points back to a
+design variable the agent can change; and the final PCBA is
+supported by reproducible evidence rather than visual plausibility.
