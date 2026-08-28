@@ -146,5 +146,154 @@ class StitchesAreVerifiedAtGeneration(unittest.TestCase):
             critical_topology.validate_rules(bad)
 
 
+def _min_pad_distance(proposal, pad_polygon_shape):
+    """Closest approach of the proposal's copper to a pad polygon."""
+    from shapely.geometry import LineString
+    best = None
+    for segment in proposal["tracks"]:
+        line = LineString([tuple(segment["start_mm"]),
+                           tuple(segment["end_mm"])])
+        distance = line.buffer(
+            segment["width_mm"] / 2.0).distance(pad_polygon_shape)
+        if best is None or distance < best:
+            best = distance
+    return best
+
+
+class ObstaclesHonorPerNetPairClearances(unittest.TestCase):
+    """KiCad judges two objects at max(classA, classB). A planner
+    verifying one scalar builds copper the DRC then rejects - the
+    exact failure the 26 production collisions traced to."""
+
+    def setUp(self):
+        geom.configure(0.001)
+
+    def _corridor_board(self):
+        board = synth.new_board(layers=2, size_mm=30.0)
+        synth.add_net(board, "GNDX")
+        power = synth.add_net(board, "PWR")
+        # A POWER-class pad just below the straight line from the
+        # connection's endpoints: the shortest detour hugs it.
+        synth.add_pad_footprint(board, "PWRPAD", 11.75, 9.3,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=power)
+        return board
+
+    def test_scalar_clearance_reproduces_the_collision(self):
+        board = self._corridor_board()
+        proposal = critical_topology.local_connect(
+            board, "GNDX", (10.0, 10.0), (13.5, 10.0), _rules(),
+            geom.pad_copper_polygon)
+        pad = [pad for fp in board.GetFootprints()
+               if fp.GetReference() == "PWRPAD"
+               for pad in fp.Pads()][0]
+        distance = _min_pad_distance(
+            proposal, geom.pad_copper_polygon(pad, pcbnew.F_Cu))
+        # Honest at the scalar floor...
+        self.assertGreaterEqual(distance, 0.15 * 0.999 - 1e-6)
+        # ...but INSIDE the POWER class's 0.25 mm requirement: this
+        # copper is exactly what the board's DRC rejected 26 times.
+        self.assertLess(distance, 0.25)
+
+    def test_net_clearances_keep_the_pairwise_max(self):
+        board = self._corridor_board()
+        proposal = critical_topology.local_connect(
+            board, "GNDX", (10.0, 10.0), (13.5, 10.0), _rules(),
+            geom.pad_copper_polygon,
+            net_clearances={"GNDX": 0.15, "PWR": 0.25})
+        pad = [pad for fp in board.GetFootprints()
+               if fp.GetReference() == "PWRPAD"
+               for pad in fp.Pads()][0]
+        distance = _min_pad_distance(
+            proposal, geom.pad_copper_polygon(pad, pcbnew.F_Cu))
+        self.assertGreaterEqual(distance, 0.25 * 0.999 - 1e-6)
+
+
+class SuppliedClearanceMapsMustBeComplete(unittest.TestCase):
+
+    def setUp(self):
+        geom.configure(0.001)
+
+    def test_a_forgotten_net_refuses(self):
+        board = synth.new_board(layers=2, size_mm=30.0)
+        synth.add_net(board, "GNDX")
+        power = synth.add_net(board, "PWR")
+        synth.add_pad_footprint(board, "PWRPAD", 11.75, 9.3,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=power)
+        with self.assertRaisesRegex(TopologyPlanError,
+                                    "absent from the supplied"):
+            critical_topology.local_connect(
+                board, "GNDX", (10.0, 10.0), (13.5, 10.0),
+                _rules(), geom.pad_copper_polygon,
+                net_clearances={"GNDX": 0.15})
+
+
+class ThroughViasClearEveryCopperLayer(unittest.TestCase):
+    """A through via traverses ALL copper layers; internal foreign
+    copper is not passable merely because the outer layers are
+    clear."""
+
+    def setUp(self):
+        geom.configure(0.001)
+
+    def test_via_avoids_internal_layer_blanket(self):
+        from shapely.geometry import LineString, Point
+        board = synth.new_board(layers=4, size_mm=30.0)
+        gnd = synth.add_net(board, "GNDX")
+        sig = synth.add_net(board, "SIG")
+        synth.add_pad_footprint(board, "BAR", 10.0, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (0.35, 1.5),
+                                net=gnd)
+        synth.add_zone(board, gnd, [pcbnew.B_Cu],
+                       (4.0, 4.0, 22.0, 22.0), fill=True)
+        # Blanket In1.Cu with foreign copper around the anchor: an
+        # outer-layers-only obstacle model would drop the via
+        # straight through it.
+        blanket = []
+        y = 8.6
+        while y <= 11.4 + 1e-9:
+            synth.add_track(board, (8.0, y), (12.0, y), net=sig,
+                            layer=pcbnew.In1_Cu, width_mm=0.2)
+            blanket.append(LineString([(8.0, y), (12.0, y)])
+                           .buffer(0.1))
+            y += 0.3
+        proposal = critical_topology.stitch_to_plane(
+            board, "GNDX", (10.0, 10.0), "GNDX", _rules(),
+            geom.pad_copper_polygon)
+        self.assertEqual(len(proposal["vias"]), 1)
+        via = proposal["vias"][0]
+        barrel = Point(via["x_mm"], via["y_mm"]).buffer(
+            via["diameter_mm"] / 2.0, quad_segs=32)
+        for shape in blanket:
+            self.assertGreaterEqual(
+                barrel.distance(shape), 0.15 - 1e-6)
+
+
+class ForeignFilledZonesAreNotObstacles(unittest.TestCase):
+    """Zone fills are recomputed geometry: the refill pulls the pour
+    back around new copper under the zone's own rules, and the
+    post-stage fabrication DRC on the refilled board remains the
+    authority. Treating a window-covering foreign pour as fixed
+    copper would refuse every plan."""
+
+    def setUp(self):
+        geom.configure(0.001)
+
+    def test_stitch_succeeds_under_a_foreign_pour(self):
+        board = _stitch_board()
+        sig = None
+        for net_name, net in board.GetNetsByName().items():
+            if str(net_name) == "SIG":
+                sig = net
+        synth.add_zone(board, sig, [pcbnew.F_Cu],
+                       (4.0, 4.0, 22.0, 22.0), fill=True)
+        proposal = critical_topology.stitch_to_plane(
+            board, "GNDX", (10.0, 10.0), "GNDX", _rules(),
+            geom.pad_copper_polygon)
+        self.assertEqual(len(proposal["vias"]), 1)
+        self.assertGreaterEqual(len(proposal["tracks"]), 1)
+
+
 if __name__ == "__main__":                        # pragma: no cover
     unittest.main()

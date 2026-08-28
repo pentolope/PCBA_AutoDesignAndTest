@@ -274,6 +274,150 @@ class TheNgspiceBackendIsHonest(unittest.TestCase):
                                    places=3)
 
 
+class BoundsNeverManufacturePass(unittest.TestCase):
+    """Assertion verdicts under declared value bounds: the
+    omission's optimistic direction reads unresolved, only the
+    pessimistic direction concludes - structurally."""
+
+    def test_the_ge_truth_table(self):
+        ge = {"op": ">=", "value": 4.999}
+        upper = {"direction": "upper",
+                 "reason": "omitted series resistance"}
+        lower = {"direction": "lower", "reason": "test"}
+        self.assertEqual(
+            scenario.classify_assertion(ge, 4.9998, upper),
+            "unresolved")
+        self.assertEqual(
+            scenario.classify_assertion(ge, 4.9985, upper),
+            "conservative-FAIL")
+        self.assertEqual(
+            scenario.classify_assertion(ge, 4.9998, lower),
+            "conservative-PASS")
+        self.assertEqual(
+            scenario.classify_assertion(ge, 4.9985, lower),
+            "unresolved")
+        self.assertEqual(
+            scenario.classify_assertion(ge, 4.9998, None),
+            "exact-PASS")
+        self.assertEqual(
+            scenario.classify_assertion(ge, 4.9985, None),
+            "exact-FAIL")
+        self.assertIsNone(
+            scenario.classify_assertion(None, 4.9998, upper))
+
+    def test_the_le_and_within_truth_tables(self):
+        le = {"op": "<=", "value": 1.0}
+        upper = {"direction": "upper", "reason": "test"}
+        lower = {"direction": "lower", "reason": "test"}
+        self.assertEqual(
+            scenario.classify_assertion(le, 0.9, upper),
+            "conservative-PASS")
+        self.assertEqual(
+            scenario.classify_assertion(le, 1.1, upper),
+            "unresolved")
+        self.assertEqual(
+            scenario.classify_assertion(le, 1.1, lower),
+            "conservative-FAIL")
+        within = {"op": "within", "value": 0.5,
+                  "tolerance": 0.001}
+        self.assertEqual(
+            scenario.classify_assertion(within, 0.5, upper),
+            "unresolved")
+        self.assertEqual(
+            scenario.classify_assertion(within, 0.4, upper),
+            "conservative-FAIL")
+        self.assertEqual(
+            scenario.classify_assertion(within, 0.6, upper),
+            "unresolved")
+        self.assertEqual(
+            scenario.classify_assertion(within, 0.6, lower),
+            "conservative-FAIL")
+
+    def test_value_bound_validates_exactly(self):
+        bad = _rc_scenario()
+        bad["measurements"][0]["value_bound"] = {
+            "direction": "upper"}
+        with self.assertRaises(SimulationError):
+            scenario.validate_scenario(bad)
+        bad["measurements"][0]["value_bound"] = {
+            "direction": "sideways", "reason": "x"}
+        with self.assertRaises(SimulationError):
+            scenario.validate_scenario(bad)
+        good = _rc_scenario()
+        good["measurements"][0]["value_bound"] = {
+            "direction": "upper",
+            "reason": "path resistance is a lower bound"}
+        scenario.validate_scenario(good)
+
+    def test_unresolved_verdicts_are_never_claimable(self):
+        """The actionable policy reads the VERDICT: a numeric pass
+        on a bounded value leaves assertions_claimable False."""
+        declared = _rc_scenario()
+        declared["measurements"][0]["assertion"] = {
+            "op": ">=", "value": 0.499}
+        declared["measurements"][0]["value_bound"] = {
+            "direction": "upper",
+            "reason": "the divider model omits series resistance"}
+        registry = fidelity.ModelRegistry([])
+        import tempfile
+        result = ngspice.run_scenario(
+            registry, declared,
+            tempfile.mkdtemp(prefix="pcbqa-claimable-"))
+        if result["status"] != "ran":
+            self.skipTest("no ngspice backend present")
+        policy = result["result_policy"]
+        self.assertIs(policy["numerical_assertions_passed"], True)
+        self.assertIs(policy["assertions_claimable"], False)
+
+    def test_a_bounded_model_with_silent_assertion_refuses(self):
+        """A contributing model that declares a non-exact bound
+        poisons an undeclared assertion: silence refuses instead of
+        defaulting to an exact claim."""
+        bounded_model = {
+            "identity": "bounded-link",
+            "kind": "board-interconnect-path",
+            "coverage": {"interconnect_dc": "geometry-derived"},
+            "provenance": {"source": "test"},
+            "derivation": {"path": {"resistance_bound": "lower"}},
+            "spice": ".subckt bounded-link a b\nR1 a b 0.01\n"
+                     ".ends",
+        }
+        registry = fidelity.ModelRegistry([bounded_model])
+        declared = _rc_scenario()
+        declared["elements"][1] = {
+            "kind": "model_instance", "name": "top",
+            "nodes": ["in", "mid"], "model": "bounded-link"}
+        with self.assertRaisesRegex(SimulationError,
+                                    "value_bound"):
+            ngspice.run_scenario(registry, declared,
+                                 "unused-workdir")
+        declared["measurements"][0]["value_bound"] = {
+            "direction": "upper",
+            "reason": "lower-bound series resistance"}
+        import tempfile
+        result = ngspice.run_scenario(
+            registry, declared,
+            tempfile.mkdtemp(prefix="pcbqa-bound-"))
+        self.assertIn(result["status"],
+                      ("ran", "backend-unavailable"))
+
+    def test_measurement_records_carry_the_verdict(self):
+        declared = _rc_scenario()
+        declared["measurements"][0]["assertion"] = {
+            "op": ">=", "value": 0.499}
+        declared["measurements"][0]["value_bound"] = {
+            "direction": "upper",
+            "reason": "the divider model omits series "
+                      "resistance"}
+        records = ngspice._assemble_measurements(
+            declared, lambda measurement: 0.5)
+        record = records["mid"]
+        self.assertIs(record["passed"], True)
+        self.assertEqual(record["verdict"], "unresolved")
+        self.assertEqual(record["value_bound"]["direction"],
+                         "upper")
+
+
 class TheDigitalContractSeparatesDutFromChecker(unittest.TestCase):
 
     def _contract(self):

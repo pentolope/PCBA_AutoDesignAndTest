@@ -72,10 +72,30 @@ def _layer_id(board, name):
 
 
 class LocalField:
-    """The exact obstacle geometry around one anchor, for one net."""
+    """The exact obstacle geometry around one anchor, for one net.
+
+    Clearance is PER NET PAIR: the board judges two objects at the
+    maximum of their net classes' clearances, so every foreign
+    obstacle is grouped by the clearance REQUIRED AGAINST IT -
+    max(rules.clearance_mm, its net's class clearance, the working
+    net's class clearance) - and both grid search and exact
+    re-verification honor the group's own requirement. A planner
+    that verifies everything at one scalar builds copper the DRC
+    then rejects (the 26-collision lesson). ``net_clearances`` maps
+    net name -> that net's class clearance in mm; absent nets fall
+    back to rules.clearance_mm.
+
+    Foreign FILLED-ZONE copper is deliberately NOT an obstacle:
+    zone fills are recomputed geometry - a refill pulls the pour
+    back around new copper under the zone's own clearance rules -
+    and the post-stage fabrication DRC on the refilled board
+    remains the authority. Foreign TRACKS, pads, vias and holes are
+    fixed geometry and obstruct; for a through via they obstruct on
+    EVERY copper layer they occupy, not only the outer ones.
+    """
 
     def __init__(self, board, net_name, center_mm, rules,
-                 pad_polygon, outline=None):
+                 pad_polygon, outline=None, net_clearances=None):
         import pcbnew
         from shapely.geometry import LineString, Point, box
         from shapely.ops import unary_union
@@ -89,6 +109,13 @@ class LocalField:
                     "radius_mm and clearance_mm (circular outlines "
                     "only)")
         self.outline = outline
+        # None means "no per-net knowledge" (single-scalar planning
+        # at rules.clearance_mm). A SUPPLIED map is a claim of
+        # completeness: a foreign net missing from it refuses,
+        # because a forgotten net must never quietly plan at the
+        # base clearance.
+        self._clearances_supplied = net_clearances is not None
+        self.net_clearances = dict(net_clearances or {})
         self.board = board
         self.net = net_name
         self.rules = rules
@@ -99,15 +126,35 @@ class LocalField:
                           center_mm[1] - radius,
                           center_mm[0] + radius,
                           center_mm[1] + radius)
-        outer_layers = [board.GetEnabledLayers().CuStack()[0],
-                        board.GetEnabledLayers().CuStack()[-1]]
+        copper_stack = list(board.GetEnabledLayers().CuStack())
+        outer_layers = [copper_stack[0], copper_stack[-1]]
+        def _known_clearance(name):
+            if name and self._clearances_supplied and \
+                    name not in self.net_clearances:
+                raise TopologyPlanError(
+                    "net {!r} is absent from the supplied "
+                    "net_clearances map; a forgotten net refuses "
+                    "rather than defaulting to the base "
+                    "clearance".format(name))
+            return self.net_clearances.get(name,
+                                           rules["clearance_mm"])
+
+        own_clearance = _known_clearance(net_name)
+
+        def _required_clearance(other_net):
+            return max(rules["clearance_mm"], own_clearance,
+                       _known_clearance(other_net))
 
         def _in_window(shape):
             return shape is not None and not shape.is_empty and \
                 shape.intersects(self.window)
 
-        route_obstacles = []
-        via_obstacles = []
+        route_obstacles = {}
+        via_obstacles = {}
+
+        def _add(bucket, other_net, shape):
+            bucket.setdefault(
+                _required_clearance(other_net), []).append(shape)
         self.own_copper = []
         self.existing_holes = []
         # Holes repel FOREIGN copper by the declared hole clearance,
@@ -132,8 +179,10 @@ class LocalField:
                 else:
                     hole_disk = point.buffer(
                         drill / 2.0 + hole_margin, quad_segs=16)
-                    route_obstacles.append(circle.union(hole_disk))
-                    via_obstacles.append(circle.union(hole_disk))
+                    _add(route_obstacles, track.GetNetname(),
+                         circle.union(hole_disk))
+                    _add(via_obstacles, track.GetNetname(),
+                         circle.union(hole_disk))
                 continue
             shape = LineString([
                 (track.GetStart().x / 1e6, track.GetStart().y / 1e6),
@@ -147,9 +196,14 @@ class LocalField:
                     self.own_copper.append(shape)
             else:
                 if on_layer:
-                    route_obstacles.append(shape)
-                if track.GetLayer() in outer_layers:
-                    via_obstacles.append(shape)
+                    _add(route_obstacles, track.GetNetname(),
+                         shape)
+                # A through via must clear foreign tracks on EVERY
+                # copper layer it traverses - internal copper is
+                # not passable merely because the outer layers are
+                # clear.
+                if track.GetLayer() in copper_stack:
+                    _add(via_obstacles, track.GetNetname(), shape)
         self.mask_openings = []
         for footprint in board.GetFootprints():
             for pad in footprint.Pads():
@@ -177,8 +231,10 @@ class LocalField:
                             pad_drill / 2.0 + hole_margin,
                             quad_segs=16)
                         if _in_window(hole_disk):
-                            route_obstacles.append(hole_disk)
-                            via_obstacles.append(hole_disk)
+                            _add(route_obstacles,
+                                 pad.GetNetname(), hole_disk)
+                            _add(via_obstacles,
+                                 pad.GetNetname(), hole_disk)
                 for layer, shape in shapes.items():
                     if not _in_window(shape):
                         continue
@@ -187,8 +243,10 @@ class LocalField:
                             self.own_copper.append(shape)
                     else:
                         if layer == self.layer:
-                            route_obstacles.append(shape)
-                        via_obstacles.append(shape)
+                            _add(route_obstacles, pad.GetNetname(),
+                                 shape)
+                        _add(via_obstacles, pad.GetNetname(),
+                             shape)
                 # Every mask OPENING constrains via placement,
                 # whatever its net: the ink dam is a process rule,
                 # not an electrical one. The true aperture (copper
@@ -218,10 +276,13 @@ class LocalField:
                            bb.GetBottom() / 1e6)
                 if _in_window(area):
                     self.keepout_vias.append(area)
-        self.route_union = unary_union(route_obstacles) \
-            if route_obstacles else None
-        self.via_union = unary_union(via_obstacles) \
-            if via_obstacles else None
+        # Obstacles grouped by required clearance: {mm: union}.
+        self.route_groups = {
+            clearance: unary_union(shapes)
+            for clearance, shapes in route_obstacles.items()}
+        self.via_groups = {
+            clearance: unary_union(shapes)
+            for clearance, shapes in via_obstacles.items()}
         self.own_union = unary_union(self.own_copper) \
             if self.own_copper else None
         self._zone_fill_elements = zone_fill_elements
@@ -258,16 +319,17 @@ class LocalField:
         point = Point(x, y)
         annulus = point.buffer(rules["via_diameter_mm"] / 2.0,
                                quad_segs=16)
-        if self.via_union is not None and annulus.buffer(
-                rules["clearance_mm"]).intersects(self.via_union):
-            return False, "copper clearance"
-        # The new via's own HOLE keeps the declared hole clearance
-        # from foreign copper too.
-        if self.via_union is not None and point.buffer(
-                rules["via_drill_mm"] / 2.0
-                + rules["hole_clearance_mm"]).intersects(
-                    self.via_union):
-            return False, "hole clearance"
+        hole_reach = point.buffer(
+            rules["via_drill_mm"] / 2.0
+            + rules["hole_clearance_mm"])
+        for clearance, union in self.via_groups.items():
+            if annulus.buffer(clearance).intersects(union):
+                return False, ("copper clearance ({} mm "
+                               "group)".format(clearance))
+            # The new via's own HOLE keeps the declared hole
+            # clearance from foreign copper too.
+            if hole_reach.intersects(union):
+                return False, "hole clearance"
         for opening in self.mask_openings:
             if annulus.distance(opening) < \
                     rules["mask_annulus_target_mm"]:
@@ -315,22 +377,19 @@ class LocalField:
         from shapely.prepared import prep
 
         rules = self.rules
-        inflation = rules["clearance_mm"] \
-            + rules["track_width_mm"] / 2.0
-        blocked_shape = None
-        if self.route_union is not None:
-            blocked_shape = self.route_union.buffer(inflation)
-        prepared = prep(blocked_shape) if blocked_shape is not None \
-            else None
+        half_track = rules["track_width_mm"] / 2.0
+        prepared_groups = [
+            prep(union.buffer(clearance + half_track))
+            for clearance, union in
+            sorted(self.route_groups.items())]
         step = rules["grid_step_mm"]
 
         def blocked(x, y):
-            if not self._edge_distance_ok(
-                    x, y, rules["track_width_mm"] / 2.0):
+            if not self._edge_distance_ok(x, y, half_track):
                 return True
-            if prepared is None:
-                return False
-            return prepared.intersects(Point(x, y))
+            point = Point(x, y)
+            return any(prepared.intersects(point)
+                       for prepared in prepared_groups)
 
         def snap(xy):
             return (round(round(xy[0] / step) * step, 6),
@@ -395,14 +454,15 @@ class LocalField:
         segments = []
         for start_point, end_point in zip(corners, corners[1:]):
             line = LineString([start_point, end_point])
-            if self.route_union is not None and line.buffer(
-                    rules["track_width_mm"] / 2.0
-                    + rules["clearance_mm"] * 0.999).intersects(
-                        self.route_union):
-                raise TopologyPlanError(
-                    "a generated segment failed exact "
-                    "re-verification against the obstacle "
-                    "geometry; refusing rather than emitting it")
+            for clearance, union in self.route_groups.items():
+                if line.buffer(half_track
+                               + clearance * 0.999).intersects(
+                        union):
+                    raise TopologyPlanError(
+                        "a generated segment failed exact "
+                        "re-verification against the {} mm "
+                        "clearance group; refusing rather than "
+                        "emitting it".format(clearance))
             segments.append({
                 "start_mm": [start_point[0], start_point[1]],
                 "end_mm": [end_point[0], end_point[1]],
@@ -413,7 +473,8 @@ class LocalField:
 
 
 def stitch_to_plane(board, net_name, anchor_xy, plane_net, rules,
-                    pad_polygon, prefer_angle=0.0, outline=None):
+                    pad_polygon, prefer_angle=0.0, outline=None,
+                    net_clearances=None):
     """A verified pad/copper-to-plane stitch: short escape plus via.
 
     ``anchor_xy`` is a point on the net's own copper (a pad centre,
@@ -422,7 +483,8 @@ def stitch_to_plane(board, net_name, anchor_xy, plane_net, rules,
     from anchor to via is search-generated and exactly re-verified.
     """
     field = LocalField(board, net_name, anchor_xy, rules,
-                       pad_polygon, outline=outline)
+                       pad_polygon, outline=outline,
+                       net_clearances=net_clearances)
     plane_fill = field.plane_fill_at(plane_net)
     site = field.find_via_site(anchor_xy, plane_fill, prefer_angle)
     if site is None:
@@ -445,10 +507,11 @@ def stitch_to_plane(board, net_name, anchor_xy, plane_net, rules,
 
 
 def local_connect(board, net_name, from_xy, to_xy, rules,
-                  pad_polygon, outline=None):
+                  pad_polygon, outline=None, net_clearances=None):
     """A verified short connection between two points of one net."""
     field = LocalField(board, net_name, from_xy, rules, pad_polygon,
-                       outline=outline)
+                       outline=outline,
+                       net_clearances=net_clearances)
     segments = field.escape(from_xy, to_xy)
     return {
         "kind": "critical-topology-proposal",

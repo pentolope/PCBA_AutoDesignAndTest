@@ -603,6 +603,124 @@ class PathScopedExtractionIsHonest(unittest.TestCase):
                          [model["identity"]])
 
 
+class UniquenessIsBridgeRigorous(unittest.TestCase):
+    """Every resistive traversal element must be a bridge in the
+    electrical node graph: rejoining detours refuse wherever they
+    rejoin, junction pivots never false-positive."""
+
+    def setUp(self):
+        from pcbqa import geom
+        geom.configure(0.001)
+
+    def _linked_board(self):
+        board = synth.new_board()
+        net = synth.add_net(board, "LINK")
+        synth.add_pad_footprint(board, "P1", 0.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_pad_footprint(board, "P2", 10.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_track(board, (0.0, 0.0), (10.0, 0.0), net=net,
+                        width_mm=0.2)
+        return board, net
+
+    def test_a_detour_rejoining_the_next_junction_refuses(self):
+        """The adversarial case interior-node removal missed:
+        source--A==B--dest with a detour from A's junction to B's.
+        The detour hangs off removed nodes, so node removal saw
+        nothing - yet it carries current."""
+        board, net = self._linked_board()
+        synth.add_track(board, (3.0, 0.0), (3.0, 3.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (3.0, 3.0), (7.0, 3.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (7.0, 3.0), (7.0, 0.0), net=net,
+                        width_mm=0.2)
+        with self.assertRaisesRegex(ExtractionError,
+                                    "not a bridge"):
+            extract.path_resistance(board, "LINK", "P1.1", "P2.1",
+                                    COPPER)
+
+    def test_a_second_track_between_the_same_nodes_refuses(self):
+        board, net = self._linked_board()
+        synth.add_track(board, (3.0, 0.0), (5.0, 1.5), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (5.0, 1.5), (7.0, 0.0), net=net,
+                        width_mm=0.2)
+        with self.assertRaises(ExtractionError):
+            extract.path_resistance(board, "LINK", "P1.1", "P2.1",
+                                    COPPER)
+
+    def test_junction_pivots_are_not_parallel_copper(self):
+        """Stubs meeting the traversal at a junction - even several
+        at one junction - pivot on a single electrical node and
+        must not read as dividers."""
+        board, net = self._linked_board()
+        synth.add_track(board, (5.0, 0.0), (5.0, 6.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (5.0, 0.0), (5.0, -4.0), net=net,
+                        width_mm=0.2)
+        record = extract.path_resistance(board, "LINK",
+                                         "P1.1", "P2.1", COPPER)
+        self.assertAlmostEqual(record["path_length_mm"], 10.0,
+                               delta=1.2)
+
+
+class OmittedPhysicsIsABoundNotATruth(unittest.TestCase):
+    """Via barrels contribute zero by declared omission, so a path
+    through vias reports a LOWER bound on resistance - and says so
+    machine-readably."""
+
+    def setUp(self):
+        from pcbqa import geom
+        geom.configure(0.001)
+
+    def test_a_via_free_path_is_exact(self):
+        board = synth.new_board()
+        net = synth.add_net(board, "FLAT")
+        synth.add_pad_footprint(board, "P1", 0.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_pad_footprint(board, "P2", 8.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_track(board, (0.0, 0.0), (8.0, 0.0), net=net,
+                        width_mm=0.2)
+        record = extract.path_resistance(board, "FLAT",
+                                         "P1.1", "P2.1", COPPER)
+        self.assertEqual(record["resistance_bound"], "exact")
+        self.assertEqual(record["via_count_in_path"], 0)
+
+    def test_a_via_path_reports_a_lower_bound(self):
+        board = synth.new_board()
+        net = synth.add_net(board, "DEEP")
+        synth.add_pad_footprint(board, "P1", 0.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_pad_footprint(board, "P2", 8.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net, flipped=True)
+        synth.add_track(board, (0.0, 0.0), (4.0, 0.0), net=net,
+                        width_mm=0.2)
+        synth.add_via(board, 4.0, 0.0, net=net)
+        synth.add_track(board, (4.0, 0.0), (8.0, 0.0), net=net,
+                        width_mm=0.2, layer=pcbnew.B_Cu)
+        record = extract.path_resistance(board, "DEEP",
+                                         "P1.1", "P2.1", COPPER)
+        self.assertEqual(record["via_count_in_path"], 1)
+        self.assertEqual(record["resistance_bound"], "lower")
+        self.assertTrue(any("via barrel" in omission
+                            for omission in record["omissions"]))
+        model = extract.interconnect_model_from_path(
+            record, "b" * 64,
+            {"copper_thickness_mm": COPPER,
+             "board_thickness_mm": THICKNESS})
+        self.assertEqual(
+            model["derivation"]["path"]["resistance_bound"],
+            "lower")
+
+
 class MetricNamesCannotMasquerade(unittest.TestCase):
 
     def test_leaf_inventory_and_complete_path_are_distinct(self):

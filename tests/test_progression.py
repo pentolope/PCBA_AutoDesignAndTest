@@ -17,6 +17,8 @@ from pcbqa.progression import ProgressionError      # noqa: E402
 
 def _record(**overrides):
     base = {
+        "netlist_parity": {"ok": True,
+                           "detail": "authoritative contract"},
         "placement_policy_ok": True,
         "critical": {"nets_connected": True,
                      "paths_resolved": True,
@@ -91,7 +93,9 @@ class CriticalTruthIsPolicyOwned(unittest.TestCase):
             "unknown")
         self.assertIs(outcome["candidate_ready_for_next_stage"],
                       False)
-        self.assertIn(False, [outcome["rank_key"][2]])
+        # rank_key: (parity, placement, nets, paths, ...) -
+        # the unknown path truth must read False, never True.
+        self.assertIn(False, [outcome["rank_key"][3]])
 
     def test_comparison_worth_is_not_board_validity(self):
         outcome = progression.assess(_record(
@@ -134,7 +138,64 @@ class NoScalarOverridesACorrectnessClass(unittest.TestCase):
                          "fabrication-geometry")
 
 
+class ParityLeadsAndEligibilityIsSplit(unittest.TestCase):
+
+    def test_failed_parity_stops_everything(self):
+        """A candidate that does not implement the product intent
+        is a different product: nothing downstream may outrank
+        that, and it is not even comparison-worthy."""
+        outcome = progression.assess(_record(
+            netlist_parity={"ok": False,
+                            "detail": "net assignments differ"}))
+        self.assertEqual(outcome["progress_class"],
+                         "netlist-parity")
+        self.assertIs(outcome["accept_for_comparison"], False)
+        self.assertIs(outcome["search_winner_eligible"], False)
+        perfect_but_wrong = outcome["rank_key"]
+        honest_incomplete = progression.assess(_record(
+            board_required_connectivity={"complete": 1,
+                                         "total": 83},
+            electrical_evidence={"usable_results": 0}))["rank_key"]
+        self.assertGreater(honest_incomplete, perfect_but_wrong)
+
+    def test_unknown_parity_is_not_credited(self):
+        outcome = progression.assess(_record(
+            netlist_parity={"ok": "unknown",
+                            "detail": "contract not evaluated"}))
+        self.assertEqual(outcome["progress_class"],
+                         "netlist-parity")
+        self.assertIs(outcome["candidate_ready_for_next_stage"],
+                      False)
+        self.assertIs(outcome["accept_for_comparison"], False)
+
+    def test_failed_paths_are_measurable_but_never_best(self):
+        """The eligibility split: measured for comparison, refused
+        as winner - a search winner must never outrank an
+        unresolved or failed correctness class."""
+        outcome = progression.assess(_record(
+            critical={"nets_connected": True,
+                      "paths_resolved": False,
+                      "topology_valid": True}))
+        self.assertIs(outcome["accept_for_comparison"], True)
+        self.assertIs(outcome["search_winner_eligible"], False)
+        unresolved = progression.assess(_record(
+            critical={"nets_connected": True,
+                      "paths_resolved": "unknown",
+                      "topology_valid": True}))
+        self.assertIs(unresolved["accept_for_comparison"], True)
+        self.assertIs(unresolved["search_winner_eligible"], False)
+        clean = progression.assess(_record())
+        self.assertIs(clean["search_winner_eligible"], True)
+
+
 class InputsValidateStrictly(unittest.TestCase):
+
+    def test_parity_shape_validates(self):
+        with self.assertRaises(ProgressionError):
+            progression.assess(_record(netlist_parity={"ok": True}))
+        with self.assertRaises(ProgressionError):
+            progression.assess(_record(
+                netlist_parity={"ok": "yes", "detail": "x"}))
 
     def test_unknown_keys_refuse(self):
         record = _record()

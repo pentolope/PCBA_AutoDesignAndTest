@@ -390,11 +390,15 @@ def _assemble_measurements(sim_scenario, value_of):
                 "measurement {!r}; a missing result is a failure, "
                 "never a default".format(measurement["name"]))
         assertion = measurement.get("assertion")
+        bound = measurement.get("value_bound")
         measurements[measurement["name"]] = {
             "value": value,
             "assertion": assertion,
+            "value_bound": bound,
             "passed": scenario_module.check_assertion(assertion,
                                                       value),
+            "verdict": scenario_module.classify_assertion(
+                assertion, value, bound),
         }
     return measurements
 
@@ -419,6 +423,7 @@ def run_scenario(registry, sim_scenario, workdir):
                                                     sim_scenario)
     assumptions = scenario_module.assumption_dependencies(
         sim_scenario)
+    _refuse_undeclared_bounds(registry, sim_scenario)
     deck = generate_deck(registry, sim_scenario)
     backend = backend_identity()
     result = {
@@ -458,6 +463,39 @@ def run_scenario(registry, sim_scenario, workdir):
     return _attach_result_policy(result, coverage)
 
 
+def _refuse_undeclared_bounds(registry, sim_scenario):
+    """A model that declares its value a BOUND poisons every
+    assertion downstream of it: without a declared value_bound the
+    verdict would default to the STRONGEST claim (exact). Silence
+    therefore refuses before any simulator runs - the scenario
+    author must translate the model's bound into the measurement's
+    direction, or drop the assertion."""
+    for measurement in sim_scenario["measurements"]:
+        if measurement.get("assertion") is None:
+            continue
+        if measurement.get("value_bound") is not None:
+            continue
+        contributors = scenario_module.measurement_contributors(
+            sim_scenario, measurement)
+        for element in contributors:
+            if element.get("kind") != "model_instance":
+                continue
+            record = registry.get(element["model"])
+            declared = ((record.get("derivation") or {})
+                        .get("path") or {}).get("resistance_bound")
+            if declared not in (None, "exact"):
+                raise SimulationError(
+                    "measurement {!r} asserts on a value fed by "
+                    "model {!r}, whose record declares "
+                    "resistance_bound={!r}; declare the "
+                    "measurement's value_bound (its direction "
+                    "follows from the circuit) or remove the "
+                    "assertion - silence never defaults to an "
+                    "exact claim".format(
+                        measurement["name"], element["model"],
+                        declared))
+
+
 def _attach_result_policy(result, coverage):
     """One structured answer to "may an agent act on this?".
 
@@ -473,10 +511,16 @@ def _attach_result_policy(result, coverage):
     """
     ran = result.get("status") == "ran"
     assertions = None
+    claimable = None
     if ran:
         assertions = all(
             measurement["passed"] is not False
             for measurement in result["measurements"].values())
+        claimable = all(
+            measurement.get("verdict") in ("exact-PASS",
+                                           "conservative-PASS")
+            for measurement in result["measurements"].values()
+            if measurement.get("assertion") is not None)
     fully_covered = result["condition_coverage"]["fully_covered"]
     applicable = None if fully_covered is None else fully_covered
     assumptions = result["assumption_dependencies"]
@@ -484,6 +528,7 @@ def _attach_result_policy(result, coverage):
         "all_assumptions_accepted_for_design_decision"]
     result["result_policy"] = {
         "numerical_assertions_passed": assertions,
+        "assertions_claimable": claimable,
         "result_applicable_to_requested_conditions": applicable,
         "assumption_dependent":
             assumptions["assumption_dependent"],
@@ -499,7 +544,13 @@ def _attach_result_policy(result, coverage):
                    "conditions, and every contributing ideal "
                    "primitive declared and accepted as an "
                    "assumption; a numerical pass never overrides "
-                   "any of those",
+                   "any of those. assertions_claimable is the "
+                   "actionable assertion truth: True only when "
+                   "every declared assertion's VERDICT is a PASS "
+                   "class - numerical_assertions_passed is the raw "
+                   "numeric fact and must never be acted on alone, "
+                   "because a bounded value can pass numerically "
+                   "while its claim is unresolved",
     }
     return result
 

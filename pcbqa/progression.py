@@ -10,6 +10,18 @@ whose rank keys are equal.
 
 Distinctions this module keeps separate, deliberately:
 
+  * NETLIST PARITY leads the order: whether the candidate
+    implements the authoritative product intent - every required
+    footprint, pad and net assignment, no unexpected nets - is
+    judged before anything else, because a candidate that differs
+    from the intent is a different product, and no downstream
+    completion may launder that;
+  * ``accept_for_comparison`` (worth measuring experimentally)
+    versus ``search_winner_eligible`` (permitted to be presented
+    as best): a candidate whose critical paths or topology FAIL -
+    or are unresolved - may still be measured, but a search winner
+    must never outrank an unresolved correctness class;
+
   * benchmark-set completion (the A/B measurement inventory) versus
     BOARD-REQUIRED completion (every required net on the board): a
     candidate must never read as fully connected while required
@@ -36,6 +48,7 @@ class ProgressionError(Exception):
 #: The ordered correctness classes. ``optimization`` is recorded but
 #: never judged and never enters the rank key.
 CLASSES = (
+    "netlist-parity",
     "placement-policy",
     "critical-structures",
     "board-connectivity",
@@ -47,7 +60,7 @@ CLASSES = (
 )
 
 _REQUIRED_KEYS = {
-    "placement_policy_ok", "critical",
+    "netlist_parity", "placement_policy_ok", "critical",
     "board_required_connectivity", "benchmark_connectivity",
     "fabrication_geometry", "blocking_gates", "quality_gates",
     "electrical_evidence", "optimization",
@@ -117,6 +130,12 @@ def assess(record):
             "assessment input must carry exactly {} (unknown {}, "
             "missing {})".format(sorted(_REQUIRED_KEYS),
                                  unknown_keys, missing))
+    parity = record["netlist_parity"]
+    if not isinstance(parity, dict) or (
+            set(parity) != {"ok", "detail"}):
+        raise ProgressionError(
+            "netlist_parity must carry exactly ok and detail")
+    parity_ok = _tristate("netlist_parity.ok", parity["ok"])
     if not isinstance(record["placement_policy_ok"], bool):
         raise ProgressionError("placement_policy_ok must be a bool")
     critical = record["critical"]
@@ -161,6 +180,11 @@ def assess(record):
             "optimization must be a dict of recorded metrics")
 
     classes = {}
+    classes["netlist-parity"] = {
+        "status": {True: "pass", False: "fail",
+                   "unknown": "unknown"}[parity_ok],
+        "detail": parity["detail"],
+    }
     classes["placement-policy"] = {
         "status": "pass" if record["placement_policy_ok"]
         else "fail",
@@ -233,6 +257,7 @@ def assess(record):
     ready = all(classes[name]["status"] == "pass"
                 for name in judged)
     rank_key = (
+        parity_ok is True,
         record["placement_policy_ok"],
         critical["nets_connected"],
         paths is True,
@@ -245,16 +270,22 @@ def assess(record):
          else float("-inf")),
         usable,
     )
+    comparison = (parity_ok is True
+                  and record["placement_policy_ok"]
+                  and critical["nets_connected"])
     return {
         "classes": classes,
         "progress_class": progress_class,
         "fully_connected": fully_connected,
         "candidate_ready_for_next_stage": ready,
-        "accept_for_comparison": record["placement_policy_ok"]
-        and critical["nets_connected"],
+        "accept_for_comparison": comparison,
+        "search_winner_eligible": comparison
+        and critical_status == "pass",
         "rank_key": rank_key,
         "meaning": "rank_key is lexicographic over the correctness "
                    "classes in order; optimization metrics are "
                    "recorded but never ranked, and any consumer "
-                   "tie-break applies only between equal rank keys",
+                   "tie-break applies only between equal rank keys; "
+                   "a measured candidate whose critical truths are "
+                   "failed or unresolved is never winner-eligible",
     }

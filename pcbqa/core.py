@@ -525,12 +525,50 @@ def summarise(results):
     return counts, blocking
 
 
+def _toolkit_identity():
+    """The validation implementation's own identity.
+
+    A verdict is a function of the board AND of the code that
+    judged it: the same board under a different toolkit commit is a
+    different claim. This records the toolkit checkout's git HEAD
+    (and whether its working tree was dirty) so a consumer can bind
+    a validation document to the exact implementation that produced
+    it. Never fabricated - when git cannot answer, the record says
+    so instead of guessing.
+    """
+    import subprocess
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    record = {"toolkit_root": root, "commit": None,
+              "working_tree_dirty": None,
+              "detail": "git HEAD of the toolkit checkout that "
+                        "executed this validation"}
+    try:
+        head = subprocess.run(
+            ["git", "-C", root, "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30)
+        if head.returncode != 0:
+            record["detail"] = ("unrecorded: git rev-parse failed: "
+                                + head.stderr.strip())
+            return record
+        record["commit"] = head.stdout.strip()
+        status = subprocess.run(
+            ["git", "-C", root, "status", "--porcelain"],
+            capture_output=True, text=True, timeout=30)
+        if status.returncode == 0:
+            record["working_tree_dirty"] = bool(
+                status.stdout.strip())
+    except Exception as error:                         # noqa: BLE001
+        record["detail"] = "unrecorded: {}".format(error)
+    return record
+
+
 def _tooling(context):
     from . import preflight
     ok, rows = preflight.environment(context.kicad_cli)
     return {
         "environment_ok": ok,
         "kicad_cli": context.kicad_cli,
+        "validation_implementation": _toolkit_identity(),
         "kicad_version": context.tool_versions.get("kicad", "unrecorded"),
         "components": [
             {"name": r["name"], "version": r["version"], "path": r.get("path"),

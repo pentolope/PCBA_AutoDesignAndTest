@@ -51,7 +51,8 @@ _ELEMENT_KEYS = {
 _ANALYSIS_KEYS = {"op": {"kind"},
                   "tran": {"kind", "step_s", "stop_s"}}
 
-_MEASUREMENT_KEYS = {"name", "kind", "node", "assertion"}
+_MEASUREMENT_KEYS = {"name", "kind", "node", "assertion",
+                     "value_bound"}
 _MEASUREMENT_KINDS = ("op_voltage", "tran_final_voltage")
 
 _ASSERTION_KEYS = {"<=": {"op", "value"},
@@ -238,6 +239,20 @@ def validate_scenario(scenario):
             if assertion["op"] == "within":
                 _finite("assertion tolerance", assertion["tolerance"],
                         strict_minimum=0.0)
+        bound = measurement.get("value_bound")
+        if bound is not None:
+            _require(isinstance(bound, dict)
+                     and set(bound) == {"direction", "reason"},
+                     "value_bound carries exactly direction and "
+                     "reason")
+            _require(bound["direction"] in ("upper", "lower",
+                                            "exact"),
+                     "value_bound.direction must be upper, lower "
+                     "or exact")
+            _require(isinstance(bound["reason"], str)
+                     and bound["reason"],
+                     "value_bound.reason must be a nonempty "
+                     "string")
 
     conditions = scenario.get("operating_conditions")
     if conditions is not None:
@@ -298,6 +313,52 @@ def check_assertion(assertion, value):
     if assertion["op"] == ">=":
         return value >= assertion["value"]
     return abs(value - assertion["value"]) <= assertion["tolerance"]
+
+
+def classify_assertion(assertion, value, value_bound=None):
+    """What may be CLAIMED from a measured value under its declared
+    bound direction.
+
+    A value produced by a model that omitted positive physics is a
+    BOUND, not a truth. The omission's optimistic direction can
+    never manufacture a PASS - that side reads 'unresolved' - while
+    the pessimistic direction still concludes: a value that fails
+    its assertion despite being flattered by the omission has truly
+    failed (conservative-FAIL). The asymmetry is structural; no
+    caller choice can produce an exact PASS from a bound.
+    """
+    passed = check_assertion(assertion, value)
+    if passed is None:
+        return None
+    direction = "exact" if value_bound is None \
+        else value_bound["direction"]
+    if direction == "exact":
+        return "exact-PASS" if passed else "exact-FAIL"
+    op = assertion["op"]
+    if op == ">=":
+        if passed:
+            return "conservative-PASS" if direction == "lower" \
+                else "unresolved"
+        return "conservative-FAIL" if direction == "upper" \
+            else "unresolved"
+    if op == "<=":
+        if passed:
+            return "conservative-PASS" if direction == "upper" \
+                else "unresolved"
+        return "conservative-FAIL" if direction == "lower" \
+            else "unresolved"
+    # "within": a bounded value can never confirm the interval;
+    # failing is conclusive only when the bound points away from
+    # the interval entirely.
+    if passed:
+        return "unresolved"
+    if direction == "upper" and value < (assertion["value"]
+                                         - assertion["tolerance"]):
+        return "conservative-FAIL"
+    if direction == "lower" and value > (assertion["value"]
+                                         + assertion["tolerance"]):
+        return "conservative-FAIL"
+    return "unresolved"
 
 
 def measurement_contributors(scenario, measurement):

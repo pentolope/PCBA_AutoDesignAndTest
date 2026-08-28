@@ -90,18 +90,58 @@ contract, a generated wrapper and main, DUT swapped per run).
   EXECUTABLE policy decides which zones a derived candidate inherits
   as architecture and which placement-derived zones survive only
   near requirement-fixed geometry; an unclassified zone refuses.
+- **Netlist contract** (`pcbqa/netlist_contract.py`): required
+  connectivity is derived from the AUTHORITATIVE product intent -
+  every footprint, pad and pad-to-net assignment - never from the
+  candidate, so a dropped part or an invented net can never shrink
+  or reshape the denominator; parity differences are named
+  machine-readably and judged before anything else.
 - **Progression** (`pcbqa/progression.py`): candidate advancement is
-  ordered correctness classes - placement policy, critical
+  ordered correctness classes - NETLIST PARITY against the
+  authoritative contract first, then placement policy, critical
   structures by POLICY-owned path/topology truth (net connectivity
   is never sufficient), BOARD-required connectivity (the benchmark
   inventory never stands in for it), hard fabrication geometry,
   blocking gates, quality gates, usable electrical evidence - with
-  a lexicographic rank key no scalar can override. Ready-for-next-
-  stage and worth-comparing are distinct states.
+  a lexicographic rank key no scalar can override. Three states
+  stay distinct: ready-for-next-stage, worth-comparing
+  (`accept_for_comparison`), and permitted-to-win
+  (`search_winner_eligible`) - a measured candidate whose critical
+  truths are failed or unresolved is never presented as best.
 - **Freshness** (`pcbqa/freshness.py`): derived artifacts carry a
   deliberate producer closure (named code, inputs, schema digests);
   consumers refuse stale or tampered artifacts and are told exactly
   which dependency moved. Unrelated changes invalidate nothing.
+  Identities are canonical per kind - JSON by canonical
+  serialization, text and KiCad files by LF-normalized content,
+  binaries by raw bytes - so byte conventions never masquerade as
+  change; and freshness is TRANSITIVE: a downstream closure names
+  its upstream artifacts by canonical content, so a regenerated
+  gates artifact moves the decision, a regenerated decision moves
+  the search, link by link. No artifact may outrun its evidence.
+- **Bound-classified verdicts** (`pcbqa/extract.py`,
+  `pcbqa/sim/scenario.py`): a value produced under omitted positive
+  physics is a BOUND, not a truth. Path-scoped resistance declares
+  `resistance_bound` ('lower' with via barrels omitted, 'exact',
+  or 'uncertain' when junction ambiguity is nonzero - a symmetric
+  uncertainty is never a one-sided bound), and every assertion
+  classifies as exact-PASS / exact-FAIL / conservative-PASS /
+  conservative-FAIL / unresolved - the omission's optimistic
+  direction can never manufacture a PASS, while the pessimistic
+  direction still concludes. The scenario author must DECLARE the
+  measurement's `value_bound` (its direction follows from the
+  circuit): an assertion fed by a model that declares a non-exact
+  bound refuses to run without one - silence never defaults to an
+  exact claim - and the result policy's `assertions_claimable`
+  reads the verdicts, so a numeric pass on a bounded value is
+  never actionable by itself. Path uniqueness
+  itself is bridge-rigorous: every resistive traversal element must
+  be a bridge in the ELECTRICAL node graph (junction pivots pass,
+  any rejoining detour refuses).
+- **Implementation identity** (`pcbqa/core.py`): every validation
+  document stamps the toolkit commit (and dirty state) that judged
+  it - the same board under a different implementation is a
+  different claim.
 - **Assumptions**: ideal scenario primitives are first-class
   declared assumptions; a result depending on an undeclared or
   unaccepted assumption is structurally unusable for a design
@@ -133,7 +173,14 @@ for its first structure class: verified LOCAL copper the general
 router cannot produce at declared values - guard-ring pad escapes,
 process-checked stitching vias (mask annulus, hole-to-hole,
 keepouts, actual plane fill), last-mile group joins - generated
-then exactly re-verified, with the gates still the authority.
+then exactly re-verified, with the gates still the authority. Its
+obstacle model is netclass-aware: every foreign obstacle is grouped
+by the clearance REQUIRED AGAINST IT (the DRC's pairwise-max rule),
+a through via clears foreign copper on every layer it traverses,
+and foreign filled zones are deliberately not obstacles (refill
+semantics; the post-stage DRC on the refilled board remains the
+authority). A planner that verifies one scalar builds copper the
+DRC rejects - that lesson is now a regression test.
 Open frontier, in the brief's durable ordering: matched-length
 branch/tree generation (the declared cross-branch spread limits),
 length/time tuning mapped from electrical intent, and richer

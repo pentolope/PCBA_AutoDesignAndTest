@@ -452,6 +452,130 @@ def extract_net(board, net_name, copper_parameters,
     }
 
 
+def _series_bridge_check(graph, chain, from_pad, to_pad,
+                         net_name):
+    """Refuse unless every resistive traversal element is a bridge.
+
+    The element graph is lifted to the ELECTRICAL node graph:
+    contact regions between touching elements are clustered into
+    nodes (overlapping same-layer contacts are one node, and a
+    zero-resistance element - a pad or a via - fuses every contact
+    it touches into one node), and each track piece becomes a
+    resistor edge between the nodes at its ends. The series sum
+    over the traversal is the two-terminal resistance only if
+    removing each traversed track ALONE disconnects the terminals
+    in that graph. A stub that pivots on a junction changes
+    nothing; copper that leaves the traversal and rejoins anywhere
+    - between adjacent junctions, or as a second track between the
+    same two nodes - still connects the terminals and refuses.
+    Interior-NODE removal was weaker: a detour rejoining at the
+    very next traversal element hung off removed nodes and stayed
+    invisible while carrying current.
+    """
+    elements = graph.elements
+    shapes = [element.shape for element in elements]
+    contacts = []
+    seen_pairs = set()
+    for index, neighbours in graph.adj.items():
+        for other, _weight in neighbours:
+            pair = (min(index, other), max(index, other))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            region = shapes[pair[0]].intersection(shapes[pair[1]])
+            layers = (elements[pair[0]].layers
+                      & elements[pair[1]].layers)
+            contacts.append((pair, region, layers))
+
+    parent = list(range(len(contacts)))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    for a in range(len(contacts)):
+        for b in range(a + 1, len(contacts)):
+            if contacts[a][2] & contacts[b][2] and \
+                    contacts[a][1].intersects(contacts[b][1]):
+                union(a, b)
+    incident = {}
+    for contact_index, (pair, _region, _layers) in \
+            enumerate(contacts):
+        for element_index in pair:
+            incident.setdefault(element_index,
+                                []).append(contact_index)
+    for element_index, contact_indices in incident.items():
+        if elements[element_index].kind != "track":
+            first = contact_indices[0]
+            for other in contact_indices[1:]:
+                union(first, other)
+
+    if len(chain) < 2:
+        # A single-element traversal (both pads on one element) has
+        # no steps to test and no track resistance to defend.
+        return
+    terminals = []
+    for endpoint in (chain[0], chain[-1]):
+        contact_indices = incident.get(endpoint)
+        if not contact_indices:
+            raise ExtractionError(
+                "traversal endpoint element {} on net {!r} has no "
+                "recorded contacts; the bridge analysis cannot "
+                "stand and refuses".format(endpoint, net_name))
+        terminals.append(find(contact_indices[0]))
+
+    adjacency = {}
+    for element_index, contact_indices in incident.items():
+        if elements[element_index].kind != "track":
+            continue
+        nodes = sorted({find(contact_index)
+                        for contact_index in contact_indices})
+        for a in nodes:
+            for b in nodes:
+                if a != b:
+                    adjacency.setdefault(a, []).append(
+                        (b, element_index))
+
+    for traversed in chain:
+        if elements[traversed].kind != "track":
+            continue
+        nodes = sorted({find(contact_index)
+                        for contact_index in
+                        incident.get(traversed, [])})
+        if len(nodes) < 2:
+            raise ExtractionError(
+                "traversal element {} on net {!r} begins and ends "
+                "in one electrical node; its series resistance "
+                "would be fictitious, and the path-scoped model "
+                "refuses".format(traversed, net_name))
+        frontier = [terminals[0]]
+        seen = {terminals[0]}
+        connected = False
+        while frontier:
+            node = frontier.pop()
+            if node == terminals[1]:
+                connected = True
+                break
+            for neighbour, through in adjacency.get(node, []):
+                if through == traversed or neighbour in seen:
+                    continue
+                seen.add(neighbour)
+                frontier.append(neighbour)
+        if connected:
+            raise ExtractionError(
+                "an alternate copper path exists between {} and "
+                "{} on net {!r}: traversal element {} is not a "
+                "bridge in the electrical node graph, so parallel "
+                "copper divides the current and the path-scoped "
+                "model refuses".format(from_pad, to_pad, net_name,
+                                       traversed))
+
+
 def path_resistance(board, net_name, from_pad, to_pad,
                     copper_parameters,
                     resistivity_ohm_m=IACS_RESISTIVITY_OHM_M):
@@ -496,33 +620,13 @@ def path_resistance(board, net_name, from_pad, to_pad,
         raise ExtractionError(
             "no copper path connects {} to {} on net {!r}".format(
                 from_pad, to_pad, net_name))
-    chain_set = set(chain)
-    interior = chain_set - {chain[0], chain[-1]}
-    if interior:
-        # Parallel-path detection: with the traversal's interior
-        # removed, the endpoints must be unreachable. If they still
-        # connect, alternate copper carries part of the current and
-        # a series resistance over one traversal is not the
-        # two-terminal resistance.
-        frontier = [chain[0]]
-        seen = {chain[0]}
-        while frontier:
-            node = frontier.pop()
-            if node == chain[-1]:
-                raise ExtractionError(
-                    "an alternate copper path exists between {} "
-                    "and {} on net {!r}; parallel copper divides "
-                    "the current and the path-scoped model "
-                    "refuses".format(from_pad, to_pad, net_name))
-            for neighbour, _weight in graph.adj[node]:
-                if neighbour in seen or neighbour in interior:
-                    continue
-                seen.add(neighbour)
-                frontier.append(neighbour)
+    _series_bridge_check(graph, chain, from_pad, to_pad,
+                         net_name)
     resistance = 0.0
     via_count = 0
     per_layer_mm = {}
     junctions = {}
+    max_r_per_mm = 0.0
     for index in chain:
         element = graph.elements[index]
         for identity, span in element.junctions:
@@ -545,7 +649,21 @@ def path_resistance(board, net_name, from_pad, to_pad,
             * (parameter["value"] / 1000.0)
         resistance += resistivity_ohm_m \
             * (element.length_mm / 1000.0) / area_m2
+        max_r_per_mm = max(max_r_per_mm,
+                           resistivity_ohm_m / 1000.0 / area_m2)
     uncertainty = round(sum(junctions.values()) / 2.0, 6)
+    # A conservative resistance-equivalent of the junction
+    # ambiguity: the ambiguous millimetres priced at the most
+    # resistive traversed cross-section.
+    resistance_uncertainty = round(uncertainty * max_r_per_mm, 9)
+    if resistance_uncertainty > 0:
+        # The junction ambiguity is symmetric, so the value is not
+        # a one-sided bound in either direction, vias or not.
+        bound = "uncertain"
+    elif via_count:
+        bound = "lower"
+    else:
+        bound = "exact"
     return {
         "kind": "path-scoped-dc",
         "net": net_name,
@@ -556,6 +674,8 @@ def path_resistance(board, net_name, from_pad, to_pad,
         "length_by_layer_mm": dict(sorted(per_layer_mm.items())),
         "via_count_in_path": via_count,
         "resistance_ohm": round(resistance, 9),
+        "resistance_bound": bound,
+        "resistance_uncertainty_ohm": resistance_uncertainty,
         "resistivity_ohm_m": resistivity_ohm_m,
         "resistivity_source": "IEC 60028 international annealed "
                               "copper standard, 20 C"
@@ -569,7 +689,12 @@ def path_resistance(board, net_name, from_pad, to_pad,
                    "traversal between the two named pads; stubs the "
                    "current never crosses are excluded, and any "
                    "alternate copper path refuses this model "
-                   "entirely",
+                   "entirely; resistance_bound is 'lower' when "
+                   "omitted positive contributions (via barrels) "
+                   "are the only deviation, 'exact' when there is "
+                   "none, and 'uncertain' when the junction-span "
+                   "ambiguity is nonzero - a symmetric uncertainty "
+                   "is never passed off as a one-sided bound",
     }
 
 
@@ -651,7 +776,9 @@ def interconnect_model_from_path(path_record, board_sha256,
                      "length_mm": path_record["path_length_mm"],
                      "length_uncertainty_mm":
                          path_record["length_uncertainty_mm"],
-                     "via_count": path_record["via_count_in_path"]},
+                     "via_count": path_record["via_count_in_path"],
+                     "resistance_bound":
+                         path_record["resistance_bound"]},
             "two_terminal_assertion": assertion,
             "assumptions": [path_record["meaning"]],
         },
