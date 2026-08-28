@@ -39,7 +39,8 @@ class TopologyPlanError(Exception):
 
 _RULE_KEYS = {"layer", "track_width_mm", "clearance_mm",
               "via_diameter_mm", "via_drill_mm",
-              "hole_to_hole_mm", "mask_annulus_target_mm",
+              "hole_to_hole_mm", "hole_clearance_mm",
+              "mask_annulus_target_mm",
               "grid_step_mm", "search_radius_mm"}
 
 
@@ -109,6 +110,12 @@ class LocalField:
         via_obstacles = []
         self.own_copper = []
         self.existing_holes = []
+        # Holes repel FOREIGN copper by the declared hole clearance,
+        # whatever net the hole belongs to - a track may sit ON its
+        # own via, but never within hole clearance of anything
+        # else's drill. Modeled as an extra obstacle disk of drill/2
+        # + hole_clearance around every foreign hole.
+        hole_margin = rules["hole_clearance_mm"]
         for track in board.GetTracks():
             same_net = track.GetNetname() == net_name
             if track.GetClass() in ("PCB_VIA", "VIA"):
@@ -118,13 +125,15 @@ class LocalField:
                 circle = point.buffer(diameter / 2.0, quad_segs=16)
                 if not _in_window(circle):
                     continue
-                self.existing_holes.append(
-                    (point, track.GetDrillValue() / 1e6))
+                drill = track.GetDrillValue() / 1e6
+                self.existing_holes.append((point, drill))
                 if same_net:
                     self.own_copper.append(circle)
                 else:
-                    route_obstacles.append(circle)
-                    via_obstacles.append(circle)
+                    hole_disk = point.buffer(
+                        drill / 2.0 + hole_margin, quad_segs=16)
+                    route_obstacles.append(circle.union(hole_disk))
+                    via_obstacles.append(circle.union(hole_disk))
                 continue
             shape = LineString([
                 (track.GetStart().x / 1e6, track.GetStart().y / 1e6),
@@ -155,6 +164,21 @@ class LocalField:
                 if not relevant:
                     continue
                 same_net = pad.GetNetname() == net_name
+                drill_size = pad.GetDrillSize()
+                pad_drill = max(drill_size.x, drill_size.y) / 1e6
+                if pad_drill > 0:
+                    position = pad.GetPosition()
+                    hole_point = Point(position.x / 1e6,
+                                       position.y / 1e6)
+                    self.existing_holes.append((hole_point,
+                                                pad_drill))
+                    if not same_net:
+                        hole_disk = hole_point.buffer(
+                            pad_drill / 2.0 + hole_margin,
+                            quad_segs=16)
+                        if _in_window(hole_disk):
+                            route_obstacles.append(hole_disk)
+                            via_obstacles.append(hole_disk)
                 for layer, shape in shapes.items():
                     if not _in_window(shape):
                         continue
@@ -237,6 +261,13 @@ class LocalField:
         if self.via_union is not None and annulus.buffer(
                 rules["clearance_mm"]).intersects(self.via_union):
             return False, "copper clearance"
+        # The new via's own HOLE keeps the declared hole clearance
+        # from foreign copper too.
+        if self.via_union is not None and point.buffer(
+                rules["via_drill_mm"] / 2.0
+                + rules["hole_clearance_mm"]).intersects(
+                    self.via_union):
+            return False, "hole clearance"
         for opening in self.mask_openings:
             if annulus.distance(opening) < \
                     rules["mask_annulus_target_mm"]:

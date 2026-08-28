@@ -27,6 +27,7 @@ def _rules(**overrides):
         "via_diameter_mm": 0.45,
         "via_drill_mm": 0.30,
         "hole_to_hole_mm": 0.25,
+        "hole_clearance_mm": 0.25,
         "mask_annulus_target_mm": 0.4,
         "grid_step_mm": 0.05,
         "search_radius_mm": 4.0,
