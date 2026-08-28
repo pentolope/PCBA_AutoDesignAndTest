@@ -150,6 +150,19 @@ No commit, push or tag without explicit authorisation from the user.
   `PRE_NORMALIZATION_HASHES.json` and the fixture README — which exist to say
   what was taken out and why.
 
+## Headless discipline
+
+No code path may raise a dialog a human must dismiss: a modal box on
+an unwatched screen freezes an autonomous run (KiCad's debug asserts
+- e.g. `PCB_VIA::GetWidth()` without a layer argument - become
+blocking wxWidgets alerts on Windows). Every entry point calls
+`pcbqa.headless.suppress_blocking_ui()` first (`run.py` does this
+for all commands); long-running consumer scripts must do the same.
+Suppression is not permission to misuse APIs - the canary in
+`tests/test_headless.py` fails the suite if the blocking path ever
+becomes reachable again. Via geometry reads always pass a layer
+argument.
+
 ## Running
 
 Use KiCad's own Python; it provides `pcbnew` and `shapely`.

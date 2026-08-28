@@ -606,6 +606,10 @@ def cmd_extract(argv):
 
 
 def main(argv):
+    # No toolkit command may ever raise a dialog a human must
+    # dismiss: an autonomous run freezes on an unwatched screen.
+    from pcbqa import headless
+    headless.suppress_blocking_ui()
     if len(argv) < 2:
         print(__doc__)
         return 2
