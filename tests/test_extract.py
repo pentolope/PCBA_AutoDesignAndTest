@@ -505,3 +505,112 @@ class ConstructionsBindTheComparison(unittest.TestCase):
         self.assertEqual(one,
                          extract.construction_digest(thin,
                                                      THICKNESS))
+
+
+class PathScopedExtractionIsHonest(unittest.TestCase):
+    """DC resistance over the actual traversal: stubs excluded,
+    parallel copper refused, plane copper refused."""
+
+    def setUp(self):
+        from pcbqa import geom
+        geom.configure(0.001)
+
+    def _stubbed_board(self):
+        """P1 -- 10 mm run -- P2, with a 6 mm stub hanging off the
+        middle: the stub inflates the net inventory but never the
+        traversal."""
+        board = synth.new_board()
+        net = synth.add_net(board, "LINK")
+        synth.add_pad_footprint(board, "P1", 0.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_pad_footprint(board, "P2", 10.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_track(board, (0.0, 0.0), (10.0, 0.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (5.0, 0.0), (5.0, 6.0), net=net,
+                        width_mm=0.2)
+        return board
+
+    def test_stubs_are_excluded_from_the_traversal(self):
+        board = self._stubbed_board()
+        record = extract.path_resistance(
+            board, "LINK", "P1.1", "P2.1", COPPER)
+        inventory = extract.extract_net(board, "LINK", COPPER,
+                                        THICKNESS)
+        self.assertLess(
+            record["resistance_ohm"],
+            inventory["dc"]["segment_resistance_sum_ohm"])
+        self.assertAlmostEqual(record["path_length_mm"], 10.0,
+                               delta=1.2)
+        expected = extract.IACS_RESISTIVITY_OHM_M \
+            * (record["path_length_mm"] / 1000.0) \
+            / ((0.2 / 1000.0) * (0.035 / 1000.0))
+        self.assertAlmostEqual(record["resistance_ohm"], expected,
+                               places=9)
+
+    def test_parallel_copper_refuses(self):
+        board = self._stubbed_board()
+        net = board.GetNetsByName()["LINK"]
+        synth.add_track(board, (0.0, 0.0), (0.0, 3.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (0.0, 3.0), (10.0, 3.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (10.0, 3.0), (10.0, 0.0), net=net,
+                        width_mm=0.2)
+        with self.assertRaises(ExtractionError):
+            extract.path_resistance(board, "LINK", "P1.1", "P2.1",
+                                    COPPER)
+
+    def test_plane_copper_refuses(self):
+        board = self._stubbed_board()
+        net = board.GetNetsByName()["LINK"]
+        synth.add_zone(board, net, [pcbnew.F_Cu],
+                       (-2.0, -2.0, 12.0, 8.0), fill=True)
+        with self.assertRaises(ExtractionError):
+            extract.path_resistance(board, "LINK", "P1.1", "P2.1",
+                                    COPPER)
+
+    def test_disconnected_endpoints_refuse(self):
+        board = self._stubbed_board()
+        net = synth.add_net(board, "LONELY")
+        synth.add_pad_footprint(board, "P3", 20.0, 20.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_track(board, (20.0, 20.0), (22.0, 20.0), net=net)
+        with self.assertRaises(ExtractionError):
+            extract.path_resistance(board, "LONELY", "P3.1", "P9.9",
+                                    COPPER)
+
+    def test_the_path_model_is_two_terminal_by_construction(self):
+        board = self._stubbed_board()
+        record = extract.path_resistance(
+            board, "LINK", "P1.1", "P2.1", COPPER)
+        model = extract.interconnect_model_from_path(
+            record, "a" * 64,
+            {"copper_thickness_mm": COPPER,
+             "board_thickness_mm": THICKNESS})
+        registry = fidelity.ModelRegistry([model])
+        self.assertIn("path:LINK:P1.1->P2.1@", model["identity"])
+        self.assertIn("established by construction",
+                      model["provenance"][
+                          "two_terminal_asserted_by"])
+        self.assertIn(".subckt", model["spice"])
+        self.assertEqual(
+            model["conditions"]["temperature_c"]["value"], 20.0)
+        self.assertEqual(registry.identities(),
+                         [model["identity"]])
+
+
+class MetricNamesCannotMasquerade(unittest.TestCase):
+
+    def test_leaf_inventory_and_complete_path_are_distinct(self):
+        definitions = extract.METRIC_DEFINITIONS
+        self.assertNotEqual(
+            definitions["clock_leaf_net_length_spread_mm"],
+            definitions["complete_path_spread_mm"])
+        self.assertIn("NET-length-inventory",
+                      definitions["clock_leaf_net_length_spread_mm"])
+        self.assertIn("complete-path",
+                      definitions["complete_path_spread_mm"])

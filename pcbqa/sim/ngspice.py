@@ -417,6 +417,8 @@ def run_scenario(registry, sim_scenario, workdir):
                 unmet))
     conditions = scenario_module.condition_coverage(registry,
                                                     sim_scenario)
+    assumptions = scenario_module.assumption_dependencies(
+        sim_scenario)
     deck = generate_deck(registry, sim_scenario)
     backend = backend_identity()
     result = {
@@ -427,6 +429,7 @@ def run_scenario(registry, sim_scenario, workdir):
         "operating_conditions_applied":
             sim_scenario.get("operating_conditions"),
         "condition_coverage": conditions,
+        "assumption_dependencies": assumptions,
         "significance": {
             "release_grade": False,
             "meaning": "a numerical result under exactly the stated "
@@ -476,18 +479,27 @@ def _attach_result_policy(result, coverage):
             for measurement in result["measurements"].values())
     fully_covered = result["condition_coverage"]["fully_covered"]
     applicable = None if fully_covered is None else fully_covered
+    assumptions = result["assumption_dependencies"]
+    assumptions_ok = assumptions[
+        "all_assumptions_accepted_for_design_decision"]
     result["result_policy"] = {
         "numerical_assertions_passed": assertions,
         "result_applicable_to_requested_conditions": applicable,
+        "assumption_dependent":
+            assumptions["assumption_dependent"],
+        "assumptions_accepted_for_design_decision": assumptions_ok,
         "usable_for_design_decision": bool(
             ran and coverage["satisfied"] is True
-            and applicable is not False),
+            and applicable is not False
+            and assumptions_ok),
         "usable_for_release": False,
         "meaning": "usable_for_design_decision requires a run under "
-                   "a declared and satisfied coverage requirement "
-                   "whose models represent the requested operating "
-                   "conditions; assertions passing numerically "
-                   "never overrides an inapplicable condition",
+                   "a declared and satisfied coverage requirement, "
+                   "models representing the requested operating "
+                   "conditions, and every contributing ideal "
+                   "primitive declared and accepted as an "
+                   "assumption; a numerical pass never overrides "
+                   "any of those",
     }
     return result
 

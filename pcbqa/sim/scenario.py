@@ -32,8 +32,10 @@ GROUND_NODE = "0"
 
 _KNOWN_SCENARIO_KEYS = {
     "name", "description", "elements", "analyses", "measurements",
-    "operating_conditions", "required_coverage",
+    "operating_conditions", "required_coverage", "assumptions",
 }
+
+_ASSUMPTION_KEYS = {"stands_in_for", "accepted_for_design_decision"}
 _REQUIRED_SCENARIO_KEYS = {"name", "elements", "analyses",
                            "measurements"}
 
@@ -249,6 +251,34 @@ def validate_scenario(scenario):
     required = scenario.get("required_coverage")
     if required is not None:
         validate_requirement(required)
+
+    assumptions = scenario.get("assumptions")
+    if assumptions is not None:
+        _require(isinstance(assumptions, dict) and assumptions,
+                 "assumptions must be a nonempty dict of "
+                 "element name -> assumption record")
+        ideal_names = {element["name"]
+                       for element in scenario["elements"]
+                       if element["kind"] != "model_instance"}
+        for name, record in assumptions.items():
+            _require(name in ideal_names,
+                     "assumption {!r} names no ideal element in "
+                     "this scenario; assumptions describe ideal "
+                     "primitives, and a registered model's evidence "
+                     "is the coverage contract's business".format(
+                         name))
+            _require(isinstance(record, dict), "each assumption is "
+                                               "a dict")
+            _exact_keys("assumption {!r}".format(name), record,
+                        _ASSUMPTION_KEYS)
+            _require(isinstance(record["stands_in_for"], str)
+                     and record["stands_in_for"],
+                     "assumption {!r} needs a nonempty "
+                     "stands_in_for".format(name))
+            _require(isinstance(
+                record["accepted_for_design_decision"], bool),
+                "assumption {!r} accepted_for_design_decision must "
+                "be a bool".format(name))
     return scenario
 
 
@@ -409,6 +439,66 @@ def contributor_coverage_report(registry, scenario):
                    "individually acceptable, and each measurement "
                    "needs at least one acceptable provider of each "
                    "required phenomenon among its own contributors",
+    }
+
+
+def assumption_dependencies(scenario):
+    """Which ideal primitives each measurement depends on, and how
+    each is accounted for.
+
+    An ideal element is exact by declaration, but exactness is not
+    evidence about the real part it stands in for. Every ideal
+    contributor is therefore either DECLARED (the scenario's
+    assumptions name it, say what it stands in for, and state
+    whether the assumption is accepted for a design decision) or
+    UNDECLARED - and an undeclared or unaccepted assumption makes
+    the result unusable for the requested decision, structurally.
+    """
+    validate_scenario(scenario)
+    declared = scenario.get("assumptions") or {}
+    per_measurement = {}
+    all_accepted = True
+    any_ideal = False
+    for measurement in scenario["measurements"]:
+        contributors = measurement_contributors(scenario,
+                                                measurement)
+        entries = {}
+        for element in contributors:
+            if element["kind"] == "model_instance":
+                continue
+            any_ideal = True
+            record = declared.get(element["name"])
+            if record is None:
+                entries[element["name"]] = {
+                    "kind": element["kind"],
+                    "declared": False,
+                    "accepted_for_design_decision": False,
+                    "detail": "ideal primitive with no declared "
+                              "assumption; exact by declaration is "
+                              "not evidence about the real part",
+                }
+                all_accepted = False
+            else:
+                entries[element["name"]] = {
+                    "kind": element["kind"],
+                    "declared": True,
+                    "stands_in_for": record["stands_in_for"],
+                    "accepted_for_design_decision":
+                        record["accepted_for_design_decision"],
+                }
+                if not record["accepted_for_design_decision"]:
+                    all_accepted = False
+        per_measurement[measurement["name"]] = entries
+    return {
+        "per_measurement": per_measurement,
+        "assumption_dependent": any_ideal,
+        "all_assumptions_accepted_for_design_decision":
+            all_accepted if any_ideal else True,
+        "meaning": "results built on ideal primitives are usable "
+                   "for a design decision only when every such "
+                   "primitive's assumption is declared and "
+                   "accepted; usable-under-assumption is never "
+                   "evidence about the real source or load",
     }
 
 

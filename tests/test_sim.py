@@ -804,6 +804,12 @@ class ResultsCarryAUsabilityPolicy(unittest.TestCase):
             "operating_conditions": {"temperature_c": temperature},
             "required_coverage": {
                 "interconnect_dc": ["geometry-derived"]},
+            "assumptions": {
+                "src": {"stands_in_for": "the host supply",
+                        "accepted_for_design_decision": True},
+                "load": {"stands_in_for": "downstream demand",
+                         "accepted_for_design_decision": True},
+            },
         }
         return ngspice.run_scenario(registry, sim_scenario,
                                     tempfile.mkdtemp())
@@ -830,3 +836,74 @@ class ResultsCarryAUsabilityPolicy(unittest.TestCase):
             self.assertIs(policy["usable_for_design_decision"],
                           True)
         self.assertIs(policy["usable_for_release"], False)
+
+
+class IdealAssumptionsAreStructural(unittest.TestCase):
+
+    def _scenario(self, assumptions):
+        sim_scenario = {
+            "name": "assumption-visibility",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src",
+                 "nodes": ["in", "0"], "value": 1.0},
+                {"kind": "resistor", "name": "top",
+                 "nodes": ["in", "mid"], "value": 1000.0},
+                {"kind": "resistor", "name": "bottom",
+                 "nodes": ["mid", "0"], "value": 1000.0},
+            ],
+            "analyses": [{"kind": "op"}],
+            "measurements": [
+                {"name": "mid", "kind": "op_voltage",
+                 "node": "mid",
+                 "assertion": {"op": "within", "value": 0.5,
+                               "tolerance": 0.001}}],
+        }
+        if assumptions is not None:
+            sim_scenario["assumptions"] = assumptions
+        return sim_scenario
+
+    def test_ideal_dependencies_are_visible_per_measurement(self):
+        result = ngspice.run_scenario(
+            fidelity.ModelRegistry(), self._scenario(None),
+            tempfile.mkdtemp())
+        entries = result["assumption_dependencies"][
+            "per_measurement"]["mid"]
+        self.assertEqual(sorted(entries),
+                         ["bottom", "src", "top"])
+        self.assertIs(entries["src"]["declared"], False)
+        self.assertIs(result["result_policy"][
+            "assumption_dependent"], True)
+
+    def test_undeclared_assumptions_are_never_design_usable(self):
+        result = ngspice.run_scenario(
+            fidelity.ModelRegistry(), self._scenario(None),
+            tempfile.mkdtemp())
+        policy = result["result_policy"]
+        if result["status"] == "ran":
+            self.assertTrue(policy["numerical_assertions_passed"])
+        self.assertIs(
+            policy["assumptions_accepted_for_design_decision"],
+            False)
+        self.assertIs(policy["usable_for_design_decision"], False)
+
+    def test_unaccepted_assumption_blocks_design_use(self):
+        assumptions = {
+            "src": {"stands_in_for": "a bench supply",
+                    "accepted_for_design_decision": False},
+            "top": {"stands_in_for": "upper divider leg",
+                    "accepted_for_design_decision": True},
+            "bottom": {"stands_in_for": "lower divider leg",
+                       "accepted_for_design_decision": True},
+        }
+        result = ngspice.run_scenario(
+            fidelity.ModelRegistry(), self._scenario(assumptions),
+            tempfile.mkdtemp())
+        self.assertIs(result["result_policy"][
+            "usable_for_design_decision"], False)
+
+    def test_assumptions_must_name_ideal_elements(self):
+        broken = self._scenario({
+            "ghost": {"stands_in_for": "nothing",
+                      "accepted_for_design_decision": True}})
+        with self.assertRaises(SimulationError):
+            scenario.validate_scenario(broken)

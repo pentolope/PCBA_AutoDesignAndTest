@@ -336,6 +336,20 @@ METRIC_DEFINITIONS = {
     "partial_copper_length_mm":
         "pcbqa.extract/partial-net-copper-inventory@"
         + EXTRACT_VERSION,
+    # The literal names matter: the leaf statistic is a per-NET
+    # inventory spread and can never masquerade as the spread of
+    # complete electrical paths - different names, different
+    # definitions, never paired by the comparator.
+    "clock_leaf_net_length_spread_mm":
+        "pcbqa.extract/clock-leaf-NET-length-inventory-spread@"
+        + EXTRACT_VERSION,
+    "complete_path_copper_length_mm":
+        "pcbqa.timing/complete-path-copper-length@1",
+    "complete_path_spread_mm":
+        "pcbqa.timing/complete-path-length-spread@1",
+    "path_scoped_resistance_ohm":
+        "pcbqa.extract/path-scoped-dc-resistance@"
+        + EXTRACT_VERSION,
 }
 
 
@@ -436,6 +450,229 @@ def extract_net(board, net_name, copper_parameters,
                        "two-terminal claim is made",
         },
     }
+
+
+def path_resistance(board, net_name, from_pad, to_pad,
+                    copper_parameters,
+                    resistivity_ohm_m=IACS_RESISTIVITY_OHM_M):
+    """DC resistance over the actual copper traversal between two
+    pads - the honest abstraction for a branched net.
+
+    The traversal comes from the copper-intersection graph (split at
+    junctions so piece lengths are traversal-true); stubs the
+    current never crosses are excluded by construction. Refusals,
+    all explicit:
+
+      * the pads are not connected;
+      * the net carries filled zone copper (plane current paths are
+        not modelled here);
+      * an ALTERNATE copper path exists between the endpoints
+        (parallel copper divides the current; a series sum would
+        overstate nothing less than the truth);
+      * a traversed layer has no copper thickness record.
+
+    Vias contribute no resistance (no supported via resistance
+    model); their count is reported and the omission stated. The
+    junction ambiguity of split pieces is summed into an explicit
+    length uncertainty.
+    """
+    from . import geom
+    from .connectivity import NetGraph
+    for layer, record in copper_parameters.items():
+        validate_parameter(record,
+                           "copper thickness on {}".format(layer))
+    _finite_positive("resistivity_ohm_m", resistivity_ohm_m)
+    for zone in board.Zones():
+        if not zone.GetIsRuleArea() and \
+                zone.GetNetname() == net_name and zone.IsFilled():
+            raise ExtractionError(
+                "net {!r} carries filled zone copper; plane current "
+                "paths are not modelled by path-scoped DC "
+                "extraction".format(net_name))
+    graph = NetGraph(board, net_name, geom.pad_copper_polygon,
+                     split_at_junctions=True)
+    length, chain = graph.trace([from_pad], to_pad)
+    if length is None:
+        raise ExtractionError(
+            "no copper path connects {} to {} on net {!r}".format(
+                from_pad, to_pad, net_name))
+    chain_set = set(chain)
+    interior = chain_set - {chain[0], chain[-1]}
+    if interior:
+        # Parallel-path detection: with the traversal's interior
+        # removed, the endpoints must be unreachable. If they still
+        # connect, alternate copper carries part of the current and
+        # a series resistance over one traversal is not the
+        # two-terminal resistance.
+        frontier = [chain[0]]
+        seen = {chain[0]}
+        while frontier:
+            node = frontier.pop()
+            if node == chain[-1]:
+                raise ExtractionError(
+                    "an alternate copper path exists between {} "
+                    "and {} on net {!r}; parallel copper divides "
+                    "the current and the path-scoped model "
+                    "refuses".format(from_pad, to_pad, net_name))
+            for neighbour, _weight in graph.adj[node]:
+                if neighbour in seen or neighbour in interior:
+                    continue
+                seen.add(neighbour)
+                frontier.append(neighbour)
+    resistance = 0.0
+    via_count = 0
+    per_layer_mm = {}
+    junctions = {}
+    for index in chain:
+        element = graph.elements[index]
+        for identity, span in element.junctions:
+            junctions[identity] = span
+        if element.kind == "via":
+            via_count += 1
+            continue
+        if element.kind != "track":
+            continue
+        layer = board.GetLayerName(element.obj.GetLayer())
+        parameter = copper_parameters.get(layer)
+        if parameter is None:
+            raise ExtractionError(
+                "the traversal uses layer {!r} but no copper "
+                "thickness record covers it".format(layer))
+        width_mm = element.obj.GetWidth() / 1e6
+        per_layer_mm[layer] = round(
+            per_layer_mm.get(layer, 0.0) + element.length_mm, 6)
+        area_m2 = (width_mm / 1000.0) \
+            * (parameter["value"] / 1000.0)
+        resistance += resistivity_ohm_m \
+            * (element.length_mm / 1000.0) / area_m2
+    uncertainty = round(sum(junctions.values()) / 2.0, 6)
+    return {
+        "kind": "path-scoped-dc",
+        "net": net_name,
+        "from_pad": from_pad,
+        "to_pad": to_pad,
+        "path_length_mm": round(length, 6),
+        "length_uncertainty_mm": uncertainty,
+        "length_by_layer_mm": dict(sorted(per_layer_mm.items())),
+        "via_count_in_path": via_count,
+        "resistance_ohm": round(resistance, 9),
+        "resistivity_ohm_m": resistivity_ohm_m,
+        "resistivity_source": "IEC 60028 international annealed "
+                              "copper standard, 20 C"
+                              if resistivity_ohm_m
+                              == IACS_RESISTIVITY_OHM_M
+                              else "caller-supplied",
+        "omissions": ["via barrel resistance (no supported model; "
+                      "{} via(s) traversed contribute zero)".format(
+                          via_count)],
+        "meaning": "series DC resistance over the traced copper "
+                   "traversal between the two named pads; stubs the "
+                   "current never crosses are excluded, and any "
+                   "alternate copper path refuses this model "
+                   "entirely",
+    }
+
+
+def interconnect_model_from_path(path_record, board_sha256,
+                                 physical_inputs):
+    """A two-terminal simulation model from one traced path.
+
+    Two-terminal BY CONSTRUCTION: the traversal's endpoints are the
+    terminals, parallel copper was refused during extraction, and
+    the establishing method is recorded in the assertion text. The
+    evidence chain matches the net-scoped model exactly.
+    """
+    if not isinstance(physical_inputs, dict) or \
+            set(physical_inputs) != {"copper_thickness_mm",
+                                     "board_thickness_mm"}:
+        raise ExtractionError(
+            "physical_inputs must be the baseline's own block")
+    validate_parameter(physical_inputs["board_thickness_mm"],
+                       "board thickness")
+    copper = {}
+    for layer in sorted(path_record["length_by_layer_mm"]):
+        record = physical_inputs["copper_thickness_mm"].get(layer)
+        if record is None:
+            raise ExtractionError(
+                "the path uses layer {!r} but the physical inputs "
+                "carry no copper record for it".format(layer))
+        copper[layer] = validate_parameter(
+            record, "copper thickness on {}".format(layer))
+    physical_digest = construction_digest(
+        copper, physical_inputs["board_thickness_mm"],
+        path_record["resistivity_ohm_m"])
+    identity = "path:{}:{}->{}@{}+phys:{}".format(
+        path_record["net"], path_record["from_pad"],
+        path_record["to_pad"], board_sha256[:12],
+        physical_digest[:12])
+    root_types = sorted(
+        {record["source_type"] for record in copper.values()}
+        | {physical_inputs["board_thickness_mm"]["source_type"]})
+    assertion = ("established by construction: path-scoped "
+                 "traversal between {} and {} with stubs excluded "
+                 "and alternate copper paths refused during "
+                 "extraction".format(path_record["from_pad"],
+                                     path_record["to_pad"]))
+    record = {
+        "identity": identity,
+        "kind": "board-interconnect-path",
+        "coverage": {"interconnect_dc": "geometry-derived",
+                     "interconnect_si": "unsupported",
+                     "power_integrity": "unsupported",
+                     "functional_behavior": "not-applicable",
+                     "device_electrical": "not-applicable",
+                     "digital_io": "not-applicable"},
+        "provenance": {
+            "source": "pcbqa.extract path-scoped traversal",
+            "board_file_sha256": board_sha256,
+            "resistivity_source":
+                path_record["resistivity_source"],
+            "two_terminal_asserted_by": assertion,
+        },
+        "derivation": {
+            "chain": ["physical-parameters[{}]".format(
+                          "+".join(root_types)),
+                      "board-geometry", "path-traversal",
+                      "simulation-model"],
+            "roots": {"copper_thickness_mm.{}".format(layer):
+                      rec["source_type"]
+                      for layer, rec in sorted(copper.items())},
+            "board_file_sha256": board_sha256,
+            "extract_version": EXTRACT_VERSION,
+            "physical_inputs_sha256": physical_digest,
+            "copper_thickness_mm": copper,
+            "board_thickness_mm":
+                physical_inputs["board_thickness_mm"],
+            "resistivity": {
+                "value_ohm_m": path_record["resistivity_ohm_m"],
+                "source": path_record["resistivity_source"]},
+            "path": {"from_pad": path_record["from_pad"],
+                     "to_pad": path_record["to_pad"],
+                     "length_mm": path_record["path_length_mm"],
+                     "length_uncertainty_mm":
+                         path_record["length_uncertainty_mm"],
+                     "via_count": path_record["via_count_in_path"]},
+            "two_terminal_assertion": assertion,
+            "assumptions": [path_record["meaning"]],
+        },
+        "omissions": list(path_record["omissions"]) + [
+            "inductance", "capacitance", "distributed effects",
+            "frequency dependence", "temperature dependence beyond "
+            "the stated resistivity reference"],
+        "notes": [path_record["meaning"]],
+        "spice": ".subckt {identity} a b\nR1 a b {value}\n"
+                 ".ends".format(identity=identity,
+                                value=path_record[
+                                    "resistance_ohm"]),
+    }
+    if path_record["resistivity_ohm_m"] == IACS_RESISTIVITY_OHM_M:
+        record["conditions"] = {
+            "temperature_c": {"kind": "fixed-reference",
+                              "value": IACS_REFERENCE_TEMPERATURE_C,
+                              "units": "C",
+                              "source": "IEC 60028 resistivity "
+                                        "reference temperature"}}
+    return record
 
 
 def paths_from_validation(validation):

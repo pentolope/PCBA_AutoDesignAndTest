@@ -85,6 +85,22 @@ contract, a generated wrapper and main, DUT swapped per run).
   EXECUTABLE policy decides which zones a derived candidate inherits
   as architecture and which placement-derived zones survive only
   near requirement-fixed geometry; an unclassified zone refuses.
+- **Progression** (`pcbqa/progression.py`): candidate advancement is
+  ordered correctness classes - placement policy, critical
+  structures by POLICY-owned path/topology truth (net connectivity
+  is never sufficient), BOARD-required connectivity (the benchmark
+  inventory never stands in for it), hard fabrication geometry,
+  blocking gates, quality gates, usable electrical evidence - with
+  a lexicographic rank key no scalar can override. Ready-for-next-
+  stage and worth-comparing are distinct states.
+- **Freshness** (`pcbqa/freshness.py`): derived artifacts carry a
+  deliberate producer closure (named code, inputs, schema digests);
+  consumers refuse stale or tampered artifacts and are told exactly
+  which dependency moved. Unrelated changes invalidate nothing.
+- **Assumptions**: ideal scenario primitives are first-class
+  declared assumptions; a result depending on an undeclared or
+  unaccepted assumption is structurally unusable for a design
+  decision, however its assertions read.
 
 ## 4. Placement and routing (implemented core, open frontier)
 
@@ -98,17 +114,25 @@ the toolkit proves the result or the candidate fails.
 
 Routing is staged by board semantics with bounded runtimes,
 checkpointed per attempt, judged by connectivity classification,
-finished by a scoped cleanup stage. Router parameters derive from
-the board's own declared fabrication minimums; router heuristics
-that misclassify parts (e.g. BGA auto-detection walling a
-microphone's own clock pad) are disabled with the finding recorded.
+finished by a scoped cleanup stage. Declared fabrication minima are
+HARD inside the loop: the router may not rewrite a candidate's DRC
+floors (the authoritative project rules travel beside every
+artifact), a per-stage geometry DRC at those rules gates checkpoint
+advance, and connectivity obtained below a declared minimum is
+never stage success. Router heuristics that misclassify parts (e.g.
+BGA auto-detection walling a microphone's own clock pad) are
+disabled with the finding recorded.
 
-Open frontier, in the brief's durable ordering: a critical topology
-planner for structures a net-oriented router cannot own
-(ElectricalPaths across series parts, matched/differential
-structures), length/time tuning mapped from electrical intent, and
-richer optimizer freedom (constraint-preserving perturbations,
-block moves) beyond lock-and-repair.
+The critical-topology planner exists (`pcbqa/critical_topology.py`)
+for its first structure class: verified LOCAL copper the general
+router cannot produce at declared values - guard-ring pad escapes,
+process-checked stitching vias (mask annulus, hole-to-hole,
+keepouts, actual plane fill), last-mile group joins - generated
+then exactly re-verified, with the gates still the authority.
+Open frontier, in the brief's durable ordering: matched-length
+branch/tree generation (the declared cross-branch spread limits),
+length/time tuning mapped from electrical intent, and richer
+optimizer freedom beyond lock-and-repair.
 
 ## 5. Simulation strategy (durable, partially implemented)
 
