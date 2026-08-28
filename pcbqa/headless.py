@@ -9,12 +9,22 @@ box, and Windows itself can raise crash/error boxes for a dying
 child process. Either one stalls a run until a person clicks.
 
 ``suppress_blocking_ui()`` closes both doors for the CURRENT process
-and, via inherited error mode, for child processes it spawns:
+and, via inherited error mode, for child processes it spawns -
+WITHOUT silencing the underlying errors:
 
-  * ``wx.DisableAsserts()`` - KiCad's Python ships wxPython bound to
-    the SAME wx runtime pcbnew uses, so disabling asserts here
-    silences the C++ dialog path process-wide (the misused call then
-    simply returns, as verified against the known via/width case);
+  * wx asserts are switched to LOG mode (``wx.App`` +
+    ``APP_ASSERT_LOG``): the failed assert's file, line and message
+    are printed to stderr - which every recorded invocation in this
+    ecosystem captures - and execution continues along the same path
+    the dialog's "continue" button always took. An assert is a
+    REPORT point, not a control-flow guard (``wxCHECK`` guards keep
+    their early returns regardless), so no previously-unreachable
+    code becomes reachable; what changes is that misuse is reported
+    in the log instead of freezing the run. All wx log output is
+    pinned to stderr so the App's default GUI logger can never
+    raise a message box of its own. Only when no ``wx.App`` can be
+    created does the fallback drop to ``wx.DisableAsserts()`` -
+    nonblocking but unreported, and recorded as exactly that.
   * ``SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
     SEM_NOOPENFILEERRORBOX)`` - Windows hard-failure boxes become
     silent failures, and children created afterwards inherit it.
@@ -22,9 +32,10 @@ and, via inherited error mode, for child processes it spawns:
 Every long-running entry point calls this first; ``run.py`` does it
 for every toolkit command. The function is idempotent, never raises,
 and returns a record of what it applied so a run log can show the
-protection was in place. Suppression is NOT permission to misuse
-APIs: the assert canary in the test suite exists precisely so a
-regression here fails the suite instead of freezing a pipeline.
+protection was in place. None of this is permission to misuse APIs:
+the canary in the test suite triggers the known blocking call and
+demands BOTH that it does not block AND that the assert text was
+reported.
 """
 
 from __future__ import annotations
@@ -33,6 +44,10 @@ _SEM_FAILCRITICALERRORS = 0x0001
 _SEM_NOGPFAULTERRORBOX = 0x0002
 _SEM_NOOPENFILEERRORBOX = 0x8000
 
+#: The wx.App created for assert routing must outlive every later
+#: assert; a garbage-collected App would drop the installed mode.
+_WX_APP = None
+
 
 def suppress_blocking_ui():
     """Disarm modal dialogs for this process and its children.
@@ -40,16 +55,31 @@ def suppress_blocking_ui():
     Safe everywhere: on non-Windows or without wx available, the
     corresponding step is recorded as skipped rather than failing.
     """
-    applied = {"wx_asserts_disabled": False,
+    global _WX_APP
+    applied = {"wx_assert_mode": None,
                "windows_error_mode_set": False,
                "detail": []}
     try:
         import wx
-        wx.DisableAsserts()
-        applied["wx_asserts_disabled"] = True
+        try:
+            app = wx.GetApp()
+            if app is None:
+                _WX_APP = wx.App(redirect=False)
+                app = _WX_APP
+            app.SetAssertMode(wx.APP_ASSERT_LOG)
+            wx.Log.SetActiveTarget(wx.LogStderr())
+            applied["wx_assert_mode"] = (
+                "log: asserts print file/line/message to stderr "
+                "and continue; nothing blocks, nothing is silent")
+        except Exception as error:
+            wx.DisableAsserts()
+            applied["wx_assert_mode"] = (
+                "suppressed (fallback): nonblocking but "
+                "UNREPORTED - log mode unavailable: "
+                "{}".format(error))
     except Exception as error:  # wx absent outside KiCad's python
         applied["detail"].append(
-            "wx assert suppression unavailable: {}".format(error))
+            "wx assert handling unavailable: {}".format(error))
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
@@ -65,3 +95,42 @@ def suppress_blocking_ui():
             "Windows error-mode suppression unavailable: "
             "{}".format(error))
     return applied
+
+
+def protection_state():
+    """The protection as QUERYABLE state - never inferred from time.
+
+    Both mechanisms expose their live configuration, so a consumer
+    (and the suite's canary) asserts directly whether a modal path
+    is reachable: the wx assert mode must be APP_ASSERT_LOG (the
+    dialog branch is then unreachable in wx's own dispatch), and
+    the Windows error mode must carry all three SEM bits. A test
+    that checks this state BEFORE triggering anything fails fast
+    and by name when protection regresses - and never causes the
+    very dialog it guards against.
+    """
+    state = {"wx_assert_mode_is_log": None,
+             "wx_assert_mode_value": None,
+             "windows_error_mode": None,
+             "windows_error_mode_ok": False}
+    try:
+        import wx
+        app = wx.GetApp()
+        if app is not None and hasattr(app, "GetAssertMode"):
+            state["wx_assert_mode_value"] = int(
+                app.GetAssertMode())
+            state["wx_assert_mode_is_log"] = (
+                app.GetAssertMode() == wx.APP_ASSERT_LOG)
+    except Exception:
+        pass
+    try:
+        import ctypes
+        mode = ctypes.windll.kernel32.GetErrorMode()
+        state["windows_error_mode"] = mode
+        required = (_SEM_FAILCRITICALERRORS | _SEM_NOGPFAULTERRORBOX
+                    | _SEM_NOOPENFILEERRORBOX)
+        state["windows_error_mode_ok"] = \
+            (mode & required) == required
+    except Exception:
+        pass
+    return state

@@ -74,12 +74,20 @@ class LocalField:
     """The exact obstacle geometry around one anchor, for one net."""
 
     def __init__(self, board, net_name, center_mm, rules,
-                 pad_polygon):
+                 pad_polygon, outline=None):
         import pcbnew
         from shapely.geometry import LineString, Point, box
         from shapely.ops import unary_union
 
         validate_rules(rules)
+        if outline is not None:
+            if not isinstance(outline, dict) or set(outline) != {
+                    "center_mm", "radius_mm", "clearance_mm"}:
+                raise TopologyPlanError(
+                    "outline must carry exactly center_mm, "
+                    "radius_mm and clearance_mm (circular outlines "
+                    "only)")
+        self.outline = outline
         self.board = board
         self.net = net_name
         self.rules = rules
@@ -207,9 +215,22 @@ class LocalField:
                 "nothing".format(plane_net))
         return unary_union(elements)
 
+    def _edge_distance_ok(self, x, y, extent_mm):
+        """Copper extent stays clear of the board edge, when the
+        consumer supplied the outline."""
+        if self.outline is None:
+            return True
+        reach = math.hypot(x - self.outline["center_mm"][0],
+                           y - self.outline["center_mm"][1])
+        return reach + extent_mm <= self.outline["radius_mm"] \
+            - self.outline["clearance_mm"]
+
     def via_site_ok(self, x, y, plane_fill):
         from shapely.geometry import Point
         rules = self.rules
+        if not self._edge_distance_ok(
+                x, y, rules["via_diameter_mm"] / 2.0):
+            return False, "board edge clearance"
         point = Point(x, y)
         annulus = point.buffer(rules["via_diameter_mm"] / 2.0,
                                quad_segs=16)
@@ -273,6 +294,9 @@ class LocalField:
         step = rules["grid_step_mm"]
 
         def blocked(x, y):
+            if not self._edge_distance_ok(
+                    x, y, rules["track_width_mm"] / 2.0):
+                return True
             if prepared is None:
                 return False
             return prepared.intersects(Point(x, y))
@@ -358,7 +382,7 @@ class LocalField:
 
 
 def stitch_to_plane(board, net_name, anchor_xy, plane_net, rules,
-                    pad_polygon, prefer_angle=0.0):
+                    pad_polygon, prefer_angle=0.0, outline=None):
     """A verified pad/copper-to-plane stitch: short escape plus via.
 
     ``anchor_xy`` is a point on the net's own copper (a pad centre,
@@ -367,7 +391,7 @@ def stitch_to_plane(board, net_name, anchor_xy, plane_net, rules,
     from anchor to via is search-generated and exactly re-verified.
     """
     field = LocalField(board, net_name, anchor_xy, rules,
-                       pad_polygon)
+                       pad_polygon, outline=outline)
     plane_fill = field.plane_fill_at(plane_net)
     site = field.find_via_site(anchor_xy, plane_fill, prefer_angle)
     if site is None:
@@ -390,9 +414,10 @@ def stitch_to_plane(board, net_name, anchor_xy, plane_net, rules,
 
 
 def local_connect(board, net_name, from_xy, to_xy, rules,
-                  pad_polygon):
+                  pad_polygon, outline=None):
     """A verified short connection between two points of one net."""
-    field = LocalField(board, net_name, from_xy, rules, pad_polygon)
+    field = LocalField(board, net_name, from_xy, rules, pad_polygon,
+                       outline=outline)
     segments = field.escape(from_xy, to_xy)
     return {
         "kind": "critical-topology-proposal",

@@ -1,11 +1,15 @@
-"""No code path may raise a dialog a human must dismiss.
+"""No code path may raise a dialog a human must dismiss - proven by
+STATE, never inferred from time.
 
-The canary triggers the KNOWN blocking wx assert (a via width read
-without a layer argument) in a subprocess after arming the
-suppression. If suppression ever regresses, the subprocess hangs on
-a modal dialog and the timeout FAILS this suite - a red test instead
-of a frozen pipeline on an unwatched screen. The subprocess is
-killed on timeout, which also closes any dialog it opened.
+The protection is queryable: the wx assert mode and the Windows
+error mode are read back directly, so a regression fails in
+milliseconds with the offending state named. Only after the state
+PROVES the modal path unreachable does the canary trigger the known
+misuse (a via width read without a layer argument) - to verify the
+report channel: the assert's file/line/message must reach stderr,
+because nonblocking was never meant to mean silent. No dialog can
+appear even when this test fails; the subprocess timeout below is
+ordinary containment for a child process, not the detector.
 """
 
 from __future__ import annotations
@@ -26,44 +30,54 @@ import sys
 sys.path.insert(0, {toolkit!r})
 from pcbqa import headless
 applied = headless.suppress_blocking_ui()
+state = headless.protection_state()
+print("STATE", state)
+if state["wx_assert_mode_is_log"] is not True:
+    # Refuse to trigger anything: with an unknown or dialog assert
+    # mode, the trigger itself could raise the modal box this test
+    # exists to prevent. The state IS the failure.
+    print("STATE-BAD: wx assert mode is not log")
+    sys.exit(3)
+if not state["windows_error_mode_ok"]:
+    print("STATE-BAD: Windows error mode bits missing")
+    sys.exit(3)
 import pcbnew
 board = pcbnew.CreateEmptyBoard()
 via = pcbnew.PCB_VIA(board)
 via.SetWidth(pcbnew.FromMM(0.45))
 via.SetDrill(pcbnew.FromMM(0.3))
 board.Add(via)
-value = via.GetWidth()  # the known dialog-raising misuse
-print("CANARY-OK", value, applied["wx_asserts_disabled"])
+value = via.GetWidth()  # the known misuse; state proved non-modal
+print("CANARY-OK", value)
 """
 
 
 class NothingBlocksOnADialog(unittest.TestCase):
 
-    def test_suppression_reports_what_it_applied(self):
-        applied = headless.suppress_blocking_ui()
-        self.assertIn("wx_asserts_disabled", applied)
-        self.assertIn("windows_error_mode_set", applied)
-        # Idempotent: a second call is harmless.
+    def test_protection_is_queryable_state(self):
         headless.suppress_blocking_ui()
+        state = headless.protection_state()
+        self.assertIs(state["wx_assert_mode_is_log"], True)
+        self.assertIs(state["windows_error_mode_ok"], True)
 
-    def test_the_known_assert_cannot_raise_a_dialog(self):
-        """The regression canary: under suppression, the known
-        misuse completes immediately in a child process. A hang
-        here means an autonomous run somewhere would freeze on a
-        popup."""
-        try:
-            completed = subprocess.run(
-                [sys.executable, "-c",
-                 _CANARY.format(toolkit=HERE)],
-                capture_output=True, text=True, timeout=60)
-        except subprocess.TimeoutExpired:
-            self.fail(
-                "the canary subprocess hung: a blocking dialog is "
-                "reachable again; no pipeline is autonomous until "
-                "this is fixed")
+    def test_state_first_canary_demands_the_report(self):
+        """State is asserted BEFORE the trigger, so a protection
+        regression fails fast and by name without any dialog ever
+        appearing; the trigger then proves the assert is REPORTED
+        on stderr, not silenced."""
+        completed = subprocess.run(
+            [sys.executable, "-c", _CANARY.format(toolkit=HERE)],
+            capture_output=True, text=True,
+            timeout=60)  # containment for a child, not detection
+        self.assertNotIn("STATE-BAD", completed.stdout,
+                         completed.stdout[-400:])
         self.assertEqual(completed.returncode, 0,
                          completed.stderr[-500:])
         self.assertIn("CANARY-OK", completed.stdout)
+        self.assertIn("GetWidth", completed.stderr,
+                      "the assert fired but its report never "
+                      "reached stderr; nonblocking must not mean "
+                      "silent")
 
 
 if __name__ == "__main__":                        # pragma: no cover
