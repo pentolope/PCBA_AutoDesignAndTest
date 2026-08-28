@@ -539,7 +539,9 @@ class CoverageIsContributorScoped(unittest.TestCase):
         phenomenon = report["per_measurement"]["vout"][
             "per_phenomenon"]["interconnect_dc"]
         self.assertEqual(phenomenon["providers"], {})
-        self.assertIn("no contributing model", phenomenon["why"])
+        self.assertEqual(phenomenon["unaccounted"], ["u1"])
+        self.assertIn("silence is not irrelevance",
+                      phenomenon["why"])
 
     def test_measuring_the_reference_node_refuses(self):
         broken = _rc_scenario()
@@ -670,3 +672,161 @@ class TheRealEngineRunsTransients(unittest.TestCase):
         self.assertTrue(result["measurements"]["charged"]["passed"])
         self.assertGreaterEqual(
             result["measurements"]["charged"]["value"], 0.99)
+
+
+class OmissionIsNeverIrrelevance(unittest.TestCase):
+    """Every contributor must account for each required phenomenon:
+    covered, explicitly not-applicable, or unsupported - silence
+    refuses."""
+
+    _REQUIRE_DC = {"interconnect_dc": ["geometry-derived"]}
+
+    def _scenario_with(self, second_model_coverage):
+        registry = fidelity.ModelRegistry([
+            _interconnect("provider"),
+            {"identity": "companion", "kind": "device",
+             "coverage": second_model_coverage,
+             "provenance": {"source": "test fixture"},
+             "spice": ".subckt companion a b\nR1 a b 10.0\n.ends"},
+        ])
+        sim_scenario = {
+            "name": "omission-check",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src",
+                 "nodes": ["in", "0"], "value": 5.0},
+                {"kind": "model_instance", "name": "link",
+                 "nodes": ["in", "mid"], "model": "provider"},
+                {"kind": "model_instance", "name": "part",
+                 "nodes": ["mid", "out"], "model": "companion"},
+                {"kind": "resistor", "name": "load",
+                 "nodes": ["out", "0"], "value": 50.0},
+            ],
+            "analyses": [{"kind": "op"}],
+            "measurements": [
+                {"name": "vout", "kind": "op_voltage",
+                 "node": "out"}],
+            "required_coverage": dict(self._REQUIRE_DC),
+        }
+        return registry, sim_scenario
+
+    def test_an_omitting_contributor_blocks_despite_a_provider(
+            self):
+        registry, sim_scenario = self._scenario_with(
+            {"device_electrical": "vendor-spice"})
+        report = scenario.contributor_coverage_report(registry,
+                                                      sim_scenario)
+        self.assertFalse(report["satisfied"])
+        phenomenon = report["per_measurement"]["vout"][
+            "per_phenomenon"]["interconnect_dc"]
+        self.assertEqual(phenomenon["unaccounted"], ["part"])
+
+    def test_explicit_not_applicable_passes(self):
+        registry, sim_scenario = self._scenario_with(
+            {"device_electrical": "vendor-spice",
+             "interconnect_dc": "not-applicable"})
+        report = scenario.contributor_coverage_report(registry,
+                                                      sim_scenario)
+        self.assertTrue(report["satisfied"])
+        phenomenon = report["per_measurement"]["vout"][
+            "per_phenomenon"]["interconnect_dc"]
+        self.assertEqual(phenomenon["not_applicable"], ["part"])
+
+    def test_explicit_unsupported_blocks(self):
+        registry, sim_scenario = self._scenario_with(
+            {"device_electrical": "vendor-spice",
+             "interconnect_dc": "unsupported"})
+        report = scenario.contributor_coverage_report(registry,
+                                                      sim_scenario)
+        self.assertFalse(report["satisfied"])
+        phenomenon = report["per_measurement"]["vout"][
+            "per_phenomenon"]["interconnect_dc"]
+        self.assertIn("part", phenomenon["violating"])
+
+    def test_a_disconnected_model_still_owes_nothing(self):
+        """The disposition demand scopes with contribution: a model
+        in an unrelated island accounts for nothing here."""
+        registry = fidelity.ModelRegistry([
+            _interconnect("provider"),
+            {"identity": "companion", "kind": "device",
+             "coverage": {"device_electrical": "vendor-spice"},
+             "provenance": {"source": "test fixture"}},
+        ])
+        sim_scenario = {
+            "name": "island-check",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src",
+                 "nodes": ["in", "0"], "value": 5.0},
+                {"kind": "model_instance", "name": "link",
+                 "nodes": ["in", "out"], "model": "provider"},
+                {"kind": "resistor", "name": "load",
+                 "nodes": ["out", "0"], "value": 50.0},
+                {"kind": "vsource_dc", "name": "src_b",
+                 "nodes": ["b_in", "0"], "value": 1.0},
+                {"kind": "model_instance", "name": "part",
+                 "nodes": ["b_in", "0"], "model": "companion"},
+            ],
+            "analyses": [{"kind": "op"}],
+            "measurements": [
+                {"name": "vout", "kind": "op_voltage",
+                 "node": "out"}],
+            "required_coverage": dict(self._REQUIRE_DC),
+        }
+        report = scenario.contributor_coverage_report(registry,
+                                                      sim_scenario)
+        self.assertTrue(report["satisfied"])
+
+
+class ResultsCarryAUsabilityPolicy(unittest.TestCase):
+
+    _FIXED_20C = {"temperature_c": {
+        "kind": "fixed-reference", "value": 20.0, "units": "C",
+        "source": "IEC 60028 reference temperature"}}
+
+    def _run(self, temperature):
+        registry = fidelity.ModelRegistry([
+            _interconnect("link-model",
+                          conditions=self._FIXED_20C)])
+        sim_scenario = {
+            "name": "usability-check",
+            "elements": [
+                {"kind": "vsource_dc", "name": "src",
+                 "nodes": ["in", "0"], "value": 5.0},
+                {"kind": "model_instance", "name": "link",
+                 "nodes": ["in", "out"], "model": "link-model"},
+                {"kind": "resistor", "name": "load",
+                 "nodes": ["out", "0"], "value": 50.0},
+            ],
+            "analyses": [{"kind": "op"}],
+            "measurements": [
+                {"name": "vout", "kind": "op_voltage",
+                 "node": "out",
+                 "assertion": {"op": ">=", "value": 4.9}}],
+            "operating_conditions": {"temperature_c": temperature},
+            "required_coverage": {
+                "interconnect_dc": ["geometry-derived"]},
+        }
+        return ngspice.run_scenario(registry, sim_scenario,
+                                    tempfile.mkdtemp())
+
+    def test_condition_incomplete_is_never_design_usable(self):
+        """A numerically passing measurement at an unrepresented
+        temperature is explicitly unusable for the requested
+        condition - no field-weighing left to the agent."""
+        result = self._run(85.0)
+        policy = result["result_policy"]
+        if result["status"] == "ran":
+            self.assertTrue(
+                policy["numerical_assertions_passed"])
+        self.assertIs(
+            policy["result_applicable_to_requested_conditions"],
+            False)
+        self.assertIs(policy["usable_for_design_decision"], False)
+        self.assertIs(policy["usable_for_release"], False)
+
+    def test_matching_condition_is_design_usable_when_ran(self):
+        result = self._run(20.0)
+        policy = result["result_policy"]
+        if result["status"] == "ran":
+            self.assertIs(policy["usable_for_design_decision"],
+                          True)
+        self.assertIs(policy["usable_for_release"], False)

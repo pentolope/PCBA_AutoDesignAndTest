@@ -349,31 +349,51 @@ def contributor_coverage_report(registry, scenario):
             for phenomenon, accepted in sorted(requirement.items()):
                 providers = {}
                 violating = []
+                not_applicable = []
+                unaccounted = []
                 for name, model in sorted(models.items()):
-                    evidence = model["coverage"].get(phenomenon)
-                    if evidence is None:
-                        continue
-                    providers[name] = {
-                        "identity": model["identity"],
-                        "evidence_class": evidence,
-                        "accepted": evidence in accepted,
-                    }
-                    if evidence not in accepted:
+                    disposition = model["coverage"].get(phenomenon)
+                    if disposition is None:
+                        # Silence is not irrelevance: a contributor
+                        # that does not account for a required
+                        # phenomenon blocks, exactly like one that
+                        # covers it badly.
+                        unaccounted.append(name)
+                    elif disposition == "not-applicable":
+                        not_applicable.append(name)
+                    elif disposition == "unsupported":
                         violating.append(name)
-                met = bool(providers) and not violating
+                    else:
+                        providers[name] = {
+                            "identity": model["identity"],
+                            "evidence_class": disposition,
+                            "accepted": disposition in accepted,
+                        }
+                        if disposition not in accepted:
+                            violating.append(name)
+                met = bool(providers) and not violating \
+                    and not unaccounted
                 all_met = all_met and met
                 per_phenomenon[phenomenon] = {
                     "accepted_classes": list(accepted),
                     "providers": providers,
                     "violating": violating,
+                    "not_applicable": not_applicable,
+                    "unaccounted": unaccounted,
                     "met": met,
-                    "why": ("every contributing provider is "
+                    "why": ("every contributing model accounts for "
+                            "the phenomenon and every provider is "
                             "individually acceptable" if met else
+                            "contributor(s) {} do not account for "
+                            "this required phenomenon; silence is "
+                            "not irrelevance".format(unaccounted)
+                            if unaccounted else
                             "contributor(s) {} cover this phenomenon "
-                            "at an unaccepted class".format(violating)
+                            "at an unaccepted class or declare it "
+                            "unsupported".format(violating)
                             if violating else
-                            "no contributing model covers this "
-                            "phenomenon at all"),
+                            "no contributing model provides this "
+                            "phenomenon at an accepted class"),
                 }
             entry["per_phenomenon"] = per_phenomenon
             entry["met"] = all_met

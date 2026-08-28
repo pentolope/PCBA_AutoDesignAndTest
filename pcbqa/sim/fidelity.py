@@ -57,6 +57,16 @@ EVIDENCE_CLASSES = (
     "assumed-behavioral",
 )
 
+#: Phenomenon dispositions a coverage entry may carry INSTEAD of an
+#: evidence class. ``not-applicable`` is an explicit statement that
+#: the phenomenon does not arise for this model (a resistor model has
+#: no functional behavior); ``unsupported`` states the phenomenon IS
+#: applicable but this model carries no evidence for it. Silence -
+#: no entry at all - is neither: contributor-scoped coverage treats
+#: an unaccounted required phenomenon as a refusal, never as
+#: irrelevance.
+DISPOSITIONS = ("not-applicable", "unsupported")
+
 _REQUIRED_MODEL_KEYS = {"identity", "kind", "coverage", "provenance"}
 _KNOWN_MODEL_KEYS = _REQUIRED_MODEL_KEYS | {"ports", "spice", "notes",
                                             "omissions", "conditions",
@@ -156,10 +166,13 @@ def validate_coverage(coverage):
             raise SimulationError(
                 "phenomenon {!r} is not one of {}".format(
                     phenomenon, list(PHENOMENA)))
-        if evidence not in EVIDENCE_CLASSES:
+        if evidence not in EVIDENCE_CLASSES \
+                and evidence not in DISPOSITIONS:
             raise SimulationError(
-                "evidence class {!r} is not one of {}".format(
-                    evidence, list(EVIDENCE_CLASSES)))
+                "coverage value {!r} is neither an evidence class "
+                "{} nor a disposition {}".format(
+                    evidence, list(EVIDENCE_CLASSES),
+                    list(DISPOSITIONS)))
     return coverage
 
 

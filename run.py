@@ -535,6 +535,9 @@ def cmd_extract(argv):
     manifest, _layout = open_board(_find_manifest(argv[2]))
     board_file = manifest.resolve(manifest.get("sources.pcb"))
     import pcbnew
+    from pcbqa import geom
+    geom.configure(manifest.geometry_profile()
+                   .tolerance("polygon_chord_error_mm").value)
     board = pcbnew.LoadBoard(board_file)
     thickness = None
     if from_requirements:

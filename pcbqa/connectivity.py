@@ -311,15 +311,67 @@ def build_elements(board, net_name, pad_polygon):
     return elements
 
 
+def zone_fill_elements(board, net_name):
+    """Filled zone copper on one net, as polygon elements per layer.
+
+    Rule areas are keepouts, not copper, and are skipped. An unfilled
+    zone contributes nothing: copper that does not exist on the board
+    is never assumed. Zone elements carry zero length - they join
+    copper, they are not part of any trace-length budget.
+    """
+    from shapely.geometry import Polygon
+
+    elements = []
+    for zone in board.Zones():
+        if zone.GetIsRuleArea():
+            continue
+        if zone.GetNetname() != net_name:
+            continue
+        if not zone.IsFilled():
+            continue
+        for layer in board.GetEnabledLayers().CuStack():
+            if not zone.IsOnLayer(layer):
+                continue
+            filled = zone.GetFilledPolysList(layer)
+            for outline_index in range(filled.OutlineCount()):
+                chain = filled.Outline(outline_index)
+                shell = [(chain.CPoint(k).x / IU,
+                          chain.CPoint(k).y / IU)
+                         for k in range(chain.PointCount())]
+                if len(shell) < 3:
+                    continue
+                holes = []
+                for hole_index in range(
+                        filled.HoleCount(outline_index)):
+                    hole = filled.Hole(outline_index, hole_index)
+                    ring = [(hole.CPoint(k).x / IU,
+                             hole.CPoint(k).y / IU)
+                            for k in range(hole.PointCount())]
+                    if len(ring) >= 3:
+                        holes.append(ring)
+                polygon = Polygon(shell, holes)
+                if polygon.is_empty:
+                    continue
+                elements.append(Element(
+                    "zone", "zone@{}#{}/{}".format(
+                        net_name, outline_index,
+                        board.GetLayerName(layer)),
+                    polygon, [layer], 0.0, zone))
+    return elements
+
+
 class NetGraph:
     """Connectivity graph for one net, built from copper intersection."""
 
-    def __init__(self, board, net_name, pad_polygon, split_at_junctions=False):
+    def __init__(self, board, net_name, pad_polygon,
+                 split_at_junctions=False, include_zone_fills=False):
         self.net = net_name
         self.split_at_junctions = split_at_junctions
         elements = build_elements(board, net_name, pad_polygon)
         if split_at_junctions:
             elements = split_track_elements(elements)
+        if include_zone_fills:
+            elements = elements + zone_fill_elements(board, net_name)
         self.elements = elements
         self.adj = defaultdict(list)
         self._link()
@@ -432,3 +484,92 @@ class NetGraph:
     def branch_points(self):
         return sum(1 for i, e in enumerate(self.elements)
                    if e.kind == "track" and len(self.adj[i]) > 2)
+
+
+#: The connectivity states this module distinguishes. Deliberately
+#: NOT the same question as topology validity: a net may connect all
+#: of its pads and still violate a required tree/path topology -
+#: that judgment belongs to NetTopologyRule and the electrical-path
+#: gates, and nothing here claims it.
+CONNECTIVITY_CLASSES = ("no-pads", "no-copper", "partial-copper",
+                        "connectivity-complete")
+
+
+def classify_net(board, net_name, pad_polygon,
+                 include_zone_fills=True):
+    """Real connectivity state of one net, from board geometry.
+
+    ``connectivity-complete`` means every pad on the net belongs to
+    ONE connected copper component - the only sense in which a
+    multipoint net is routed. A net with copper that fails this is
+    ``partial-copper`` however many tracks it carries; a net whose
+    pads are islands with no copper at all is ``no-copper``. Filled
+    zones participate (a plane-served net is connected by its plane);
+    unfilled zones do not exist. Router logs play no part: the board
+    file is the arbiter.
+
+    A net with no pads gets the explicit degenerate state
+    ``no-pads``: there is no pad-joining question to answer, and the
+    state says so instead of pretending an answer exists. Such a net
+    can never be connectivity-complete.
+    """
+    graph = NetGraph(board, net_name, pad_polygon,
+                     include_zone_fills=include_zone_fills)
+    pad_indices = [index for index, element
+                   in enumerate(graph.elements)
+                   if element.kind == "pad"]
+    copper = {"tracks": 0, "vias": 0, "zone_fills": 0}
+    for element in graph.elements:
+        if element.kind == "track":
+            copper["tracks"] += 1
+        elif element.kind == "via":
+            copper["vias"] += 1
+        elif element.kind == "zone":
+            copper["zone_fills"] += 1
+    seen = set()
+    components = []
+    for start in range(len(graph.elements)):
+        if start in seen:
+            continue
+        stack = [start]
+        component = []
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            component.append(node)
+            for neighbour, _weight in graph.adj[node]:
+                if neighbour not in seen:
+                    stack.append(neighbour)
+        components.append(component)
+    pad_components = []
+    for component in components:
+        pads = sorted(graph.elements[index].ref
+                      for index in component
+                      if graph.elements[index].kind == "pad")
+        if pads:
+            pad_components.append(pads)
+    pad_components.sort()
+    total_pads = len(pad_indices)
+    if total_pads == 0:
+        connectivity_class = "no-pads"
+    elif len(pad_components) == 1 and             len(pad_components[0]) == total_pads:
+        connectivity_class = "connectivity-complete"
+    elif any(copper.values()) or             any(len(group) > 1 for group in pad_components):
+        connectivity_class = "partial-copper"
+    else:
+        connectivity_class = "no-copper"
+    return {
+        "net": net_name,
+        "class": connectivity_class,
+        "pad_count": total_pads,
+        "pads": sorted(graph.elements[index].ref
+                       for index in pad_indices),
+        "copper": copper,
+        "pad_components": pad_components,
+        "meaning": "connectivity-complete means every pad on the "
+                   "net is in one connected copper component; it "
+                   "never implies the topology the design requires "
+                   "- that is a separate, policy-owned judgment",
+    }

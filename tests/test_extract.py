@@ -172,8 +172,12 @@ class ExtractedInterconnectsEnterSimulationHonestly(unittest.TestCase):
         record = extract.interconnect_model_from_net(
             self._net_record(), "a" * 64, self._physical_inputs())
         registry = fidelity.ModelRegistry([record])
-        self.assertEqual(record["coverage"],
-                         {"interconnect_dc": "geometry-derived"})
+        self.assertEqual(record["coverage"]["interconnect_dc"],
+                         "geometry-derived")
+        self.assertEqual(record["coverage"]["interconnect_si"],
+                         "unsupported")
+        self.assertEqual(record["coverage"]["device_electrical"],
+                         "not-applicable")
         self.assertIn("inductance", record["omissions"])
         report = registry.coverage_report(
             [record["identity"]],
@@ -217,7 +221,10 @@ class TheEvidenceChainSurvivesIntoSimulation(unittest.TestCase):
             self._net_record(), "a" * 64, self._inputs())
         derivation = record["derivation"]
         self.assertEqual(derivation["chain"][0],
-                         "approved-fabrication-evidence")
+                         "physical-parameters[caller-declared]")
+        self.assertEqual(
+            derivation["roots"]["copper_thickness_mm.F.Cu"],
+            "caller-declared")
         self.assertEqual(derivation["chain"][-1],
                          "simulation-model")
         self.assertEqual(derivation["extract_version"],
@@ -323,3 +330,178 @@ class RequirementsDeriveThePhysicalInputs(unittest.TestCase):
         self.assertEqual(parameter["source_type"], "derived")
         self.assertEqual(parameter["value"], 1.6)
         self.assertEqual(parameter["digest"], "b" * 64)
+
+
+class ConnectivityIsRealNotTrackCount(unittest.TestCase):
+    """"Has copper" is not "routed": classification answers whether
+    every pad of a net sits in one connected copper component."""
+
+    def setUp(self):
+        from pcbqa import geom
+        geom.configure(0.001)
+
+    def _three_pad_board(self):
+        """One net, three SMD pads in a row at x = 0, 10, 20."""
+        board = synth.new_board()
+        net = synth.add_net(board, "TREE")
+        for index, x in enumerate((0.0, 10.0, 20.0)):
+            synth.add_pad_footprint(
+                board, "P{}".format(index + 1), x, 0.0,
+                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0), net=net)
+        return board, net
+
+    def test_partial_copper_is_not_complete(self):
+        """Many tracks, one pad still an island: partial-copper,
+        never complete - the seed02-05 PDM_CLK_IN failure mode."""
+        from pcbqa import connectivity, geom
+        board, net = self._three_pad_board()
+        synth.add_track(board, (0.0, 0.0), (10.0, 0.0), net=net)
+        synth.add_track(board, (2.0, 0.0), (2.0, 3.0), net=net)
+        synth.add_track(board, (4.0, 0.0), (4.0, 3.0), net=net)
+        record = connectivity.classify_net(
+            board, "TREE", geom.pad_copper_polygon)
+        self.assertEqual(record["class"], "partial-copper")
+        self.assertEqual(record["pad_count"], 3)
+        self.assertEqual(record["pad_components"],
+                         [["P1.1", "P2.1"], ["P3.1"]])
+
+    def test_fully_connected_multipoint_is_complete(self):
+        from pcbqa import connectivity, geom
+        board, net = self._three_pad_board()
+        synth.add_track(board, (0.0, 0.0), (10.0, 0.0), net=net)
+        synth.add_track(board, (10.0, 0.0), (20.0, 0.0), net=net)
+        record = connectivity.classify_net(
+            board, "TREE", geom.pad_copper_polygon)
+        self.assertEqual(record["class"], "connectivity-complete")
+        self.assertEqual(record["pad_components"],
+                         [["P1.1", "P2.1", "P3.1"]])
+
+    def test_no_copper_is_named_no_copper(self):
+        from pcbqa import connectivity, geom
+        board, _net = self._three_pad_board()
+        record = connectivity.classify_net(
+            board, "TREE", geom.pad_copper_polygon)
+        self.assertEqual(record["class"], "no-copper")
+
+    def test_zone_fill_serves_connectivity(self):
+        """A plane-served net is connected by its filled zone; the
+        same zone unfilled contributes nothing."""
+        from pcbqa import connectivity, geom
+        board, net = self._three_pad_board()
+        synth.add_zone(board, net, [pcbnew.F_Cu],
+                       (-2.0, -2.0, 24.0, 2.0), fill=True)
+        record = connectivity.classify_net(
+            board, "TREE", geom.pad_copper_polygon)
+        self.assertEqual(record["class"], "connectivity-complete")
+        self.assertEqual(record["copper"]["zone_fills"], 1)
+        bare, net2 = self._three_pad_board()
+        synth.add_zone(bare, net2, [pcbnew.F_Cu],
+                       (-2.0, -2.0, 24.0, 2.0), fill=False)
+        record = connectivity.classify_net(
+            bare, "TREE", geom.pad_copper_polygon)
+        self.assertEqual(record["class"], "no-copper")
+
+    def test_connected_but_wrong_topology_stays_topology_invalid(
+            self):
+        """Connectivity completeness never implies topology
+        validity: a net whose pads all connect can still fail its
+        declared driver-to-load topology rule."""
+        from pcbqa import connectivity, geom
+        from pcbqa.rules import NetTopologyRule
+        board, net = self._three_pad_board()
+        synth.add_track(board, (0.0, 0.0), (10.0, 0.0), net=net)
+        synth.add_track(board, (10.0, 0.0), (20.0, 0.0), net=net)
+        record = connectivity.classify_net(
+            board, "TREE", geom.pad_copper_polygon)
+        self.assertEqual(record["class"], "connectivity-complete")
+        rule = NetTopologyRule({
+            "id": "tree-topology", "net_regex": "TREE",
+            "source_pad_regex": r"P1\.1",
+            "load_pad_regex": r"P[23]\.1",
+            "max_vias_per_net": 0,
+            "permitted_layers": ["B.Cu"],
+        })
+        measured, problems = rule.evaluate(
+            board, geom.pad_copper_polygon)
+        limit_problems = rule.check_limits(measured)
+        self.assertTrue(limit_problems)
+        self.assertIn("layer", limit_problems[0]["issue"])
+
+    def test_a_net_without_pads_is_explicitly_degenerate(self):
+        """No pads means no pad-joining question: the state says so
+        and can never read as complete."""
+        from pcbqa import connectivity, geom
+        board = synth.new_board()
+        net = synth.add_net(board, "ORPHAN")
+        synth.add_track(board, (0.0, 0.0), (5.0, 0.0), net=net)
+        record = connectivity.classify_net(board, "ORPHAN",
+                                           geom.pad_copper_polygon)
+        self.assertEqual(record["class"], "no-pads")
+        self.assertNotEqual(record["class"],
+                            "connectivity-complete")
+
+    def test_extract_net_embeds_the_classification(self):
+        from pcbqa import geom  # noqa: F401 - import guard
+        board, net = self._three_pad_board()
+        synth.add_track(board, (0.0, 0.0), (10.0, 0.0), net=net)
+        record = extract.extract_net(
+            board, "TREE",
+            extract.caller_declared_copper({"F.Cu": 0.035}),
+            THICKNESS)
+        self.assertEqual(record["connectivity"]["class"],
+                         "partial-copper")
+
+
+class TrustIsVerifiedNotShaped(unittest.TestCase):
+
+    def test_a_plausible_forged_record_refuses_trust(self):
+        """A hand-built record whose shape validates must still fail
+        TRUST verification: its digest is not the approved
+        snapshot's, and its capability does not exist."""
+        snapshot = _snapshot()
+        forged = {"value": 0.04064, "units": "mm",
+                  "source_type": "approved-evidence",
+                  "source": "made-up", "digest": "a" * 64,
+                  "applicability": "external 1 oz finished copper"}
+        extract.validate_parameter(forged, "forged")  # shape passes
+        with self.assertRaises(ExtractionError):
+            extract.verify_approved_parameter(forged, snapshot)
+
+    def test_a_wrong_value_under_the_right_digest_refuses(self):
+        snapshot = _snapshot()
+        genuine = extract.approved_finished_copper(
+            snapshot, {"F.Cu": ("external", 1.0)})["F.Cu"]
+        extract.verify_approved_parameter(genuine, snapshot)
+        tampered = dict(genuine)
+        tampered["value"] = 0.035
+        with self.assertRaises(ExtractionError):
+            extract.verify_approved_parameter(tampered, snapshot)
+
+    def test_mixed_roots_stay_mixed(self):
+        """Caller-declared physics never claims the approved chain
+        head; the roots name each input's own provenance."""
+        board = _board_with_net()
+        record = extract.extract_net(board, "SIG", COPPER,
+                                     THICKNESS)
+        model = extract.interconnect_model_from_net(
+            record, "a" * 64,
+            {"copper_thickness_mm": COPPER,
+             "board_thickness_mm": THICKNESS})
+        self.assertNotIn("approved",
+                         model["derivation"]["chain"][0])
+        self.assertEqual(
+            model["derivation"]["roots"]["board_thickness_mm"],
+            "caller-declared")
+
+
+class ConstructionsBindTheComparison(unittest.TestCase):
+
+    def test_different_constructions_have_different_digests(self):
+        thin = extract.caller_declared_copper({"F.Cu": 0.035})
+        thick = extract.caller_declared_copper({"F.Cu": 0.04064})
+        one = extract.construction_digest(thin, THICKNESS)
+        other = extract.construction_digest(thick, THICKNESS)
+        self.assertNotEqual(one, other)
+        self.assertEqual(one,
+                         extract.construction_digest(thin,
+                                                     THICKNESS))

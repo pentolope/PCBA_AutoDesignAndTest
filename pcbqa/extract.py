@@ -46,7 +46,7 @@ import json
 #: The extraction contract version: recorded in every baseline and
 #: in every derived simulation model, so a consumer can tell which
 #: semantics produced a number.
-EXTRACT_VERSION = "2"
+EXTRACT_VERSION = "3"
 
 #: IEC 60028 International Annealed Copper Standard, 20 C.
 IACS_RESISTIVITY_OHM_M = 1.7241e-8
@@ -250,6 +250,95 @@ def requirements_board_thickness(requirements, requirements_digest):
                       "only")
 
 
+def verify_approved_parameter(record, approved_snapshot):
+    """TRUST verification of an approved-evidence claim.
+
+    Structural validation says a record is well-formed; this says it
+    is TRUE: the claimed digest must be the approved snapshot's
+    normalized SHA-256, the claimed source must name a capability
+    record that snapshot actually contains, and the value must equal
+    that capability's value (converted to the record's units). A
+    hand-built record with a plausible-looking digest refuses here,
+    whatever its shape.
+    """
+    validate_parameter(record, "approved-evidence claim")
+    if record["source_type"] != "approved-evidence":
+        raise ExtractionError(
+            "trust verification applies to approved-evidence "
+            "records; this one claims {!r}".format(
+                record["source_type"]))
+    digest = approved_snapshot["normalized_sha256"]
+    if record["digest"] != digest:
+        raise ExtractionError(
+            "the record claims catalog digest {}... but the "
+            "approved snapshot is {}...; the claim is not "
+            "trusted".format(record["digest"][:12], digest[:12]))
+    capabilities = approved_snapshot["normalized"]["capabilities"]
+    capability = capabilities.get(record["source"])
+    if capability is None:
+        raise ExtractionError(
+            "the record claims capability {!r}, which the approved "
+            "snapshot does not contain; the claim is not "
+            "trusted".format(record["source"]))
+    if capability.get("units") == "mil" and record["units"] == "mm":
+        expected = round(capability["value"] * MIL_TO_MM, 6)
+    elif capability.get("units") == record["units"]:
+        expected = capability["value"]
+    else:
+        raise ExtractionError(
+            "the record's units {!r} cannot be checked against the "
+            "capability's {!r}".format(record["units"],
+                                       capability.get("units")))
+    if record["value"] != expected:
+        raise ExtractionError(
+            "the record's value {} does not equal the approved "
+            "capability's {} {}; the claim is not trusted".format(
+                record["value"], expected, record["units"]))
+    return record
+
+
+def construction_digest(copper_parameters, board_thickness_parameter,
+                        resistivity_ohm_m=IACS_RESISTIVITY_OHM_M):
+    """Canonical identity of one resolved physical construction.
+
+    The SHA-256 of the exact physical parameter records a
+    measurement consumed - every layer's copper record, the board
+    thickness record, and the resistivity. Two boards measured under
+    the same fabricator catalog but different resolved constructions
+    get different digests, so an A/B binding over this digest asks
+    the right question: same construction, not merely same catalog.
+    """
+    for layer, record in sorted(copper_parameters.items()):
+        validate_parameter(record,
+                           "copper thickness on {}".format(layer))
+    validate_parameter(board_thickness_parameter, "board thickness")
+    _finite_positive("resistivity_ohm_m", resistivity_ohm_m)
+    return hashlib.sha256(json.dumps(
+        {"copper_thickness_mm": copper_parameters,
+         "board_thickness_mm": board_thickness_parameter,
+         "resistivity_ohm_m": resistivity_ohm_m},
+        sort_keys=True, separators=(",", ":")).encode(
+            "utf-8")).hexdigest()
+
+
+#: Stable semantic identities for the metrics this module produces.
+#: The extract version is part of the identity: a metric produced
+#: under different extraction semantics is a different metric, and
+#: the A/B comparator refuses to pair them.
+METRIC_DEFINITIONS = {
+    "copper_length_mm":
+        "pcbqa.extract/net-copper-length@" + EXTRACT_VERSION,
+    "via_count": "pcbqa.extract/net-via-count@" + EXTRACT_VERSION,
+    "segment_resistance_sum_ohm":
+        "pcbqa.extract/net-segment-resistance-sum@" + EXTRACT_VERSION,
+    "clock_leaf_length_spread_mm":
+        "pcbqa.extract/clock-leaf-length-spread@" + EXTRACT_VERSION,
+    "partial_copper_length_mm":
+        "pcbqa.extract/partial-net-copper-inventory@"
+        + EXTRACT_VERSION,
+}
+
+
 def caller_declared_copper(values_mm):
     """Caller-supplied thicknesses, marked as exactly that forever."""
     return {
@@ -298,6 +387,10 @@ def extract_net(board, net_name, copper_parameters,
         raise ExtractionError(
             "net {!r} has no copper on this board; an absent net is "
             "reported as absent, not as zeros".format(net_name))
+    from . import geom
+    from .connectivity import classify_net
+    connectivity = classify_net(board, net_name,
+                                geom.pad_copper_polygon)
     segments.sort(key=lambda s: (s["layer"], -s["length_mm"],
                                  s["width_mm"]))
     by_layer = {}
@@ -318,6 +411,7 @@ def extract_net(board, net_name, copper_parameters,
             * (segment["length_mm"] / 1000.0) / area_m2
     return {
         "net": net_name,
+        "connectivity": connectivity,
         "segments": segments,
         "totals": {
             "copper_length_mm": round(
@@ -461,19 +555,33 @@ def interconnect_model_from_net(net_record, board_sha256,
         "value_ohm_m": net_record["dc"]["resistivity_ohm_m"],
         "source": net_record["dc"]["resistivity_source"],
     }
-    physical_digest = hashlib.sha256(json.dumps(
-        {"copper_thickness_mm": copper,
-         "board_thickness_mm": physical_inputs["board_thickness_mm"],
-         "resistivity": resistivity},
-        sort_keys=True, separators=(",", ":")).encode(
-            "utf-8")).hexdigest()
+    physical_digest = construction_digest(
+        copper, physical_inputs["board_thickness_mm"],
+        resistivity["value_ohm_m"])
     identity = "net:{}@{}+phys:{}".format(
         net_record["net"], board_sha256[:12], physical_digest[:12])
+    # The chain's head states what the inputs actually were: mixed
+    # provenance stays mixed, and a caller-declared number is never
+    # upgraded to fabrication evidence by association.
+    root_types = sorted(
+        {record["source_type"] for record in copper.values()}
+        | {physical_inputs["board_thickness_mm"]["source_type"]})
+    roots = {"copper_thickness_mm.{}".format(layer):
+             record["source_type"]
+             for layer, record in sorted(copper.items())}
+    roots["board_thickness_mm"] = \
+        physical_inputs["board_thickness_mm"]["source_type"]
+    roots["resistivity"] = (
+        "physical-constant (IEC 60028)"
+        if resistivity["value_ohm_m"] == IACS_RESISTIVITY_OHM_M
+        else "caller-supplied")
     derivation = {
-        "chain": ["approved-fabrication-evidence",
-                  "physical-parameters", "board-geometry",
+        "chain": ["physical-parameters[{}]".format(
+                      "+".join(root_types)),
+                  "board-geometry",
                   "extracted-electrical-quantity",
                   "simulation-model"],
+        "roots": roots,
         "board_file_sha256": board_sha256,
         "extract_version": EXTRACT_VERSION,
         "physical_inputs_sha256": physical_digest,
@@ -486,7 +594,16 @@ def interconnect_model_from_net(net_record, board_sha256,
     record = {
         "identity": identity,
         "kind": "board-interconnect",
-        "coverage": {"interconnect_dc": "geometry-derived"},
+        # Every phenomenon is explicitly accounted for: the DC
+        # inventory is covered, SI and PI are applicable to an
+        # interconnect but unsupported by this model, and the device
+        # phenomena do not arise for passive copper.
+        "coverage": {"interconnect_dc": "geometry-derived",
+                     "interconnect_si": "unsupported",
+                     "power_integrity": "unsupported",
+                     "functional_behavior": "not-applicable",
+                     "device_electrical": "not-applicable",
+                     "digital_io": "not-applicable"},
         "provenance": {
             "source": "pcbqa.extract segment inventory",
             "board_file_sha256": board_sha256,

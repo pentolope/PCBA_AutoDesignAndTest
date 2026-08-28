@@ -39,12 +39,14 @@ class MetricsCannotLieByShape(unittest.TestCase):
 
     def test_measured_and_unmeasured_shapes(self):
         measured = benchmark.measured(
-            "copper_length_mm", "net", 15.0, "mm",
+            "copper_length_mm", "net", "test/net-copper@1", 15.0,
+            "mm",
             "geometry-derived", {"extractor": "pcbqa.extract"},
             "track segments of one net")
         self.assertEqual(measured["status"], "measured")
         unmeasured = benchmark.unmeasured(
-            "pdn_impedance", "board", "ngspice backend",
+            "pdn_impedance", "board", "test/pdn-impedance@1",
+            "ngspice backend",
             "no PDN simulation backend is wired in yet")
         self.assertEqual(unmeasured["status"], "unmeasured")
 
@@ -59,27 +61,32 @@ class MetricsCannotLieByShape(unittest.TestCase):
         for missing in ("units", "evidence_class", "provenance",
                         "applicability"):
             metric = benchmark.measured(
-                "x", "net", 1.0, "mm", "geometry-derived",
-                {"a": 1}, "scope note")
+                "x", "net", "test/x@1", 1.0, "mm",
+                "geometry-derived", {"a": 1}, "scope note")
             del metric[missing]
             with self.assertRaises(BenchmarkError):
                 benchmark.validate_metric(metric)
         for value in (float("nan"), float("inf"), True):
             with self.assertRaises(BenchmarkError):
-                benchmark.measured("x", "net", value, "mm",
-                                   "geometry-derived", {"a": 1}, "s")
+                benchmark.measured("x", "net", "test/x@1",
+                                   value, "mm",
+                                   "geometry-derived", {"a": 1},
+                                   "s")
 
     def test_scopes_are_never_conflated(self):
         net_metric = benchmark.measured(
-            "copper_length_mm", "net", 15.0, "mm",
+            "copper_length_mm", "net", "test/net-copper@1", 15.0,
+            "mm",
             "geometry-derived", {"a": 1}, "one net")
         path_metric = benchmark.measured(
-            "copper_length_mm", "electrical-path", 77.3, "mm",
+            "copper_length_mm", "electrical-path",
+            "test/path-copper@1", 77.3, "mm",
             "geometry-derived", {"a": 1}, "one declared path")
         self.assertFalse(benchmark.comparable(net_metric,
                                               path_metric))
         same_scope = benchmark.measured(
-            "copper_length_mm", "net", 12.0, "mm",
+            "copper_length_mm", "net", "test/net-copper@1", 12.0,
+            "mm",
             "geometry-derived", {"a": 1}, "another board's net")
         self.assertTrue(benchmark.comparable(net_metric, same_scope))
         with self.assertRaises(BenchmarkError):
@@ -88,7 +95,8 @@ class MetricsCannotLieByShape(unittest.TestCase):
 
     def test_reports_bind_their_identity(self):
         metrics = [benchmark.measured(
-            "copper_length_mm", "net", 15.0, "mm",
+            "copper_length_mm", "net", "test/net-copper@1", 15.0,
+            "mm",
             "geometry-derived", {"a": 1}, "one net")]
         report = benchmark.report(_binding(), metrics)
         self.assertEqual(report["binding"]["schema_version"],
@@ -111,10 +119,11 @@ if __name__ == "__main__":                        # pragma: no cover
 
 class TheComparatorRefusesMeaninglessComparisons(unittest.TestCase):
 
-    def _measured(self, name, value):
+    def _measured(self, name, value, definition="test/length@1"):
         return benchmark.measured(
-            name, "net", value, "mm", "geometry-derived",
-            {"extractor": "pcbqa.extract"}, "track segments")
+            name, "net", definition, value, "mm",
+            "geometry-derived", {"extractor": "pcbqa.extract"},
+            "track segments")
 
     def test_free_text_evidence_cannot_bind_a_report(self):
         loose = _binding()
@@ -144,8 +153,9 @@ class TheComparatorRefusesMeaninglessComparisons(unittest.TestCase):
     def test_mismatched_units_refuse(self):
         report_a = _report("a", [self._measured("copper", 10.0)])
         other = benchmark.measured(
-            "copper", "net", 8.0, "mil", "geometry-derived",
-            {"extractor": "pcbqa.extract"}, "track segments")
+            "copper", "net", "test/length@1", 8.0, "mil",
+            "geometry-derived", {"extractor": "pcbqa.extract"},
+            "track segments")
         report_b = _report("b", [other])
         with self.assertRaises(BenchmarkError):
             benchmark.compare_reports(report_a, report_b)
@@ -162,7 +172,8 @@ class TheComparatorRefusesMeaninglessComparisons(unittest.TestCase):
         ])
         report_b = _report("b", [
             self._measured("copper", 8.5),
-            benchmark.unmeasured("clock", "net", "routing",
+            benchmark.unmeasured("clock", "net", "test/length@1",
+                                 "routing",
                                  "the candidate has not routed "
                                  "this net"),
         ])
@@ -179,3 +190,33 @@ class TheComparatorRefusesMeaninglessComparisons(unittest.TestCase):
         self.assertNotEqual(
             comparison["binding"]["board_file_sha256_a"],
             comparison["binding"]["board_file_sha256_b"])
+
+
+class MetricSemanticsAreVersioned(unittest.TestCase):
+
+    def _reports(self, definition_b):
+        make = TheComparatorRefusesMeaninglessComparisons._measured
+        report_a = _report("a", [make(self, "copper", 10.0)])
+        report_b = _report("b", [make(self, "copper", 8.0,
+                                      definition=definition_b)])
+        return report_a, report_b
+
+    def test_same_definition_compares(self):
+        report_a, report_b = self._reports("test/length@1")
+        comparison = benchmark.compare_reports(report_a, report_b)
+        self.assertEqual(len(comparison["compared"]), 1)
+
+    def test_different_definitions_refuse(self):
+        """One name, two extractor semantics: never compared, even
+        with equal scope and units."""
+        report_a, report_b = self._reports("test/length@2")
+        with self.assertRaises(BenchmarkError):
+            benchmark.compare_reports(report_a, report_b)
+
+    def test_metrics_without_definitions_refuse(self):
+        with self.assertRaises(BenchmarkError):
+            benchmark.validate_metric({
+                "name": "copper", "scope": "net",
+                "status": "measured", "value": 1.0, "units": "mm",
+                "evidence_class": "geometry-derived",
+                "provenance": {"x": "y"}, "applicability": "a"})

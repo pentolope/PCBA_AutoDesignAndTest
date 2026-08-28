@@ -441,16 +441,55 @@ def run_scenario(registry, sim_scenario, workdir):
         result.update({"status": "backend-unavailable",
                        "converged": None, "measurements": None,
                        "unsupported": []})
-        return result
+        return _attach_result_policy(result, coverage)
     os.makedirs(workdir, exist_ok=True)
     deck_path = os.path.join(workdir, "deck.cir")
     with open(deck_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(deck)
     if backend["mode"] == "binary":
-        return _run_with_binary(backend, sim_scenario, workdir,
-                                deck_path, result)
-    return _run_with_shared_library(sim_scenario, deck, workdir,
-                                    result)
+        result = _run_with_binary(backend, sim_scenario, workdir,
+                                  deck_path, result)
+    else:
+        result = _run_with_shared_library(sim_scenario, deck,
+                                          workdir, result)
+    return _attach_result_policy(result, coverage)
+
+
+def _attach_result_policy(result, coverage):
+    """One structured answer to "may an agent act on this?".
+
+    An autonomous consumer must never weigh measurement.passed
+    against condition_coverage.fully_covered by intuition. The
+    policy separates: whether the numbers passed their assertions,
+    whether the numbers represent the REQUESTED conditions, whether
+    the result is usable for a design decision (ran + declared
+    coverage requirement satisfied + conditions applicable - a
+    numerically passing but condition-inapplicable result is NOT),
+    and release usability, which is unconditionally false at this
+    layer.
+    """
+    ran = result.get("status") == "ran"
+    assertions = None
+    if ran:
+        assertions = all(
+            measurement["passed"] is not False
+            for measurement in result["measurements"].values())
+    fully_covered = result["condition_coverage"]["fully_covered"]
+    applicable = None if fully_covered is None else fully_covered
+    result["result_policy"] = {
+        "numerical_assertions_passed": assertions,
+        "result_applicable_to_requested_conditions": applicable,
+        "usable_for_design_decision": bool(
+            ran and coverage["satisfied"] is True
+            and applicable is not False),
+        "usable_for_release": False,
+        "meaning": "usable_for_design_decision requires a run under "
+                   "a declared and satisfied coverage requirement "
+                   "whose models represent the requested operating "
+                   "conditions; assertions passing numerically "
+                   "never overrides an inapplicable condition",
+    }
+    return result
 
 
 def _run_with_binary(backend, sim_scenario, workdir, deck_path,

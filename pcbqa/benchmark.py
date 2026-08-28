@@ -24,7 +24,7 @@ reports that merely LOOK similar never compare by accident.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = "ab-metrics-3"
+SCHEMA_VERSION = "ab-metrics-4"
 
 #: Schema versions this comparator understands. A version outside
 #: this set - older, newer, or foreign - fails closed; an explicit
@@ -35,10 +35,11 @@ _EVIDENCE_KEYS = {"kind", "digest", "detail"}
 
 _SCOPES = ("net", "electrical-path", "board", "process")
 
-_MEASURED_KEYS = {"name", "scope", "status", "value", "units",
-                  "evidence_class", "provenance", "applicability"}
-_UNMEASURED_KEYS = {"name", "scope", "status", "blocked_on",
-                    "why_unmeasured"}
+_MEASURED_KEYS = {"name", "scope", "status", "definition", "value",
+                  "units", "evidence_class", "provenance",
+                  "applicability"}
+_UNMEASURED_KEYS = {"name", "scope", "status", "definition",
+                    "blocked_on", "why_unmeasured"}
 
 _REQUIRED_BINDING_KEYS = {"board_file_sha256", "toolkit_commit",
                           "physical_evidence", "schema_version"}
@@ -48,22 +49,27 @@ class BenchmarkError(Exception):
     """The benchmark record cannot be accepted as declared."""
 
 
-def measured(name, scope, value, units, evidence_class, provenance,
-             applicability):
-    """One measured metric."""
+def measured(name, scope, definition, value, units, evidence_class,
+             provenance, applicability):
+    """One measured metric. ``definition`` is the metric's stable
+    semantic identity (producer/quantity@semantic-version): two
+    metrics with one name but different definitions are different
+    quantities, and the comparator refuses to pair them."""
     return validate_metric({
         "name": name, "scope": scope, "status": "measured",
-        "value": value, "units": units,
+        "definition": definition, "value": value, "units": units,
         "evidence_class": evidence_class, "provenance": provenance,
         "applicability": applicability,
     })
 
 
-def unmeasured(name, scope, blocked_on, why_unmeasured):
-    """One explicitly unmeasured metric - no value, ever."""
+def unmeasured(name, scope, definition, blocked_on, why_unmeasured):
+    """One explicitly unmeasured metric - no value, ever. It still
+    names the DEFINITION of the quantity it fails to measure."""
     return validate_metric({
         "name": name, "scope": scope, "status": "unmeasured",
-        "blocked_on": blocked_on, "why_unmeasured": why_unmeasured,
+        "definition": definition, "blocked_on": blocked_on,
+        "why_unmeasured": why_unmeasured,
     })
 
 
@@ -78,6 +84,11 @@ def validate_metric(metric):
     name = metric.get("name")
     if not isinstance(name, str) or not name:
         raise BenchmarkError("a metric needs a nonempty name")
+    definition = metric.get("definition")
+    if not isinstance(definition, str) or not definition:
+        raise BenchmarkError(
+            "metric {!r} needs a nonempty semantic definition "
+            "identity".format(name))
     status = metric.get("status")
     if status == "measured":
         if set(metric) != _MEASURED_KEYS:
@@ -233,6 +244,14 @@ def compare_reports(report_a, report_b):
     for key in sorted(set(metrics_a) & set(metrics_b)):
         metric_a, metric_b = metrics_a[key], metrics_b[key]
         scope, name = key
+        if metric_a["definition"] != metric_b["definition"]:
+            raise BenchmarkError(
+                "metric {} carries definition {!r} vs {!r}: one "
+                "name, two semantics - produced by different "
+                "extractor semantics, these are different "
+                "quantities and never compare".format(
+                    key, metric_a["definition"],
+                    metric_b["definition"]))
         if metric_a["status"] == "measured" and \
                 metric_b["status"] == "measured":
             if metric_a["units"] != metric_b["units"]:
