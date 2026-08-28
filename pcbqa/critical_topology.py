@@ -91,7 +91,8 @@ class LocalField:
     and the post-stage fabrication DRC on the refilled board
     remains the authority. Foreign TRACKS, pads, vias and holes are
     fixed geometry and obstruct; for a through via they obstruct on
-    EVERY copper layer they occupy, not only the outer ones.
+    EVERY copper layer they occupy, not only the outer ones - a
+    padstack's internal annuli included.
     """
 
     def __init__(self, board, net_name, center_mm, rules,
@@ -208,7 +209,12 @@ class LocalField:
         for footprint in board.GetFootprints():
             for pad in footprint.Pads():
                 shapes = {}
-                for layer in outer_layers:
+                # EVERY copper layer, not only the outer pair: a
+                # through via traverses the whole stack, and a
+                # padstack's internal annulus can be larger than
+                # its outer representation - copper that is
+                # invisible from outside still collides.
+                for layer in copper_stack:
                     if pad.IsOnLayer(layer):
                         shapes[layer] = pad_polygon(pad, layer)
                 if not shapes:

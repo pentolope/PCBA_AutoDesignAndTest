@@ -395,6 +395,9 @@ def _assemble_measurements(sim_scenario, value_of):
             "value": value,
             "assertion": assertion,
             "value_bound": bound,
+            "bound_establishment": (
+                None if bound is None
+                else bound["established_by"]),
             "passed": scenario_module.check_assertion(assertion,
                                                       value),
             "verdict": scenario_module.classify_assertion(
@@ -424,6 +427,7 @@ def run_scenario(registry, sim_scenario, workdir):
     assumptions = scenario_module.assumption_dependencies(
         sim_scenario)
     _refuse_undeclared_bounds(registry, sim_scenario)
+    _verify_derived_bounds(registry, sim_scenario)
     deck = generate_deck(registry, sim_scenario)
     backend = backend_identity()
     result = {
@@ -461,6 +465,35 @@ def run_scenario(registry, sim_scenario, workdir):
         result = _run_with_shared_library(sim_scenario, deck,
                                           workdir, result)
     return _attach_result_policy(result, coverage)
+
+
+def _verify_derived_bounds(registry, sim_scenario):
+    """A value_bound claiming 'derived' is a theorem claim: the
+    deriver must reproduce it mechanically right now, or the run
+    refuses. An unsupported circuit cannot smuggle theorem-level
+    provenance through prose - it declares 'assumed' instead."""
+    for measurement in sim_scenario["measurements"]:
+        bound = measurement.get("value_bound")
+        if bound is None or bound["established_by"] != "derived":
+            continue
+        derived = scenario_module.derive_value_bound(
+            sim_scenario, measurement, registry)
+        if derived is None:
+            raise SimulationError(
+                "measurement {!r} declares a DERIVED value_bound "
+                "but the circuit matches no supported monotonic "
+                "template; declare established_by='assumed' with "
+                "its reason, or restructure the scenario - "
+                "unsupported circuits never receive theorem-level "
+                "provenance".format(measurement["name"]))
+        if derived["direction"] != bound["direction"]:
+            raise SimulationError(
+                "measurement {!r} declares a DERIVED value_bound "
+                "direction {!r} but the mechanical derivation "
+                "gives {!r}; a wrong theorem claim refuses rather "
+                "than classifying".format(
+                    measurement["name"], bound["direction"],
+                    derived["direction"]))
 
 
 def _refuse_undeclared_bounds(registry, sim_scenario):

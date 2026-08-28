@@ -282,7 +282,8 @@ class BoundsNeverManufacturePass(unittest.TestCase):
     def test_the_ge_truth_table(self):
         ge = {"op": ">=", "value": 4.999}
         upper = {"direction": "upper",
-                 "reason": "omitted series resistance"}
+                 "reason": "omitted series resistance",
+                 "established_by": "assumed"}
         lower = {"direction": "lower", "reason": "test"}
         self.assertEqual(
             scenario.classify_assertion(ge, 4.9998, upper),
@@ -333,6 +334,79 @@ class BoundsNeverManufacturePass(unittest.TestCase):
             scenario.classify_assertion(within, 0.6, lower),
             "conservative-FAIL")
 
+    def test_the_divider_bound_is_mechanically_derived(self):
+        """Test 10: the supported template derives the direction
+        from the model's own declared resistance bound - upper Vout
+        from lower series R - with no prose trusted."""
+        bounded_model = {
+            "identity": "series-link",
+            "kind": "board-interconnect-path",
+            "coverage": {"interconnect_dc": "geometry-derived"},
+            "provenance": {"source": "test"},
+            "derivation": {"path": {"resistance_bound": "lower"}},
+            "spice": ".subckt series-link a b\nR1 a b 0.01\n.ends",
+        }
+        registry = fidelity.ModelRegistry([bounded_model])
+        declared = _rc_scenario()
+        declared["elements"][1] = {
+            "kind": "model_instance", "name": "top",
+            "nodes": ["in", "mid"], "model": "series-link"}
+        derived = scenario.derive_value_bound(
+            declared, declared["measurements"][0], registry)
+        self.assertEqual(derived["direction"], "upper")
+        self.assertEqual(derived["established_by"], "derived")
+        # And the runner accepts the derived declaration.
+        declared["measurements"][0]["value_bound"] = derived
+        result = ngspice.run_scenario(
+            registry, declared,
+            __import__("tempfile").mkdtemp(prefix="pcbqa-derive-"))
+        self.assertIn(result["status"],
+                      ("ran", "backend-unavailable"))
+
+    def test_unsupported_circuits_never_get_theorem_provenance(
+            self):
+        """Test 11: outside the template, 'derived' refuses - only
+        an explicit assumption may classify, and it is recorded as
+        an assumption."""
+        declared = _rc_scenario()
+        # A second load makes the topology unsupported for the
+        # deriver.
+        declared["elements"].append(
+            {"kind": "resistor", "name": "shunt",
+             "nodes": ["mid", "0"], "value": 500.0})
+        declared["measurements"][0]["value_bound"] = {
+            "direction": "upper",
+            "reason": "claimed without a template",
+            "established_by": "derived"}
+        registry = fidelity.ModelRegistry([])
+        self.assertIsNone(scenario.derive_value_bound(
+            declared, declared["measurements"][0], registry))
+        with self.assertRaisesRegex(SimulationError,
+                                    "no supported monotonic"):
+            ngspice.run_scenario(registry, declared,
+                                 "unused-workdir")
+        declared["measurements"][0]["value_bound"][
+            "established_by"] = "assumed"
+        result = ngspice.run_scenario(
+            registry, declared,
+            __import__("tempfile").mkdtemp(prefix="pcbqa-assume-"))
+        if result["status"] == "ran":
+            self.assertEqual(
+                result["measurements"]["mid"][
+                    "bound_establishment"], "assumed")
+
+    def test_a_wrong_derived_direction_refuses(self):
+        declared = _rc_scenario()
+        declared["measurements"][0]["value_bound"] = {
+            "direction": "lower",
+            "reason": "wrong on purpose",
+            "established_by": "derived"}
+        registry = fidelity.ModelRegistry([])
+        with self.assertRaisesRegex(SimulationError,
+                                    "mechanical derivation"):
+            ngspice.run_scenario(registry, declared,
+                                 "unused-workdir")
+
     def test_no_assertions_is_never_vacuously_claimable(self):
         """A run that asserts nothing has nothing to claim: None,
         not True - it must never read more confident than an
@@ -372,17 +446,20 @@ class BoundsNeverManufacturePass(unittest.TestCase):
     def test_value_bound_validates_exactly(self):
         bad = _rc_scenario()
         bad["measurements"][0]["value_bound"] = {
-            "direction": "upper"}
+            "direction": "upper",
+            "established_by": "assumed"}
         with self.assertRaises(SimulationError):
             scenario.validate_scenario(bad)
         bad["measurements"][0]["value_bound"] = {
-            "direction": "sideways", "reason": "x"}
+            "direction": "sideways", "reason": "x",
+            "established_by": "assumed"}
         with self.assertRaises(SimulationError):
             scenario.validate_scenario(bad)
         good = _rc_scenario()
         good["measurements"][0]["value_bound"] = {
             "direction": "upper",
-            "reason": "path resistance is a lower bound"}
+            "reason": "path resistance is a lower bound",
+            "established_by": "assumed"}
         scenario.validate_scenario(good)
 
     def test_unresolved_verdicts_are_never_claimable(self):
@@ -393,7 +470,8 @@ class BoundsNeverManufacturePass(unittest.TestCase):
             "op": ">=", "value": 0.499}
         declared["measurements"][0]["value_bound"] = {
             "direction": "upper",
-            "reason": "the divider model omits series resistance"}
+            "reason": "the divider model omits series resistance",
+            "established_by": "assumed"}
         registry = fidelity.ModelRegistry([])
         import tempfile
         result = ngspice.run_scenario(
@@ -429,7 +507,8 @@ class BoundsNeverManufacturePass(unittest.TestCase):
                                  "unused-workdir")
         declared["measurements"][0]["value_bound"] = {
             "direction": "upper",
-            "reason": "lower-bound series resistance"}
+            "reason": "lower-bound series resistance",
+            "established_by": "assumed"}
         import tempfile
         result = ngspice.run_scenario(
             registry, declared,
@@ -444,7 +523,8 @@ class BoundsNeverManufacturePass(unittest.TestCase):
         declared["measurements"][0]["value_bound"] = {
             "direction": "upper",
             "reason": "the divider model omits series "
-                      "resistance"}
+                      "resistance",
+            "established_by": "assumed"}
         records = ngspice._assemble_measurements(
             declared, lambda measurement: 0.5)
         record = records["mid"]

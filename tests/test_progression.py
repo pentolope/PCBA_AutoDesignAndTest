@@ -29,6 +29,8 @@ def _record(**overrides):
                                  "detail": "stage DRC geometry"},
         "blocking_gates": {"evaluated": True, "failing": []},
         "quality_gates": {"evaluated": True, "failing": []},
+        "electrical_requirements": {"applicable": 0, "passed": 0,
+                                    "failed": 0, "unresolved": 0},
         "electrical_evidence": {"usable_results": 1},
         "optimization": {"copper_mm": 2000.0},
     }
@@ -186,6 +188,97 @@ class ParityLeadsAndEligibilityIsSplit(unittest.TestCase):
         self.assertIs(unresolved["search_winner_eligible"], False)
         clean = progression.assess(_record())
         self.assertIs(clean["search_winner_eligible"], True)
+
+
+class WinnersPassEveryCorrectnessClass(unittest.TestCase):
+    """A search winner is a VALID design: perfect critical clock
+    structure over incomplete connectivity, failing fabrication, or
+    failing gates is a diagnostic candidate, never best."""
+
+    def test_perfect_clocks_with_incomplete_board_never_wins(self):
+        outcome = progression.assess(_record(
+            board_required_connectivity={"complete": 70,
+                                         "total": 83}))
+        self.assertIs(outcome["accept_for_comparison"], True)
+        self.assertIs(outcome["search_winner_eligible"], False)
+
+    def test_fabrication_fail_never_wins(self):
+        outcome = progression.assess(_record(
+            fabrication_geometry={"ok": False,
+                                  "detail": "clearance violation"}))
+        self.assertIs(outcome["search_winner_eligible"], False)
+        unknown = progression.assess(_record(
+            fabrication_geometry={"ok": "unknown",
+                                  "detail": "no check ran"}))
+        self.assertIs(unknown["search_winner_eligible"], False)
+
+    def test_blocking_or_quality_gate_fail_never_wins(self):
+        outcome = progression.assess(_record(
+            blocking_gates={"evaluated": True,
+                            "failing": ["DRC.AUTHORITATIVE"]}))
+        self.assertIs(outcome["search_winner_eligible"], False)
+        outcome = progression.assess(_record(
+            quality_gates={"evaluated": True,
+                           "failing": ["NET.TOPOLOGY"]}))
+        self.assertIs(outcome["search_winner_eligible"], False)
+        outcome = progression.assess(_record(
+            quality_gates={"evaluated": False, "failing": []}))
+        self.assertIs(outcome["search_winner_eligible"], False)
+
+    def test_a_fully_valid_candidate_wins(self):
+        outcome = progression.assess(_record())
+        self.assertIs(outcome["search_winner_eligible"], True)
+
+
+class VerdictsAreNeverLaunderedIntoEvidence(unittest.TestCase):
+    """Availability answers "can I trust this result?"; the
+    requirement outcome answers "did the design satisfy it?" - a
+    trustworthy FAIL is valuable evidence and still a design
+    failure, and unresolved stays unknown."""
+
+    def test_a_trustworthy_fail_is_a_design_failure(self):
+        outcome = progression.assess(_record(
+            electrical_requirements={"applicable": 1, "passed": 0,
+                                     "failed": 1, "unresolved": 0},
+            electrical_evidence={"usable_results": 1}))
+        self.assertEqual(
+            outcome["classes"]["electrical-requirements"]["status"],
+            "fail")
+        self.assertEqual(outcome["progress_class"],
+                         "electrical-requirements")
+        self.assertIs(outcome["search_winner_eligible"], False)
+        # Availability still reads available - the run WAS usable.
+        self.assertEqual(
+            outcome["classes"]["electrical-evidence"]["status"],
+            "pass")
+
+    def test_unresolved_stays_unknown_not_pass_not_fail(self):
+        outcome = progression.assess(_record(
+            electrical_requirements={"applicable": 1, "passed": 0,
+                                     "failed": 0, "unresolved": 1}))
+        self.assertEqual(
+            outcome["classes"]["electrical-requirements"]["status"],
+            "unknown")
+        self.assertIs(outcome["search_winner_eligible"], False)
+
+    def test_evidence_volume_never_outranks_a_failed_verdict(self):
+        many_usable_one_failed = progression.assess(_record(
+            electrical_requirements={"applicable": 1, "passed": 0,
+                                     "failed": 1, "unresolved": 0},
+            electrical_evidence={"usable_results": 5}))
+        one_usable_passed = progression.assess(_record(
+            electrical_requirements={"applicable": 1, "passed": 1,
+                                     "failed": 0, "unresolved": 0},
+            electrical_evidence={"usable_results": 1}))
+        self.assertGreater(one_usable_passed["rank_key"],
+                           many_usable_one_failed["rank_key"])
+
+    def test_requirement_counts_must_partition(self):
+        with self.assertRaises(ProgressionError):
+            progression.assess(_record(
+                electrical_requirements={"applicable": 2,
+                                         "passed": 1, "failed": 0,
+                                         "unresolved": 0}))
 
 
 class InputsValidateStrictly(unittest.TestCase):

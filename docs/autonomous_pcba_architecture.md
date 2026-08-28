@@ -105,9 +105,15 @@ contract, a generated wrapper and main, DUT swapped per run).
   blocking gates, quality gates, usable electrical evidence - with
   a lexicographic rank key no scalar can override. Three states
   stay distinct: ready-for-next-stage, worth-comparing
-  (`accept_for_comparison`), and permitted-to-win
-  (`search_winner_eligible`) - a measured candidate whose critical
-  truths are failed or unresolved is never presented as best.
+  (`accept_for_comparison`, kept loose so failed candidates still
+  teach), and permitted-to-win (`search_winner_eligible`): a
+  winner passes EVERY correctness class through the quality gates
+  AND every requirement-linked electrical assertion. Electrical
+  evidence AVAILABILITY and requirement OUTCOME are separate
+  classes: a trustworthy FAIL is valuable evidence and still a
+  design failure, an unresolved assertion stays unknown, and the
+  count of usable simulations is never rewarded without its
+  verdicts.
 - **Freshness** (`pcbqa/freshness.py`): derived artifacts carry a
   deliberate producer closure (named code, inputs, schema digests);
   consumers refuse stale or tampered artifacts and are told exactly
@@ -128,16 +134,45 @@ contract, a generated wrapper and main, DUT swapped per run).
   classifies as exact-PASS / exact-FAIL / conservative-PASS /
   conservative-FAIL / unresolved - the omission's optimistic
   direction can never manufacture a PASS, while the pessimistic
-  direction still concludes. The scenario author must DECLARE the
-  measurement's `value_bound` (its direction follows from the
-  circuit): an assertion fed by a model that declares a non-exact
-  bound refuses to run without one - silence never defaults to an
-  exact claim - and the result policy's `assertions_claimable`
-  reads the verdicts, so a numeric pass on a bounded value is
-  never actionable by itself. Path uniqueness
+  direction still concludes. Bound directions are ESTABLISHED,
+  not asserted: for supported monotonic templates (today, the
+  series divider) the direction is derived mechanically from the
+  model's own declared resistance bound and re-verified at run
+  time - a 'derived' claim the deriver cannot reproduce refuses;
+  outside the templates an explicit 'assumed' declaration is
+  required and recorded as an assumption, never theorem-level
+  provenance. An assertion fed by a non-exact-bound model refuses
+  to run without a declared bound - silence never defaults to an
+  exact claim - and `assertions_claimable` reads the verdicts
+  (None when nothing was asserted), so a numeric pass on a
+  bounded value is never actionable by itself. Path uniqueness
   itself is bridge-rigorous: every resistive traversal element must
   be a bridge in the ELECTRICAL node graph (junction pivots pass,
   any rejoining detour refuses).
+- **Parasitic result contract** (`pcbqa/parasitics.py`): every
+  extracted electrical quantity is a CLAIM with declared
+  semantics - exact (omissions refuse), bound, interval, or
+  approximate (assumptions required, never able to decide a
+  requirement) - plus model fidelity, provenance, applicability
+  (out-of-domain refuses; blockages are records, not silence),
+  and OPTIONAL requirement linkage yielding conservative
+  PASS/FAIL/UNKNOWN. A metric with no linked requirement is
+  descriptive: it ranks nothing and never becomes an invented
+  gate. Comparisons refuse unmatched phenomenon, units, semantics
+  or fidelity. First producers: traversal DC resistance,
+  stackup-evidenced propagation-delay lower bounds, and the
+  geometry-only coupling parallelism inventory
+  (`pcbqa/coupling_geometry.py`) - coupled millimetres, never a
+  crosstalk voltage.
+- **Placement feedback** (`pcbqa/feedback.py`): downstream
+  refusals become structured records - kind, references, pads,
+  nets, location, required vs observed margin or refusal reason,
+  suggested movables, movement domain, source artifact - that a
+  DESCENDANT candidate consumes as targeted placement moves, with
+  lineage recorded in its derivation. Cheap hard geometry is
+  enforced where it is cheap (pad-accurate board-edge findings
+  join placement repair); the fabrication DRC remains the
+  authority.
 - **Implementation identity** (`pcbqa/core.py`): every validation
   document stamps the toolkit commit (and dirty state) that judged
   it - the same board under a different implementation is a

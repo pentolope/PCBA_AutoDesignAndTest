@@ -16,11 +16,24 @@ Distinctions this module keeps separate, deliberately:
     judged before anything else, because a candidate that differs
     from the intent is a different product, and no downstream
     completion may launder that;
-  * ``accept_for_comparison`` (worth measuring experimentally)
-    versus ``search_winner_eligible`` (permitted to be presented
-    as best): a candidate whose critical paths or topology FAIL -
-    or are unresolved - may still be measured, but a search winner
-    must never outrank an unresolved correctness class;
+  * ``accept_for_comparison`` (worth measuring experimentally -
+    kept loose so failed candidates still teach) versus
+    ``search_winner_eligible`` (permitted to be presented as the
+    current best VALID design): a winner requires EVERY correctness
+    class through the quality gates to pass - parity, placement,
+    critical structures, board-required connectivity, fabrication
+    geometry, blocking gates, quality gates. Perfect clock
+    structure over incomplete connectivity, or over failing
+    fabrication or gates, is a diagnostic candidate, never a
+    winner. Electrical evidence and optimization metrics
+    distinguish valid candidates; they never substitute for a
+    correctness class;
+  * ELECTRICAL EVIDENCE AVAILABILITY ("can I trust this result?")
+    versus ELECTRICAL REQUIREMENT OUTCOME ("did the design satisfy
+    the requirement?"): a trustworthy FAIL is valuable evidence and
+    still a design failure; an unresolved assertion is unknown -
+    never a pass, never a fail - and the COUNT of usable
+    simulations is never rewarded without their verdicts;
 
   * benchmark-set completion (the A/B measurement inventory) versus
     BOARD-REQUIRED completion (every required net on the board): a
@@ -55,6 +68,7 @@ CLASSES = (
     "fabrication-geometry",
     "blocking-gates",
     "quality-gates",
+    "electrical-requirements",
     "electrical-evidence",
     "optimization",
 )
@@ -63,7 +77,8 @@ _REQUIRED_KEYS = {
     "netlist_parity", "placement_policy_ok", "critical",
     "board_required_connectivity", "benchmark_connectivity",
     "fabrication_geometry", "blocking_gates", "quality_gates",
-    "electrical_evidence", "optimization",
+    "electrical_requirements", "electrical_evidence",
+    "optimization",
 }
 
 _CRITICAL_KEYS = {"nets_connected", "paths_resolved",
@@ -175,6 +190,28 @@ def assess(record):
             or usable < 0:
         raise ProgressionError(
             "usable_results must be a non-negative integer")
+    requirements = record["electrical_requirements"]
+    _REQUIREMENT_KEYS = {"applicable", "passed", "failed",
+                         "unresolved"}
+    if not isinstance(requirements, dict) or \
+            set(requirements) != _REQUIREMENT_KEYS:
+        raise ProgressionError(
+            "electrical_requirements must carry exactly "
+            "applicable, passed, failed and unresolved")
+    for key in sorted(_REQUIREMENT_KEYS):
+        value = requirements[key]
+        if isinstance(value, bool) or not isinstance(value, int) \
+                or value < 0:
+            raise ProgressionError(
+                "electrical_requirements.{} must be a "
+                "non-negative integer".format(key))
+    if requirements["passed"] + requirements["failed"] \
+            + requirements["unresolved"] \
+            != requirements["applicable"]:
+        raise ProgressionError(
+            "electrical_requirements must partition applicable "
+            "into passed + failed + unresolved exactly; an "
+            "unaccounted assertion is a hole, not a rounding")
     if not isinstance(record["optimization"], dict):
         raise ProgressionError(
             "optimization must be a dict of recorded metrics")
@@ -235,11 +272,30 @@ def assess(record):
             status = "pass"
         classes[name] = {"status": status,
                          "failing": sorted(gates["failing"])}
+    if requirements["failed"] > 0:
+        requirement_status = "fail"
+    elif requirements["unresolved"] > 0:
+        requirement_status = "unknown"
+    else:
+        requirement_status = "pass"
+    classes["electrical-requirements"] = {
+        "status": requirement_status,
+        "counts": dict(requirements),
+        "detail": "verdict-based: any requirement-linked assertion "
+                  "that FAILED (exactly or conservatively) is a "
+                  "design failure however trustworthy the run; an "
+                  "unresolved assertion is unknown, never credited; "
+                  "zero applicable requirements pass vacuously "
+                  "because absence of a requirement is not a "
+                  "failure - and never a license to invent one",
+    }
     classes["electrical-evidence"] = {
         "status": "pass" if usable > 0 else "fail",
         "usable_results": usable,
-        "detail": "results usable for a design decision under the "
-                  "simulation result policy",
+        "detail": "availability only - results usable for a design "
+                  "decision under the simulation result policy; "
+                  "their VERDICTS live in electrical-requirements "
+                  "and are never rewarded by count",
     }
     classes["optimization"] = {
         "status": "recorded",
@@ -253,7 +309,7 @@ def assess(record):
             progress_class = name
             break
 
-    judged = CLASSES[:-2]  # everything up to and incl. quality-gates
+    judged = CLASSES[:-3]  # everything up to and incl. quality-gates
     ready = all(classes[name]["status"] == "pass"
                 for name in judged)
     rank_key = (
@@ -268,24 +324,38 @@ def assess(record):
          else float("-inf")),
         (-len(quality["failing"]) if quality["evaluated"]
          else float("-inf")),
+        # Requirement outcome ranks before evidence volume: no
+        # failed requirements beats failed ones, resolved beats
+        # unresolved, and only then does having more usable
+        # evidence count for anything.
+        -requirements["failed"],
+        -requirements["unresolved"],
+        requirements["passed"],
         usable,
     )
     comparison = (parity_ok is True
                   and record["placement_policy_ok"]
                   and critical["nets_connected"])
+    # A winner is a VALID DESIGN: every correctness class through
+    # the quality gates passes, and no requirement-linked
+    # electrical assertion failed or remains unresolved. ``ready``
+    # covers the classes; the requirement status covers the
+    # verdicts.
+    winner = ready and requirement_status == "pass"
     return {
         "classes": classes,
         "progress_class": progress_class,
         "fully_connected": fully_connected,
         "candidate_ready_for_next_stage": ready,
         "accept_for_comparison": comparison,
-        "search_winner_eligible": comparison
-        and critical_status == "pass",
+        "search_winner_eligible": winner,
         "rank_key": rank_key,
         "meaning": "rank_key is lexicographic over the correctness "
                    "classes in order; optimization metrics are "
                    "recorded but never ranked, and any consumer "
                    "tie-break applies only between equal rank keys; "
-                   "a measured candidate whose critical truths are "
-                   "failed or unresolved is never winner-eligible",
+                   "a winner passes every correctness class through "
+                   "the quality gates AND every requirement-linked "
+                   "electrical assertion - a diagnostic candidate "
+                   "may be measured, never presented as best",
     }

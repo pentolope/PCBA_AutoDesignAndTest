@@ -270,6 +270,68 @@ class ThroughViasClearEveryCopperLayer(unittest.TestCase):
                 barrel.distance(shape), 0.15 - 1e-6)
 
 
+class InternalPadAnnuliObstructThroughVias(unittest.TestCase):
+    """A padstack whose internal annulus is larger than its outer
+    representation still collides with a through via: clear outer
+    layers are never a license to intersect internal copper."""
+
+    def setUp(self):
+        geom.configure(0.001)
+
+    def test_via_clears_the_larger_internal_annulus(self):
+        board = synth.new_board(layers=4, size_mm=30.0)
+        gnd = synth.add_net(board, "GNDX")
+        sig = synth.add_net(board, "SIG")
+        synth.add_pad_footprint(board, "BAR", 10.0, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (0.35, 1.5),
+                                net=gnd)
+        synth.add_zone(board, gnd, [pcbnew.B_Cu],
+                       (4.0, 4.0, 22.0, 22.0), fill=True)
+        # A through-hole pad exactly where the unobstructed search
+        # likes to land, with outer copper 0.8 mm but an In1
+        # annulus of 1.6 mm.
+        synth.add_through_hole_footprint(board, "J1", 9.2, 10.2,
+                                         net=sig, pad_mm=0.8,
+                                         drill_mm=0.4)
+        pad = [p for fp in board.GetFootprints()
+               if fp.GetReference() == "J1"
+               for p in fp.Pads()][0]
+        pad.Padstack().SetMode(
+            pcbnew.PADSTACK.MODE_FRONT_INNER_BACK)
+        pad.SetSize(pcbnew.F_Cu, pcbnew.VECTOR2I(
+            pcbnew.FromMM(0.8), pcbnew.FromMM(0.8)))
+        pad.SetSize(pcbnew.In1_Cu, pcbnew.VECTOR2I(
+            pcbnew.FromMM(1.6), pcbnew.FromMM(1.6)))
+        pad.SetSize(pcbnew.B_Cu, pcbnew.VECTOR2I(
+            pcbnew.FromMM(0.8), pcbnew.FromMM(0.8)))
+        field = critical_topology.LocalField(
+            board, "GNDX", (10.0, 10.0), _rules(),
+            geom.pad_copper_polygon)
+        plane_fill = field.plane_fill_at("GNDX")
+        # (10.3, 10.2): the via clears the 0.8 mm OUTER copper,
+        # the hole reach AND the mask-annulus target - but sits
+        # 0.075 mm from the 1.6 mm In1 annulus, far inside the
+        # 0.15 mm clearance. Outer-layers-only obstacle collection
+        # calls this site legal.
+        ok, reason = field.via_site_ok(10.3, 10.2, plane_fill)
+        self.assertIs(ok, False)
+        self.assertIn("copper clearance", reason)
+        # A site genuinely beyond the internal annulus stays legal.
+        ok, _reason = field.via_site_ok(10.85, 9.93, plane_fill)
+        self.assertIs(ok, True)
+        # End to end, the stitch still lands clear of the annulus.
+        proposal = critical_topology.stitch_to_plane(
+            board, "GNDX", (10.0, 10.0), "GNDX", _rules(),
+            geom.pad_copper_polygon)
+        via = proposal["vias"][0]
+        from shapely.geometry import Point
+        barrel = Point(via["x_mm"], via["y_mm"]).buffer(
+            via["diameter_mm"] / 2.0, quad_segs=32)
+        internal = geom.pad_copper_polygon(pad, pcbnew.In1_Cu)
+        self.assertGreaterEqual(barrel.distance(internal),
+                                0.15 - 1e-6)
+
+
 class ForeignFilledZonesAreNotObstacles(unittest.TestCase):
     """Zone fills are recomputed geometry: the refill pulls the pour
     back around new copper under the zone's own rules, and the

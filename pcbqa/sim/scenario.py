@@ -242,9 +242,10 @@ def validate_scenario(scenario):
         bound = measurement.get("value_bound")
         if bound is not None:
             _require(isinstance(bound, dict)
-                     and set(bound) == {"direction", "reason"},
-                     "value_bound carries exactly direction and "
-                     "reason")
+                     and set(bound) == {"direction", "reason",
+                                        "established_by"},
+                     "value_bound carries exactly direction, "
+                     "reason and established_by")
             _require(bound["direction"] in ("upper", "lower",
                                             "exact"),
                      "value_bound.direction must be upper, lower "
@@ -253,6 +254,12 @@ def validate_scenario(scenario):
                      and bound["reason"],
                      "value_bound.reason must be a nonempty "
                      "string")
+            _require(bound["established_by"] in ("derived",
+                                                 "assumed"),
+                     "value_bound.established_by must be "
+                     "'derived' (mechanically re-verifiable) or "
+                     "'assumed' (an explicit assumption, never "
+                     "theorem-level provenance)")
 
     conditions = scenario.get("operating_conditions")
     if conditions is not None:
@@ -313,6 +320,79 @@ def check_assertion(assertion, value):
     if assertion["op"] == ">=":
         return value >= assertion["value"]
     return abs(value - assertion["value"]) <= assertion["tolerance"]
+
+
+def derive_value_bound(sim_scenario, measurement, registry):
+    """Mechanical bound direction for SUPPORTED monotonic
+    templates; None wherever the circuit is not one of them.
+
+    Supported today: the series divider -
+
+        ideal voltage source (A, ground)
+        -> ONE two-terminal series element (A, measured)
+        -> ONE positive resistive load (measured, ground)
+
+    with nothing else touching either non-ground node. There, the
+    measured load voltage is monotonically DECREASING in the
+    series resistance, so a lower-bound series R gives an
+    upper-bound voltage and an upper-bound series R a lower-bound
+    voltage; an exact series R gives an exact value. Anything
+    outside the template returns None: an unsupported or
+    non-monotonic circuit needs an explicit ASSUMED bound and
+    never receives theorem-level provenance."""
+    measured = measurement["node"]
+    touching_measured = []
+    sources = []
+    others = []
+    for element in sim_scenario["elements"]:
+        nodes = element["nodes"]
+        if element["kind"] == "vsource_dc":
+            sources.append(element)
+        elif measured in nodes:
+            touching_measured.append(element)
+        else:
+            others.append(element)
+    if len(sources) != 1 or measured in sources[0]["nodes"]:
+        return None
+    source_node = next((node for node in sources[0]["nodes"]
+                        if node != GROUND_NODE), None)
+    if source_node is None:
+        return None
+    if len(touching_measured) != 2 or others:
+        return None
+    series = load = None
+    for element in touching_measured:
+        nodes = set(element["nodes"])
+        if nodes == {source_node, measured}:
+            series = element
+        elif nodes == {measured, GROUND_NODE}:
+            load = element
+    if series is None or load is None:
+        return None
+    if load["kind"] != "resistor" or load.get("value", 0) <= 0:
+        return None
+    if series["kind"] == "resistor":
+        declared = "exact" if series.get("value", 0) > 0 else None
+    elif series["kind"] == "model_instance":
+        record = registry.get(series["model"])
+        derivation = record.get("derivation") or {}
+        declared = (derivation.get("path")
+                    or {}).get("resistance_bound") \
+            or derivation.get("resistance_bound")
+    else:
+        return None
+    direction = {"lower": "upper", "upper": "lower",
+                 "exact": "exact"}.get(declared)
+    if direction is None:
+        return None
+    return {
+        "direction": direction,
+        "reason": "mechanically derived: series-divider template - "
+                  "the load voltage is monotonically decreasing in "
+                  "the series resistance, whose declared bound is "
+                  "{!r}".format(declared),
+        "established_by": "derived",
+    }
 
 
 def classify_assertion(assertion, value, value_bound=None):
