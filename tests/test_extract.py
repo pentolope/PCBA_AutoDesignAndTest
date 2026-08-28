@@ -667,6 +667,63 @@ class UniquenessIsBridgeRigorous(unittest.TestCase):
                                delta=1.2)
 
 
+class TheOldUniquenessCheckMissedThis(unittest.TestCase):
+    """The committed record of WHY interior-node removal was
+    replaced: run verbatim against the rejoining-detour fixture, it
+    finds no alternate path, while the bridge analysis refuses."""
+
+    def setUp(self):
+        from pcbqa import geom
+        geom.configure(0.001)
+
+    def test_interior_removal_reports_no_alternate_here(self):
+        from pcbqa.connectivity import NetGraph
+        from pcbqa import geom
+        board = synth.new_board()
+        net = synth.add_net(board, "LINK")
+        synth.add_pad_footprint(board, "P1", 0.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_pad_footprint(board, "P2", 10.0, 0.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0),
+                                net=net)
+        synth.add_track(board, (0.0, 0.0), (10.0, 0.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (3.0, 0.0), (3.0, 3.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (3.0, 3.0), (7.0, 3.0), net=net,
+                        width_mm=0.2)
+        synth.add_track(board, (7.0, 3.0), (7.0, 0.0), net=net,
+                        width_mm=0.2)
+        graph = NetGraph(board, "LINK", geom.pad_copper_polygon,
+                         split_at_junctions=True)
+        _length, chain = graph.trace(["P1.1"], "P2.1")
+        # The superseded algorithm, verbatim: remove every interior
+        # chain node at once, then ask whether the endpoints still
+        # connect.
+        interior = set(chain) - {chain[0], chain[-1]}
+        frontier = [chain[0]]
+        seen = {chain[0]}
+        found_alternate = False
+        while frontier:
+            node = frontier.pop()
+            if node == chain[-1]:
+                found_alternate = True
+                break
+            for neighbour, _weight in graph.adj[node]:
+                if neighbour in seen or neighbour in interior:
+                    continue
+                seen.add(neighbour)
+                frontier.append(neighbour)
+        self.assertIs(found_alternate, False)
+        # The detour carries current all the same: the bridge
+        # analysis refuses what the old check waved through.
+        with self.assertRaisesRegex(ExtractionError,
+                                    "not a bridge"):
+            extract.path_resistance(board, "LINK", "P1.1", "P2.1",
+                                    COPPER)
+
+
 class OmittedPhysicsIsABoundNotATruth(unittest.TestCase):
     """Via barrels contribute zero by declared omission, so a path
     through vias reports a LOWER bound on resistance - and says so

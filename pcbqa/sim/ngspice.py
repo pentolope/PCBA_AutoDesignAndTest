@@ -481,8 +481,10 @@ def _refuse_undeclared_bounds(registry, sim_scenario):
             if element.get("kind") != "model_instance":
                 continue
             record = registry.get(element["model"])
-            declared = ((record.get("derivation") or {})
-                        .get("path") or {}).get("resistance_bound")
+            derivation = record.get("derivation") or {}
+            declared = (derivation.get("path")
+                        or {}).get("resistance_bound") \
+                or derivation.get("resistance_bound")
             if declared not in (None, "exact"):
                 raise SimulationError(
                     "measurement {!r} asserts on a value fed by "
@@ -516,11 +518,16 @@ def _attach_result_policy(result, coverage):
         assertions = all(
             measurement["passed"] is not False
             for measurement in result["measurements"].values())
-        claimable = all(
+        asserted = [measurement for measurement
+                    in result["measurements"].values()
+                    if measurement.get("assertion") is not None]
+        # A run with NO declared assertions has nothing to claim:
+        # None, never a vacuous True - absence of assertions must
+        # not read as more confident than an unresolved verdict.
+        claimable = None if not asserted else all(
             measurement.get("verdict") in ("exact-PASS",
                                            "conservative-PASS")
-            for measurement in result["measurements"].values()
-            if measurement.get("assertion") is not None)
+            for measurement in asserted)
     fully_covered = result["condition_coverage"]["fully_covered"]
     applicable = None if fully_covered is None else fully_covered
     assumptions = result["assumption_dependencies"]
@@ -547,10 +554,12 @@ def _attach_result_policy(result, coverage):
                    "any of those. assertions_claimable is the "
                    "actionable assertion truth: True only when "
                    "every declared assertion's VERDICT is a PASS "
-                   "class - numerical_assertions_passed is the raw "
-                   "numeric fact and must never be acted on alone, "
-                   "because a bounded value can pass numerically "
-                   "while its claim is unresolved",
+                   "class, None when nothing was asserted (absence "
+                   "of assertions is never a claim) - "
+                   "numerical_assertions_passed is the raw numeric "
+                   "fact and must never be acted on alone, because "
+                   "a bounded value can pass numerically while its "
+                   "claim is unresolved",
     }
     return result
 

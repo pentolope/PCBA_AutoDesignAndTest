@@ -952,6 +952,14 @@ def interconnect_model_from_net(net_record, board_sha256,
         "copper_thickness_mm": copper,
         "board_thickness_mm": physical_inputs["board_thickness_mm"],
         "resistivity": resistivity,
+        # Same omission semantics as the path-scoped model: via
+        # barrels contribute zero, so any traversed via makes the
+        # resistance a lower bound; the scenario runner refuses an
+        # assertion fed by a non-exact bound without a declared
+        # value_bound.
+        "resistance_bound": (
+            "lower" if net_record["totals"]["via_count"]
+            else "exact"),
         "two_terminal_assertion": two_terminal_asserted_by,
         "assumptions": [net_record["dc"]["meaning"]],
     }

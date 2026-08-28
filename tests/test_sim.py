@@ -333,6 +333,42 @@ class BoundsNeverManufacturePass(unittest.TestCase):
             scenario.classify_assertion(within, 0.6, lower),
             "conservative-FAIL")
 
+    def test_no_assertions_is_never_vacuously_claimable(self):
+        """A run that asserts nothing has nothing to claim: None,
+        not True - it must never read more confident than an
+        unresolved verdict."""
+        declared = _rc_scenario()
+        del declared["measurements"][0]["assertion"]
+        registry = fidelity.ModelRegistry([])
+        import tempfile
+        result = ngspice.run_scenario(
+            registry, declared,
+            tempfile.mkdtemp(prefix="pcbqa-noassert-"))
+        if result["status"] != "ran":
+            self.skipTest("no ngspice backend present")
+        self.assertIsNone(
+            result["result_policy"]["assertions_claimable"])
+
+    def test_net_scoped_bounds_also_refuse_silent_assertions(self):
+        bounded_model = {
+            "identity": "bounded-net-link",
+            "kind": "board-interconnect",
+            "coverage": {"interconnect_dc": "geometry-derived"},
+            "provenance": {"source": "test"},
+            "derivation": {"resistance_bound": "lower"},
+            "spice": ".subckt bounded-net-link a b\n"
+                     "R1 a b 0.01\n.ends",
+        }
+        registry = fidelity.ModelRegistry([bounded_model])
+        declared = _rc_scenario()
+        declared["elements"][1] = {
+            "kind": "model_instance", "name": "top",
+            "nodes": ["in", "mid"], "model": "bounded-net-link"}
+        with self.assertRaisesRegex(SimulationError,
+                                    "value_bound"):
+            ngspice.run_scenario(registry, declared,
+                                 "unused-workdir")
+
     def test_value_bound_validates_exactly(self):
         bad = _rc_scenario()
         bad["measurements"][0]["value_bound"] = {
