@@ -806,6 +806,116 @@ class TheAnalyticModel(unittest.TestCase):
             model.conductor("F.Cu", TRACK_WIDTH_MM)
 
 
+class NominalAndFinishedCopperNeverConflate(unittest.TestCase):
+    """An outer 1 oz foil plates up in fabrication: the construction
+    states the base foil, the fabricator states the finished
+    conductor, and they are different numbers with different
+    consumers. The stackup carries both, and every geometry a model
+    receives says WHICH one it holds."""
+
+    FINISHED_MM = 0.04064
+
+    def _layers(self, finished=None):
+        layers = [dict(entry, kind=_kind(entry))
+                  for entry in FIXTURE_STACKUP]
+        if finished is not None:
+            layers[0] = dict(layers[0], finished_thickness_mm=finished)
+        return layers
+
+    def test_declared_finished_thickness_reaches_the_model_labelled(self):
+        stack = stackup_physical.from_declaration(
+            {"provenance": "synthetic fixture values",
+             "layers": self._layers(self.FINISHED_MM)})
+        geometry = stack.reference_geometry("F.Cu", {"In1.Cu"})
+        self.assertEqual(geometry.copper_thickness_mm, self.FINISHED_MM)
+        self.assertEqual(geometry.copper_thickness_basis, "finished")
+
+    def test_without_a_finished_figure_the_basis_says_nominal_foil(self):
+        stack = stackup_physical.from_declaration(
+            {"provenance": "synthetic fixture values",
+             "layers": self._layers()})
+        geometry = stack.reference_geometry("F.Cu", {"In1.Cu"})
+        self.assertEqual(geometry.copper_thickness_mm,
+                         FIXTURE_OUTER_COPPER_MM)
+        self.assertEqual(geometry.copper_thickness_basis, "nominal-foil")
+
+    def test_a_finished_thickness_on_a_dielectric_refuses(self):
+        layers = self._layers()
+        layers[1] = dict(layers[1], finished_thickness_mm=0.04)
+        with self.assertRaises(stackup_physical.StackupError):
+            stackup_physical.from_declaration(
+                {"provenance": "synthetic fixture values",
+                 "layers": layers})
+
+    def test_the_summed_stack_height_stays_the_construction_figure(self):
+        """Finished plating grows the conductor, not the declared
+        construction; the vertical-geometry sum must not move."""
+        with_finished = stackup_physical.from_declaration(
+            {"provenance": "synthetic fixture values",
+             "layers": self._layers(self.FINISHED_MM)})
+        without = stackup_physical.from_declaration(
+            {"provenance": "synthetic fixture values",
+             "layers": self._layers()})
+        self.assertEqual(with_finished.summed_thickness_mm(),
+                         without.summed_thickness_mm())
+
+    def test_the_thickness_corrected_model_consumes_the_finished_figure(self):
+        def epsilon_effective(finished):
+            stack = stackup_physical.from_declaration(
+                {"provenance": "synthetic fixture values",
+                 "layers": self._layers(finished)})
+            model = propagation.PropagationModel(
+                stack, {"In1.Cu"}, model=propagation.HAMMERSTAD_T)
+            record = model.conductor("F.Cu", TRACK_WIDTH_MM)
+            self.assertEqual(
+                record["geometry"]["copper_thickness_basis"],
+                "finished" if finished is not None else "nominal-foil")
+            return record["epsilon_effective"]
+        self.assertGreater(
+            epsilon_effective(self.FINISHED_MM), epsilon_effective(None),
+            "a thicker manufactured conductor widens the effective "
+            "trace; if the model's answer does not move, it never "
+            "consumed the finished figure")
+
+    def test_a_zero_or_negative_finished_thickness_refuses(self):
+        """Unmeasured never becomes zero - least of all in the one
+        field that reaches a conductor model labelled 'finished'."""
+        for bad in (0, -0.01, "0.04", True):
+            layers = self._layers()
+            layers[0] = dict(layers[0], finished_thickness_mm=bad)
+            with self.assertRaises(stackup_physical.StackupError):
+                stackup_physical.from_declaration(
+                    {"provenance": "synthetic fixture values",
+                     "layers": layers})
+
+    def test_a_finished_figure_below_the_foil_refuses(self):
+        """Plating adds copper; finished < nominal contradicts one
+        of the two numbers and is never silently accepted."""
+        layers = self._layers(FIXTURE_OUTER_COPPER_MM / 2)
+        with self.assertRaisesRegex(stackup_physical.StackupError,
+                                    "below its base foil"):
+            stackup_physical.from_declaration(
+                {"provenance": "synthetic fixture values",
+                 "layers": layers})
+
+    def test_merge_carries_a_declared_finished_thickness(self):
+        native = stackup_physical.PhysicalStackup(
+            [stackup_physical.StackupLayer(
+                entry["name"], _kind(entry), entry["type"],
+                entry.get("thickness_mm"), entry.get("material"),
+                entry.get("epsilon_r"), entry.get("loss_tangent"),
+                None, stackup_physical.NATIVE)
+             for entry in FIXTURE_STACKUP],
+            stackup_physical.NATIVE)
+        declared = stackup_physical.from_declaration(
+            {"provenance": "synthetic fixture values",
+             "layers": self._layers(self.FINISHED_MM)})
+        merged = stackup_physical.merge(native, declared)
+        self.assertEqual(
+            merged.layer("F.Cu").finished_thickness_mm,
+            self.FINISHED_MM)
+
+
 def _kind(entry):
     if entry["type"] == "copper":
         return stackup_physical.COPPER

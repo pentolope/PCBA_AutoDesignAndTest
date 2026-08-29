@@ -853,6 +853,7 @@ class PropagationModel:
             "geometry": {
                 "dielectric_height_mm": geometry.height_mm,
                 "copper_thickness_mm": geometry.copper_thickness_mm,
+                "copper_thickness_basis": geometry.copper_thickness_basis,
                 "reference_above": geometry.reference_above,
                 "reference_below": geometry.reference_below,
                 "material": geometry.material,

@@ -221,6 +221,63 @@ branch/tree generation (the declared cross-branch spread limits),
 length/time tuning mapped from electrical intent, and richer
 optimizer freedom beyond lock-and-repair.
 
+### Router identity and the seed-search shape (measured 2026-08-28)
+
+The router is evidence, not ambience: `pcbqa/krt.py` resolves ONE
+KiCadRoutingTools source by declared order (explicit override →
+configured development checkout → single active plugin
+installation → refusal; a disabled installation never executes)
+and records the identity a run actually used — VERSION, git sha,
+dirty state, upstream base, the native grid_router binary's hash
+and self-reported version probed under the SAME interpreter, and
+that interpreter — with `identity_digest` for freshness closures.
+A different sha, dirty state or native hash is a different router
+and downstream routing-derived artifacts go stale with it. The
+invoking interpreter is the consumer's configured KiCad Python,
+verified to import pcbnew, never the ambient one.
+
+The seed-search benchmark (frozen placements, same stage
+arguments, historical evidence labelled as such) established the
+durable shape and its measured caveats:
+
+- Full routing is the scarce resource. Cheap filters in front of
+  it are worth their cost: a critical-net probe (one scoped
+  route.py call on the bare placement) ranked seven
+  known-outcome placements with directional agreement
+  (12 concordant pairs, 1 discordant, 8 ties), at ~1–2 minutes
+  against 17–73 minutes of historical full routing each — but
+  most of its resolution separates catastrophic placements from
+  the frontier, it compresses badly-different placements at the
+  bottom of its range, and it is blind to placement-fabrication
+  dooms, so the LEGALITY AND FABRICATION GATES ALWAYS RUN FIRST
+  and the probe is a filter, never a verdict.
+- Static proxies misrank. In a real portfolio slate the
+  crossings-best variant probe-routed worse than a
+  crossings-worse one; probe reordering, not proxy score,
+  chooses what graduates.
+- The router's own repair loop optimizes routability, not intent.
+  An external accept gate (the consumer's placement policy,
+  courtyard collisions, pad-accurate edge clearance) must hold
+  veto power: measured, four of five repair rounds "improved"
+  failures only by scattering a decoupling/functional-block
+  structure and were rejected and reverted. A router-side
+  improvement claim is confirmed only by the board-file
+  connectivity arbiter, never by the router's own tally.
+- Externally produced placements (portfolio variants, repair
+  outputs) enter the pipeline only through an ingest path that
+  judges them exactly like generated ones — measured: a
+  portfolio "viable" winner violated the consumer's decoupling
+  proximity constraint and was refused before any routing was
+  spent, because the router's viability gates cannot see
+  consumer semantics.
+- Route outputs are not byte-deterministic run to run; identical
+  inputs reproduced the identical missing-net set (semantic
+  determinism) and that is the comparison the evidence uses.
+- Compute is a first-class artifact: `pcbqa/compute.py` keeps
+  spend in disjoint categories whose sum must equal the measured
+  total or the summary refuses, so "compute avoided" claims bind
+  to a ledger that adds up.
+
 ## 5. Simulation strategy (durable, partially implemented)
 
 Mixed-fidelity composite board model: each element at the strongest

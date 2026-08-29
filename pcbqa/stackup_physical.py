@@ -81,14 +81,38 @@ class StackupError(Exception):
 
 
 class StackupLayer:
-    """One layer of the physical stack, in top-to-bottom order."""
+    """One layer of the physical stack, in top-to-bottom order.
+
+    A copper layer carries TWO distinct thicknesses, and they are
+    not interchangeable:
+
+    ``thickness_mm``
+        The construction's stated layer height - the base (nominal)
+        foil for copper, the laminate figure for a dielectric. This
+        is the vertical-geometry quantity: layer heights, summed
+        stack thickness, via transit spans.
+
+    ``finished_thickness_mm``
+        The manufactured conductor thickness, plating included,
+        from fabricator evidence (an outer 1 oz foil plates up;
+        an inner one does not). This is the conductor-model
+        quantity: trace resistance and the thickness-corrected
+        transmission-line models describe copper as fabricated,
+        not as laminated.
+
+    A stackup that states only the nominal figure still works -
+    the geometry it hands to a model then SAYS its conductor
+    thickness is the nominal foil - but the two numbers can never
+    silently stand in for one another.
+    """
 
     __slots__ = ("name", "kind", "type_name", "thickness_mm", "material",
-                 "epsilon_r", "loss_tangent", "sublayers", "source")
+                 "epsilon_r", "loss_tangent", "sublayers", "source",
+                 "finished_thickness_mm")
 
     def __init__(self, name, kind, type_name=None, thickness_mm=None,
                  material=None, epsilon_r=None, loss_tangent=None,
-                 sublayers=None, source=None):
+                 sublayers=None, source=None, finished_thickness_mm=None):
         self.name = name
         self.kind = kind
         self.type_name = type_name
@@ -98,6 +122,7 @@ class StackupLayer:
         self.loss_tangent = loss_tangent
         self.sublayers = list(sublayers or [])
         self.source = source
+        self.finished_thickness_mm = finished_thickness_mm
 
     @property
     def is_copper(self):
@@ -129,6 +154,8 @@ class StackupLayer:
                   "type": self.type_name,
                   "thickness_mm": self.thickness_mm,
                   "source": self.source}
+        if self.is_copper and self.finished_thickness_mm is not None:
+            record["finished_thickness_mm"] = self.finished_thickness_mm
         if self.is_dielectric:
             record.update({"material": self.material,
                            "epsilon_r": self.epsilon_r,
@@ -170,12 +197,13 @@ class ReferenceGeometry:
 
     __slots__ = ("layer", "mode", "height_mm", "height_below_mm",
                  "reference_above", "reference_below", "epsilon_r",
-                 "loss_tangent", "material", "copper_thickness_mm", "problems")
+                 "loss_tangent", "material", "copper_thickness_mm",
+                 "copper_thickness_basis", "problems")
 
     def __init__(self, layer, mode, height_mm=None, height_below_mm=None,
                  reference_above=None, reference_below=None, epsilon_r=None,
                  loss_tangent=None, material=None, copper_thickness_mm=None,
-                 problems=None):
+                 copper_thickness_basis=None, problems=None):
         self.layer = layer
         self.mode = mode
         self.height_mm = height_mm
@@ -186,6 +214,13 @@ class ReferenceGeometry:
         self.loss_tangent = loss_tangent
         self.material = material
         self.copper_thickness_mm = copper_thickness_mm
+        #: Which quantity ``copper_thickness_mm`` actually is:
+        #: "finished" (manufactured conductor, plating included, from
+        #: fabricator evidence) or "nominal-foil" (the construction's
+        #: base foil, all the stackup states). Conductor models get
+        #: the finished figure when the stackup declares one; either
+        #: way the basis is stated, never inferred by the reader.
+        self.copper_thickness_basis = copper_thickness_basis
         self.problems = list(problems or [])
 
     @property
@@ -202,6 +237,7 @@ class ReferenceGeometry:
                 "loss_tangent": self.loss_tangent,
                 "material": self.material,
                 "copper_thickness_mm": self.copper_thickness_mm,
+                "copper_thickness_basis": self.copper_thickness_basis,
                 "insufficient": self.problems}
 
 
@@ -427,11 +463,23 @@ class PhysicalStackup:
         above, above_gap = self._search(index, -1, reference_layers)
         below, below_gap = self._search(index, +1, reference_layers)
         entry = self.layers[index]
+        # Conductor models describe copper as manufactured. When the
+        # stackup declares a finished thickness, that is the figure a
+        # model gets; otherwise it gets the nominal foil and the basis
+        # says so - the two numbers never silently conflate.
+        if entry.finished_thickness_mm is not None:
+            conductor_mm = entry.finished_thickness_mm
+            conductor_basis = "finished"
+        else:
+            conductor_mm = entry.thickness_mm
+            conductor_basis = ("nominal-foil"
+                               if entry.thickness_mm is not None else None)
 
         if above is None and below is None:
             return ReferenceGeometry(
                 signal_layer, None,
-                copper_thickness_mm=entry.thickness_mm,
+                copper_thickness_mm=conductor_mm,
+                copper_thickness_basis=conductor_basis,
                 problems=[{"issue": "no reference plane can be identified "
                                     "either side of this layer",
                            "reference_layers": sorted(reference_layers)}])
@@ -488,7 +536,8 @@ class PhysicalStackup:
             reference_above=above, reference_below=below,
             epsilon_r=epsilon, loss_tangent=loss,
             material=nearest["material"],
-            copper_thickness_mm=entry.thickness_mm,
+            copper_thickness_mm=conductor_mm,
+            copper_thickness_basis=conductor_basis,
             problems=problems)
 
     def _search(self, index, direction, reference_layers):
@@ -718,7 +767,8 @@ def from_declaration(document, source=DECLARED):
     quantitative = any(
         entry.get(field) is not None
         for entry in document.get("layers", []) if isinstance(entry, dict)
-        for field in ("thickness_mm", "epsilon_r", "loss_tangent"))
+        for field in ("thickness_mm", "epsilon_r", "loss_tangent",
+                      "finished_thickness_mm"))
     if quantitative and not document.get("provenance"):
         raise StackupError(
             "the supplemental stackup states quantitative values but no "
@@ -739,13 +789,39 @@ def from_declaration(document, source=DECLARED):
                 "stackup layer {!r} declares kind {!r}; permitted kinds are "
                 "{}".format(entry["name"], entry["kind"],
                             ", ".join((COPPER, DIELECTRIC, OTHER))))
+        finished = entry.get("finished_thickness_mm")
+        if finished is not None:
+            if entry["kind"] != COPPER:
+                raise StackupError(
+                    "stackup layer {!r} declares a finished_thickness_mm "
+                    "but is kind {!r}; a finished conductor thickness is a "
+                    "property of copper".format(entry["name"],
+                                               entry["kind"]))
+            if not isinstance(finished, (int, float)) \
+                    or isinstance(finished, bool) or finished <= 0:
+                raise StackupError(
+                    "stackup layer {!r} declares finished_thickness_mm "
+                    "{!r}; a manufactured conductor thickness is a "
+                    "positive number, and anything else reaching a "
+                    "conductor model would be the unmeasured-becomes-zero "
+                    "failure this field exists to prevent".format(
+                        entry["name"], finished))
+            nominal = entry.get("thickness_mm")
+            if nominal is not None and finished < nominal:
+                raise StackupError(
+                    "stackup layer {!r} declares finished_thickness_mm {} "
+                    "below its base foil {} mm; plating adds copper, so a "
+                    "finished figure thinner than the foil contradicts "
+                    "one of the two numbers".format(
+                        entry["name"], finished, nominal))
         layers.append(StackupLayer(
             entry["name"], entry["kind"], type_name=entry.get("type"),
             thickness_mm=entry.get("thickness_mm"),
             material=entry.get("material"),
             epsilon_r=entry.get("epsilon_r"),
             loss_tangent=entry.get("loss_tangent"),
-            sublayers=entry.get("sublayers"), source=source))
+            sublayers=entry.get("sublayers"), source=source,
+            finished_thickness_mm=entry.get("finished_thickness_mm")))
     return PhysicalStackup(
         layers, source,
         declared_total_thickness_mm=document.get("total_thickness_mm"),
@@ -841,7 +917,7 @@ def merge(native, declared):
             entry.sublayers, NATIVE)
         if supplement is not None:
             for field in ("thickness_mm", "material", "epsilon_r",
-                          "loss_tangent"):
+                          "loss_tangent", "finished_thickness_mm"):
                 offered = getattr(supplement, field)
                 if offered is None:
                     continue
