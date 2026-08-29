@@ -5,7 +5,7 @@
   "description": "Curated microphone-array Rev A, preserved as a NEGATIVE integration fixture. Every threshold below is the frozen Rev A requirement. Do not relax anything here to make the fixture pass. See README.md for what this fixture is and is not.",
   "project_root": "project",
   "tools": {
-    "kicad_cli": "C:\\Program Files\\KiCad\\10.0\\bin\\kicad-cli.exe"
+    "kicad_cli": "kicad-cli"
   },
   "sources": {
     "pcb": "microphone_array_v2.kicad_pcb",

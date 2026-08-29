@@ -433,7 +433,13 @@ class Context:
         self.manifest = manifest
         self.workdir = workdir
         os.makedirs(workdir, exist_ok=True)
-        self.kicad_cli = kicad_cli or manifest.get("tools.kicad_cli")
+        # Resolved here, once, so every gate shells out to the same absolute
+        # binary and the run's provenance records which one it was - a bare
+        # `kicad-cli` in a manifest is portable, but "whatever PATH meant at
+        # the time" is not evidence.
+        from . import preflight
+        self.kicad_cli = preflight.resolve_tool(
+            kicad_cli or manifest.get("tools.kicad_cli"))
         self._cache = {}
         self.tool_versions = {}
 

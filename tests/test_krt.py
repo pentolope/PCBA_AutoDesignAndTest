@@ -32,7 +32,7 @@ def _make_root(base, name, native=True):
         # A pure-python stand-in is enough for the import probe:
         # the contract is "importable under the named
         # interpreter", not "written in Rust". Real installations
-        # ship the .pyd, which wins the search order.
+        # ship grid_router.so, which wins the search order.
         with open(os.path.join(root, "rust_router",
                                "grid_router.py"), "w",
                   encoding="utf-8") as handle:

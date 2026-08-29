@@ -3,9 +3,9 @@
 Two mutation tests are about what the *gate* does with a report - that an
 unsupported schema is an ERROR, and that a rule the project has set to
 `ignore` fails the authoritative gate. Neither is about KiCad. They were
-nevertheless invoking the absolute Windows path out of the board manifest, so
-on any other machine they failed for the wrong reason: no tool, no report, and
-an ERROR that says "invocation failed" long before the assertion under test.
+nevertheless invoking whatever `tools.kicad_cli` named, so on a machine
+without that tool they failed for the wrong reason: no tool, no report, and an
+ERROR that says "invocation failed" long before the assertion under test.
 
 This writes the report instead. It is a fake, not a mock: it reads the same
 project file KiCad would read and reports the same `ignored_checks` KiCad

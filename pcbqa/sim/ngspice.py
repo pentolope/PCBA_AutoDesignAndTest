@@ -7,9 +7,9 @@ them is how a simulation quietly overstates itself:
   * ``backend`` - whether an ngspice engine exists here at all, which
     one, and its version. Discovery order: the ``NGSPICE_LIBRARY``
     environment variable (an explicit path to the shared library),
-    the ``ngspice`` binary on PATH, then a shared library sitting
-    next to the running interpreter - which is exactly where KiCad's
-    own Python finds KiCad's bundled simulation engine. An absent
+    the ``ngspice`` binary on PATH, then a shared library - beside
+    the running interpreter, or wherever the dynamic linker says
+    ``libngspice`` lives. An absent
     backend yields status ``backend-unavailable``: not a pass, not a
     fabricated failure - policy decides what an optional backend's
     absence means.
@@ -46,10 +46,7 @@ from . import scenario as scenario_module
 
 NGSPICE_BINARY = "ngspice"
 
-_SHARED_LIBRARY_NAMES = (
-    "ngspice.dll", "libngspice-0.dll", "libngspice.so.0",
-    "libngspice.so", "libngspice.dylib",
-)
+_SHARED_LIBRARY_NAMES = ("libngspice.so.0", "libngspice.so")
 
 
 def _shared_library_candidates():
@@ -60,6 +57,27 @@ def _shared_library_candidates():
     executable_dir = os.path.dirname(os.path.abspath(sys.executable))
     for name in _SHARED_LIBRARY_NAMES:
         yield os.path.join(executable_dir, name)
+    # Then wherever the dynamic linker keeps it. On a distribution install
+    # libngspice belongs to its own package under a multiarch directory, so
+    # nothing is beside the interpreter and this is the branch that finds it.
+    from ctypes.util import find_library
+    found = find_library("ngspice")
+    if found:
+        yield found if os.path.isabs(found) else _resolve_soname(found)
+
+
+def _resolve_soname(soname):
+    """An absolute path for a bare soname, or the soname unchanged.
+
+    ``find_library`` answers with a filename; the candidate loop tests each
+    candidate with ``os.path.isfile``, so a bare name would always miss.
+    """
+    for directory in ("/usr/lib/x86_64-linux-gnu", "/usr/lib", "/usr/local/lib",
+                      "/lib/x86_64-linux-gnu"):
+        candidate = os.path.join(directory, soname)
+        if os.path.isfile(candidate):
+            return candidate
+    return soname
 
 
 class _SharedNgspice:
@@ -93,14 +111,7 @@ class _SharedNgspice:
     def __init__(self, library_path):
         import ctypes
         self._ctypes = ctypes
-        directory = os.path.dirname(os.path.abspath(library_path))
-        if hasattr(os, "add_dll_directory"):
-            os.add_dll_directory(directory)
-        try:
-            self._lib = ctypes.CDLL(library_path, winmode=0) \
-                if os.name == "nt" else ctypes.CDLL(library_path)
-        except TypeError:
-            self._lib = ctypes.CDLL(library_path)
+        self._lib = ctypes.CDLL(library_path)
         self.library_path = library_path
         self._log = []
         self._exited = False
@@ -213,6 +224,24 @@ class _SharedNgspice:
         return float(vector.v_realdata[vector.v_length - 1])
 
 
+def _version_from_banner(text):
+    """The version line out of `ngspice --version`.
+
+    ngspice opens its banner with a rule of asterisks, so taking the first
+    line verbatim recorded "******" as the engine's identity - a provenance
+    field that names nothing. The first line actually mentioning ngspice is
+    the one carrying the version; the leading "** " decoration is stripped.
+    """
+    for line in text.strip().splitlines():
+        stripped = line.strip().lstrip("*").strip()
+        if "ngspice" in stripped.lower():
+            return stripped
+    # A banner that names no ngspice identifies nothing. Returning its first
+    # line would put a plausible-looking string in a provenance field - the
+    # one place a guess is worse than an admission.
+    return "unknown"
+
+
 def backend_identity():
     """Discover an ngspice engine: what exists, where, which version."""
     import shutil
@@ -224,8 +253,8 @@ def backend_identity():
                 probe = subprocess.run(
                     [binary, "--version"], capture_output=True,
                     text=True, timeout=30)
-                first = (probe.stdout or probe.stderr or "").strip()
-                version = first.splitlines()[0] if first else "unknown"
+                version = _version_from_banner(
+                    (probe.stdout or probe.stderr or ""))
             except (OSError, subprocess.TimeoutExpired) as exc:
                 return {"name": "ngspice", "available": False,
                         "mode": "binary", "path": binary,

@@ -155,7 +155,8 @@ No commit, push or tag without explicit authorisation from the user.
 No code path may raise a dialog a human must dismiss: a modal box on
 an unwatched screen freezes an autonomous run (KiCad's debug asserts
 - e.g. `PCB_VIA::GetWidth()` without a layer argument - become
-blocking wxWidgets alerts on Windows). Every entry point calls
+blocking wxWidgets alerts whenever a display is reachable). Every
+entry point calls
 `pcbqa.headless.suppress_blocking_ui()` first (`run.py` does this
 for all commands); long-running consumer scripts must do the same.
 Asserts are routed to LOG mode - printed to stderr and continued,
@@ -163,7 +164,7 @@ never modal and never silent (an assert is a report point, not a
 control-flow guard; the continue path is the same one the dialog's
 own button took). The protection is QUERYABLE STATE
 (`headless.protection_state()`): the canary asserts the wx assert
-mode and Windows error-mode bits BEFORE triggering anything, so a
+mode BEFORE triggering anything, so a
 regression fails in milliseconds by name - dialogs are never
 detected or excluded by timeouts - and only then triggers the known
 misuse to prove the assert is REPORTED on stderr, not silenced. Via
@@ -171,16 +172,19 @@ geometry reads always pass a layer argument.
 
 ## Running
 
-Use KiCad's own Python; it provides `pcbnew` and `shapely`.
+Ubuntu, and the system Python 3. `pcbnew` comes from the `kicad`
+distribution package and Shapely from `python3-shapely`; both land in
+this interpreter's `dist-packages`, so there is no bundled KiCad
+interpreter to hunt for. See `docs/prerequisites.md`.
 
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" run.py preflight
+python3 run.py preflight
 ```
 
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" run.py selftest
+python3 run.py selftest
 ```
 
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" run.py validate <manifest>
+python3 run.py validate <manifest>
 ```

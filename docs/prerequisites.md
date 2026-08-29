@@ -1,25 +1,33 @@
 # Prerequisites
 
-This framework runs inside **KiCad's own Python**. That is a deliberate choice,
-not a limitation to be worked around: the checks read the design through
-`pcbnew`, which is a SWIG binding compiled against the KiCad build it ships
-with. A `pcbnew` from one KiCad and a `kicad-cli` from another do not agree
-about geometry, and there is no version of this framework that can make them.
+This framework runs on **the system Python 3, with KiCad installed as a
+distribution package**. The constraint that matters has not changed and never
+will: the checks read the design through `pcbnew`, a SWIG binding compiled
+against one specific KiCad build. A `pcbnew` from one KiCad and a `kicad-cli`
+from another do not agree about geometry, and there is no version of this
+framework that can make them.
+
+On Linux one package satisfies both ends of that pairing. `kicad` installs
+`pcbnew.py` into this interpreter's `dist-packages` and `kicad-cli` onto PATH,
+built together, so the interpreter you already have is the supported one. There
+is no separate bundled interpreter to hunt for - and the old heuristic that
+looked for "kicad" in the interpreter's path reported the *working* setup as
+suspicious, which is why it is gone.
 
 Run everything as:
 
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" verification/run.py preflight
+python3 run.py preflight
 ```
 
 ## What must already be present
 
 | Component | Supplied by | How it is obtained |
 |---|---|---|
-| Python ≥ 3.11 | KiCad | ships inside the KiCad installation |
-| `pcbnew` | KiCad | ships inside the KiCad installation |
-| `kicad-cli` | KiCad | ships inside the KiCad installation; path from the board manifest's `tools.kicad_cli` |
-| Shapely | a KiCad add-on | KiCad's **Plugin and Content Manager** |
+| Python ≥ 3.11 | the distribution | `python3` |
+| `pcbnew` | the `kicad` package | `sudo apt install kicad` |
+| `kicad-cli` | the `kicad` package | same package; named by the board manifest's `tools.kicad_cli`, which may be a bare command name resolved on PATH or an absolute path pinning one binary |
+| Shapely | the `python3-shapely` package | `sudo apt install python3-shapely` |
 
 Everything else the framework uses is in the Python standard library. There is
 no `requirements.txt`, no virtual environment and no lockfile, because there is
@@ -27,12 +35,12 @@ no environment here that this project owns.
 
 ## What this framework will never do
 
-**It will not install, upgrade, downgrade or pin anything.** Shapely in
-particular is provided by an installed KiCad add-on and is therefore owned by
-that environment. Pinning it here — even to the version that happens to be
-present — would mean this project quietly fighting the add-on manager over a
-shared installation, and the first `pip install` that "fixed" a version would
-be the one that broke somebody's KiCad.
+**It will not install, upgrade, downgrade or pin anything.** `pcbnew` and
+Shapely belong to distribution packages and are therefore owned by the system
+package manager. Pinning them here — even to the version that happens to be
+present — would mean this project quietly fighting `apt` over a shared
+installation, and the first `pip install` that "fixed" a version would be the
+one that shadowed the `pcbnew` its `kicad-cli` was built with.
 
 If a prerequisite is missing or unusable, `run.py preflight` says so, names the
 component, prints where it looked, and exits nonzero. It then stops.

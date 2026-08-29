@@ -16,19 +16,19 @@ Consume it from a board repository as a pinned Git submodule at
 Use KiCad's bundled Python; it provides `pcbnew` and `shapely`.
 
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" run.py preflight
+python3 run.py preflight
 ```
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" run.py selftest
+python3 run.py selftest
 ```
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" run.py validate <manifest.json>
+python3 run.py validate <manifest.json>
 ```
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" run.py release <manifest.json>
+python3 run.py release <manifest.json>
 ```
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" run.py coherence <manifest.json>
+python3 run.py coherence <manifest.json>
 ```
 
 `<manifest.json>` is a path. For this repository's own fixtures a bare name also

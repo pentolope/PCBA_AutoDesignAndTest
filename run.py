@@ -46,11 +46,11 @@ ENV_OUTPUT = "PCBQA_OUTPUT_ROOT"
 
 
 def _inside(root, path):
-    """Is `path` within `root`? False across drives, as Windows requires."""
+    """Is `path` within `root`? Anything uncomparable is outside."""
     root = os.path.realpath(root)
     try:
         return os.path.commonpath([root, os.path.realpath(path)]) == root
-    except ValueError:                       # different drives on Windows
+    except ValueError:                       # no common root to speak of
         return False
 
 

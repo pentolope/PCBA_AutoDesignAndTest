@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 
 
@@ -214,62 +215,74 @@ def provenance(krt_path, python_executable, require_clean=False,
             "cannot provide clean reproducible evidence".format(
                 krt_path))
     environment = verify_environment(python_executable)
-    router_pyd = None
+    router_module = None
     # Search order matters: a real installation ships the native
     # binary, which wins; a pure-python grid_router.py is accepted
     # last so test fixtures can exercise this contract without
     # fabricating a platform binary.
-    for name in ("grid_router.pyd", "grid_router.so",
-                 "grid_router.py"):
+    for name in ("grid_router.so", "grid_router.py"):
         candidate = os.path.join(krt_path, "rust_router", name)
         if os.path.isfile(candidate):
-            router_pyd = candidate
+            router_module = candidate
             break
-    if router_pyd is None:
+    if router_module is None:
         raise KRTError(
             "no native grid_router binary under {}; run the "
             "repository's build_router.py first".format(
                 os.path.join(krt_path, "rust_router")))
     router_kind = ("native-binary"
-                   if router_pyd.endswith((".pyd", ".so"))
+                   if router_module.endswith(".so")
                    else "python-source-stand-in")
-    with open(router_pyd, "rb") as handle:
+    with open(router_module, "rb") as handle:
         router_hash = hashlib.sha256(handle.read()).hexdigest()
     router_version, router_error = _probe(
         python_executable,
         "import sys; sys.path.insert(0, {!r}); import "
         "grid_router; print(getattr(grid_router, '__version__', "
-        "'unversioned'))".format(os.path.dirname(router_pyd)))
+        "'unversioned'))".format(os.path.dirname(router_module)))
     if router_version is None:
         raise KRTError(
             "native grid_router at {} does not import under "
-            "{}: {}".format(router_pyd, python_executable,
+            "{}: {}".format(router_module, python_executable,
                             router_error))
+    # The kicad-cli beside the interpreter that will run the router, then
+    # PATH. On a distribution KiCad both answer /usr/bin/kicad-cli; the first
+    # probe still matters for an interpreter installed outside the system
+    # prefix, where the sibling binary is the one that actually matches.
     kicad_cli = os.path.join(
-        os.path.dirname(python_executable), "kicad-cli.exe")
+        os.path.dirname(python_executable), "kicad-cli")
     if not os.path.isfile(kicad_cli):
-        kicad_cli = os.path.join(
-            os.path.dirname(python_executable), "kicad-cli")
-    kicad_version = None
-    if os.path.isfile(kicad_cli):
+        kicad_cli = shutil.which("kicad-cli") or kicad_cli
+    # Which kicad-cli answered, and - when none did - why. A bare None here
+    # would make "no kicad-cli on this machine" and "found one that could not
+    # state its version" the same record, which is the silence this module
+    # exists to refuse.
+    if not os.path.isfile(kicad_cli):
+        kicad_cli, kicad_version = None, "UNAVAILABLE: no kicad-cli beside " \
+            "{} or on PATH".format(python_executable)
+    else:
         try:
             completed = subprocess.run(
                 [kicad_cli, "version"], capture_output=True,
                 text=True, timeout=30)
-            if completed.returncode == 0:
-                kicad_version = completed.stdout.strip()
-        except Exception:                             # noqa: BLE001
-            kicad_version = None
+            kicad_version = completed.stdout.strip() if \
+                completed.returncode == 0 else \
+                "UNREPORTED: {} exited {}".format(
+                    kicad_cli, completed.returncode)
+        except Exception as error:                    # noqa: BLE001
+            kicad_version = "UNAVAILABLE: {}: {}".format(
+                type(error).__name__, error)
     return {
         "kind": "krt-provenance",
         "source_path": krt_path,
         "version": version,
         "git": git_record,
-        "grid_router": {"path": router_pyd,
+        "grid_router": {"path": router_module,
                         "kind": router_kind,
                         "sha256": router_hash,
                         "version": router_version},
         "python": environment,
+        "kicad_cli": kicad_cli,
         "kicad_version": kicad_version,
         "meaning": "the routing implementation identity for this "
                    "run; a different sha, dirty state or native "

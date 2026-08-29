@@ -23,8 +23,7 @@ Two properties this shape exists to guarantee. An invocation can only delete
 inside the attempt directory it created, so a failing run cannot touch a
 sibling attempt or a published release. And publication is the rename of a
 directory into a name that did not previously exist, so it never has to remove
-an old release to install a new one - which on Windows could not be atomic
-anyway.
+an old release to install a new one - which could not be atomic anyway.
 """
 
 from __future__ import annotations
@@ -123,9 +122,9 @@ class OutputLayout:
             raise LayoutError("refusing to treat the output root as a target")
         try:
             common = os.path.commonpath([resolved, self.root])
-        except ValueError:                  # different drives on Windows
+        except ValueError:                  # no common root to speak of
             raise LayoutError(
-                "{!r} is not on the same drive as {!r}".format(path, self.root))
+                "{!r} shares no common root with {!r}".format(path, self.root))
         if common != self.root:
             raise LayoutError(
                 "{!r} resolves outside the managed output root {!r}".format(
@@ -184,8 +183,8 @@ class OutputLayout:
         """Replace the pointer atomically, after the release is in place.
 
         Written to a temporary name in the same directory and moved over the
-        old one with `os.replace`, which is atomic for files on Windows as
-        well as POSIX. A reader sees the old pointer or the new one.
+        old one with `os.replace`, which is atomic for files. A reader
+        sees the old pointer or the new one.
         """
         if not os.path.isdir(self.release_dir(release_id)):
             raise LayoutError(
@@ -267,8 +266,8 @@ class Attempt:
 
         A rename into a name that does not exist yet. There is no
         delete-the-old-one step, so nothing is destroyed if this fails, and
-        nothing has to be atomically replaced - which is the operation Windows
-        will not give us for a non-empty directory.
+        nothing has to be atomically replaced - which no filesystem offers
+        for a non-empty directory.
         """
         if not os.path.isdir(self.build):
             raise LayoutError("this attempt has no build to publish")

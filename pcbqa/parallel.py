@@ -2,8 +2,8 @@
 
 The self-test suite spends almost all of its time inside KiCad and Shapely, so
 threads would not help. This distributes whole test IDs across OS processes
-started with spawn semantics, which is what Windows supports and what keeps
-each worker's pcbnew state independent.
+started with spawn semantics, which is what keeps each worker's pcbnew
+state independent.
 
 Design constraints that shaped this:
 
@@ -253,7 +253,7 @@ def _run_serial(test_ids, top_level, root, stream):
 
 def _run_parallel(test_ids, top_level, root, worker_count, timeout_s,
                   fail_fast, stream):
-    ctx = mp.get_context("spawn")            # Windows-safe; never fork
+    ctx = mp.get_context("spawn")            # never fork: no inherited state
     jobs = ctx.Queue()
     results = ctx.Queue()
     for test_id in test_ids:

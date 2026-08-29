@@ -77,7 +77,7 @@ def _inside(path, root):
     root = os.path.realpath(root)
     try:
         return os.path.commonpath([path, root]) == root
-    except ValueError:                      # different drives on Windows
+    except ValueError:                      # no common root to speak of
         return False
 
 

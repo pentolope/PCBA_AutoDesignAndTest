@@ -19,7 +19,7 @@ git submodule add https://github.com/pentolope/PCB_AutoDesignAndTest tooling/PCB
   "board_id": "my_board",
   "constraint_version": "v1",
   "project_root": "..",
-  "tools": { "kicad_cli": "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe" },
+  "tools": { "kicad_cli": "kicad-cli" },
   "sources": { "pcb": "my_board.kicad_pcb" },
   "board_origin_mm": [0.0, 0.0],
   "documentation_globs": [],
@@ -28,7 +28,7 @@ git submodule add https://github.com/pentolope/PCB_AutoDesignAndTest tooling/PCB
 ```
 
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" tooling/PCB_AutoDesignAndTest/run.py validate board/manifest.json
+python3 tooling/PCB_AutoDesignAndTest/run.py validate board/manifest.json
 ```
 
 Every gate you have not configured reports `NOT_APPLICABLE` **with a reason**
@@ -93,7 +93,7 @@ origin.
 ## 6. Release
 
 ```bash
-"C:/Program Files/KiCad/10.0/bin/python.exe" tooling/PCB_AutoDesignAndTest/run.py release board/manifest.json
+python3 tooling/PCB_AutoDesignAndTest/run.py release board/manifest.json
 ```
 
 The release copies your project, purges every previously generated output *from
