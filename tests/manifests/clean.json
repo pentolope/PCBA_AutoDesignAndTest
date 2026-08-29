@@ -10,7 +10,7 @@
     "project": "clean.kicad_pro"
   },
   "tools": {
-    "kicad_cli": "C:\\Program Files\\KiCad\\10.0\\bin\\kicad-cli.exe"
+    "kicad_cli": "kicad-cli"
   },
   "checks": {
     "description": "Mandatory options and severities are the validator's, not this board's.",

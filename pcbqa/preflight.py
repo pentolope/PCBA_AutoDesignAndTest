@@ -1,9 +1,10 @@
 """Environment diagnostics.
 
-The supported environment is KiCad's own Python. `pcbnew` ships with KiCad and
-Shapely is supplied by an installed KiCad add-on, so both are *externally
-owned*: this module reports what is present and whether it behaves as the
-validator needs, and never installs, upgrades, downgrades or pins anything.
+The supported environment is Linux with KiCad installed as a distribution
+package: `pcbnew` lands in the system interpreter's `dist-packages` and
+Shapely is its own distribution package, so both are *externally owned* -
+this module reports what is present and whether it behaves as the validator
+needs, and never installs, upgrades, downgrades or pins anything.
 
 Nothing heavy is imported at module load. Diagnostics must be able to explain a
 broken environment, which they cannot do if importing them is what fails.
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
 import subprocess
 import sys
 
@@ -25,15 +27,20 @@ TESTED_KICAD = ("10.0",)
 
 
 def _probe_python():
+    """The interpreter, judged on the only thing that matters: its version.
+
+    There used to be a second signal here - whether "kicad" appeared in the
+    executable's path - because a Windows KiCad ships its own interpreter and
+    nothing else could import pcbnew. A distribution KiCad installs pcbnew
+    into the system interpreter, so that heuristic reported "this does not
+    look like KiCad's interpreter" on precisely the interpreter that works.
+    Whether pcbnew imports is a fact `_probe_pcbnew` establishes directly.
+    """
     ok = tuple(sys.version_info[:2]) >= MIN_PYTHON
-    looks_like_kicad = "kicad" in sys.executable.lower()
-    detail = f"requires >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
-    if not looks_like_kicad:
-        detail += "; this does not look like KiCad's interpreter"
     return {"name": "python", "present": True,
             "version": ".".join(str(v) for v in sys.version_info[:3]),
-            "path": sys.executable, "ok": ok, "detail": detail,
-            "looks_like_kicad_python": looks_like_kicad}
+            "path": sys.executable, "ok": ok,
+            "detail": f"requires >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]}"}
 
 
 def _probe_pcbnew():
@@ -42,8 +49,8 @@ def _probe_pcbnew():
     except ImportError as exc:
         return {"name": "pcbnew", "present": False, "version": None, "path": None,
                 "ok": False,
-                "detail": f"not importable ({exc}); pcbnew ships with KiCad and "
-                          f"is only importable from KiCad's own Python"}
+                "detail": f"not importable ({exc}); pcbnew ships with KiCad - "
+                          f"install the kicad distribution package"}
     probes = [
         ("BOARD.Tracks", lambda: pcbnew.BOARD().Tracks),
         ("PCB_VIA.GetWidth(layer)",
@@ -79,10 +86,9 @@ def _probe_shapely():
     except ImportError as exc:
         return {"name": "shapely", "present": False, "version": None, "path": None,
                 "ok": False,
-                "detail": f"not importable ({exc}); Shapely is provided by a "
-                          f"KiCad add-on, install it through KiCad's Plugin and "
-                          f"Content Manager",
-                "ownership": "KiCad add-on"}
+                "detail": f"not importable ({exc}); install the "
+                          f"python3-shapely distribution package",
+                "ownership": "distribution package"}
     problems = []
     try:
         square = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
@@ -102,14 +108,34 @@ def _probe_shapely():
             "ok": not problems,
             "detail": ("required predicates behave as expected" if not problems
                        else "; ".join(problems)),
-            "ownership": "KiCad add-on; never installed or pinned by this framework"}
+            "ownership": "distribution package; never installed or pinned by this framework"}
+
+
+def resolve_tool(name_or_path):
+    """An external tool named either by path or by bare command name.
+
+    A manifest that spells out an absolute path pins one exact binary, which
+    is what a reproducibility argument sometimes wants. A manifest that names
+    `kicad-cli` wants whichever one this machine installed, which is what
+    makes a fixture runnable on a machine other than the one that wrote it.
+    Both are honoured: anything containing a separator is taken as given, a
+    bare name is looked up on PATH, and a name that resolves to nothing is
+    returned unchanged so the probe below reports "not found" rather than
+    this function raising somewhere less explicable.
+    """
+    if not name_or_path or os.sep in name_or_path:
+        return name_or_path
+    return shutil.which(name_or_path) or name_or_path
 
 
 def _probe_kicad_cli(path):
-    if not path or not os.path.isfile(path):
+    resolved = resolve_tool(path)
+    if not resolved or not os.path.isfile(resolved):
         return {"name": "kicad-cli", "present": False, "version": None,
                 "path": path, "ok": False,
-                "detail": "not found; set tools.kicad_cli in the board manifest"}
+                "detail": "not found on PATH or at that path; set "
+                          "tools.kicad_cli in the board manifest"}
+    path = resolved
     try:
         proc = subprocess.run([path, "--version"], capture_output=True,
                               text=True, timeout=120)
@@ -143,23 +169,26 @@ def report(rows):
 
 
 def advice(rows):
-    """What to do about a broken environment. Never mutates anything."""
+    """What to do about a broken environment. Never mutates anything.
+
+    Every prerequisite here is externally owned - a distribution package
+    this framework reports on and never installs - so the advice is the
+    apt line a human runs, not something the validator does for them.
+    """
     out = []
     by_name = {r["name"]: r for r in rows}
     if not by_name.get("pcbnew", {}).get("present", True):
-        if not by_name.get("python", {}).get("looks_like_kicad_python", False):
-            out.append("This must be run with KiCad's own Python - the "
-                       "python executable inside your KiCad installation's "
-                       "bin directory, not the system interpreter:")
-            out.append("  <KiCad install>/bin/python  verification/run.py "
-                       "preflight")
-        else:
-            out.append("pcbnew is missing from this KiCad installation; "
-                       "repair or reinstall KiCad.")
+        out.append("pcbnew is not importable. It ships inside the kicad "
+                   "distribution package, which installs it into this "
+                   "interpreter's dist-packages:")
+        out.append("  sudo apt install kicad")
     if not by_name.get("shapely", {}).get("present", True):
-        out.append("Shapely is provided by a KiCad add-on. Install it through "
-                   "KiCad's Plugin and Content Manager. This framework does not "
-                   "install into an environment it does not own.")
+        out.append("Shapely is a distribution package:")
+        out.append("  sudo apt install python3-shapely")
+    if not by_name.get("kicad-cli", {}).get("present", True):
+        out.append("kicad-cli is not on PATH and tools.kicad_cli names no "
+                   "existing file. It ships in the kicad package:")
+        out.append("  sudo apt install kicad")
     for r in rows:
         if r.get("present") and not r["ok"]:
             out.append(f"{r['name']} is present but unusable: {r['detail']}")

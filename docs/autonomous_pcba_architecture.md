@@ -34,8 +34,8 @@ try next, and whether a board is ready for fabrication.
 - **KiCad** — the authoritative board representation. Native files
   are the design authority; generators produce candidates.
 - **Headless discipline** (`pcbqa/headless.py`) — no code path may
-  raise a dialog a human must dismiss: wx asserts and Windows error
-  boxes are disarmed at every entry point, and a suite canary fails
+  raise a dialog a human must dismiss: wx asserts are disarmed at
+  every entry point, and a suite canary fails
   if the blocking path ever becomes reachable again. An autonomous
   pipeline that can be stalled by a popup is not autonomous.
 

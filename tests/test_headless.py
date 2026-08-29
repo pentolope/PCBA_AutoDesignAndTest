@@ -1,12 +1,11 @@
 """No code path may raise a dialog a human must dismiss - proven by
 STATE, never inferred from time.
 
-The protection is queryable: the wx assert mode and the Windows
-error mode are read back directly, so a regression fails in
-milliseconds with the offending state named. Only after the state
-PROVES the modal path unreachable does the canary trigger the known
-misuse (a via width read without a layer argument) - to verify the
-report channel: the assert's file/line/message must reach stderr,
+The protection is queryable: the wx assert mode is read back
+directly, so a regression fails in milliseconds with the offending
+state named. Only after the state PROVES the modal path unreachable
+does the canary trigger the known misuse (a via width read without a
+layer argument) - to verify the report channel: the assert's file/line/message must reach stderr,
 because nonblocking was never meant to mean silent. No dialog can
 appear even when this test fails; the subprocess timeout below is
 ordinary containment for a child process, not the detector.
@@ -38,9 +37,6 @@ if state["wx_assert_mode_is_log"] is not True:
     # exists to prevent. The state IS the failure.
     print("STATE-BAD: wx assert mode is not log")
     sys.exit(3)
-if not state["windows_error_mode_ok"]:
-    print("STATE-BAD: Windows error mode bits missing")
-    sys.exit(3)
 import pcbnew
 board = pcbnew.CreateEmptyBoard()
 via = pcbnew.PCB_VIA(board)
@@ -58,7 +54,6 @@ class NothingBlocksOnADialog(unittest.TestCase):
         headless.suppress_blocking_ui()
         state = headless.protection_state()
         self.assertIs(state["wx_assert_mode_is_log"], True)
-        self.assertIs(state["windows_error_mode_ok"], True)
 
     def test_state_first_canary_demands_the_report(self):
         """State is asserted BEFORE the trigger, so a protection

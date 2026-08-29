@@ -312,13 +312,8 @@ def run_contract(contract_record, dut, base_directory, workdir,
                        "build_log_tail":
                            (build.stdout + build.stderr)[-2000:]})
         return result
-    binary = None
-    for candidate in ("contract_model", "contract_model.exe"):
-        candidate_path = os.path.join(workdir, "obj_dir", candidate)
-        if os.path.isfile(candidate_path):
-            binary = candidate_path
-            break
-    if binary is None:
+    binary = os.path.join(workdir, "obj_dir", "contract_model")
+    if not os.path.isfile(binary):
         result.update({"status": "build-failed",
                        "assertions_passed": None,
                        "build_log_tail":

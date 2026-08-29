@@ -63,43 +63,25 @@ def _stub_cli(directory, name, *, exit_code=0, stderr="", writes=None,
               writes_to_arg=6):
     """A stand-in for kicad-cli that misbehaves in one specific way.
 
-    Rendered for whichever platform is running: batch with CRLF on Windows, a
-    shebang-equipped POSIX shell script with LF elsewhere. Written from a
-    description rather than from a literal script, because a literal batch
-    file is not a stub anywhere else - it is an unexecutable file, and the
-    gate then errors for a reason other than the one under test.
+    A shebang-equipped shell script, marked executable, written from a
+    description rather than from a literal script so each test names the one
+    misbehaviour it needs.
 
     `writes` is text the stub puts in the file named by positional argument
     `writes_to_arg`, which is how these tests hand the gate a report it
     cannot read.
     """
-    windows = os.name == "nt"
-    path = os.path.join(directory, name + (".cmd" if windows else ".sh"))
-    lines = []
-    if windows:
-        lines.append("@echo off")
-        if stderr:
-            lines.append("echo {} 1>&2".format(stderr))
-        if writes is not None:
-            # batch `echo` takes quotes literally; escaping them would put
-            # backslashes in the report and test the JSON reader on the wrong
-            # kind of garbage.
-            lines.append("echo {} > %{}".format(writes, writes_to_arg))
-        lines.append("exit /b {}".format(exit_code))
-        text = "\r\n".join(lines) + "\r\n"
-    else:
-        lines.append("#!/bin/sh")
-        if stderr:
-            lines.append("echo {} >&2".format(stderr))
-        if writes is not None:
-            lines.append("printf '%s\\n' '{}' > \"${}\"".format(
-                writes.replace("'", "'\\''"), writes_to_arg))
-        lines.append("exit {}".format(exit_code))
-        text = "\n".join(lines) + "\n"
+    path = os.path.join(directory, name + ".sh")
+    lines = ["#!/bin/sh"]
+    if stderr:
+        lines.append("echo {} >&2".format(stderr))
+    if writes is not None:
+        lines.append("printf '%s\\n' '{}' > \"${}\"".format(
+            writes.replace("'", "'\\''"), writes_to_arg))
+    lines.append("exit {}".format(exit_code))
     with open(path, "w", encoding="utf-8", newline="") as fh:
-        fh.write(text)
-    if not windows:
-        os.chmod(path, 0o755)
+        fh.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o755)
     return path
 
 

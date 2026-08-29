@@ -74,43 +74,22 @@ FAKE_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 def _stub_cli(directory, name, *, exit_code=0, stderr="", runs=None):
     """A stand-in for kicad-cli that behaves exactly as badly as we need.
 
-    Written for whichever platform is running: a batch file with CRLF on
-    Windows, and a shebang-equipped POSIX shell script with LF everywhere
-    else. It used to be batch with CRLF unconditionally, which meant these
-    tests only tested anything on Windows - elsewhere the "stub" was an
-    unexecutable file and the gate reported a failed invocation, which is what
-    two of these tests assert anyway.
-
-    `runs` names a Python script the stub hands its arguments to, which is how
-    a stub produces a report without KiCad.
+    A shebang-equipped shell script, marked executable. `runs` names a Python
+    script the stub hands its arguments to, which is how a stub produces a
+    report without KiCad; a stub that swallowed the helper's exit code would
+    report a clean run whatever the helper did, so the `|| exit 1` is
+    load-bearing.
     """
-    windows = os.name == "nt"
-    path = os.path.join(directory, name + (".cmd" if windows else ".sh"))
-    lines = []
-    if windows:
-        lines.append("@echo off")
-        if stderr:
-            lines.append("echo {} 1>&2".format(stderr))
-        if runs:
-            lines.append('"{}" "{}" %*'.format(sys.executable, runs))
-            # A stub that swallowed the helper's exit code would report a
-            # clean run whatever the helper did.
-            lines.append("if errorlevel 1 exit /b 1")
-        lines.append("exit /b {}".format(exit_code))
-        text = "\r\n".join(lines) + "\r\n"
-    else:
-        lines.append("#!/bin/sh")
-        if stderr:
-            lines.append("echo {} >&2".format(stderr))
-        if runs:
-            lines.append('"{}" "{}" "$@" || exit 1'.format(sys.executable,
-                                                           runs))
-        lines.append("exit {}".format(exit_code))
-        text = "\n".join(lines) + "\n"
+    path = os.path.join(directory, name + ".sh")
+    lines = ["#!/bin/sh"]
+    if stderr:
+        lines.append("echo {} >&2".format(stderr))
+    if runs:
+        lines.append('"{}" "{}" "$@" || exit 1'.format(sys.executable, runs))
+    lines.append("exit {}".format(exit_code))
     with open(path, "w", encoding="utf-8", newline="") as fh:
-        fh.write(text)
-    if not windows:
-        os.chmod(path, 0o755)
+        fh.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o755)
     return path
 
 

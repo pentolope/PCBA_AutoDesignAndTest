@@ -5,7 +5,7 @@
   "description": "Portability acceptance fixture. A structurally different board configured only through this manifest; the validator executable is unchanged. Gates whose policy is absent here must report NOT_APPLICABLE.",
   "project_root": "../fixtures/portability",
   "tools": {
-    "kicad_cli": "C:\\Program Files\\KiCad\\10.0\\bin\\kicad-cli.exe"
+    "kicad_cli": "kicad-cli"
   },
   "sources": {
     "pcb": "widget_b.kicad_pcb"
