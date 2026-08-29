@@ -209,6 +209,119 @@ class ObstaclesHonorPerNetPairClearances(unittest.TestCase):
         self.assertGreaterEqual(distance, 0.25 * 0.999 - 1e-6)
 
 
+class OwnNetPadsAreNotFreeCopper(unittest.TestCase):
+    """A same-net pad carrying no terminal of this plan is an
+    obstacle: grazing its corner would fuse a sub-minimum copper
+    junction, which is exactly what connection-width DRC exists to
+    reject."""
+
+    def setUp(self):
+        geom.configure(0.001)
+
+    def test_the_path_keeps_clear_of_a_bystander_own_pad(self):
+        from shapely.geometry import LineString
+        board = synth.new_board(layers=2, size_mm=30.0)
+        gnd = synth.add_net(board, "GNDX")
+        synth.add_pad_footprint(board, "SRC", 10.0, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (0.4, 0.4),
+                                net=gnd)
+        # A SAME-net bystander pad right beside the straight path.
+        synth.add_pad_footprint(board, "BYS", 11.2, 10.25,
+                                pcbnew.PAD_SHAPE_RECT, (0.6, 0.6),
+                                net=gnd)
+        proposal = critical_topology.local_connect(
+            board, "GNDX", (10.0, 10.0), (12.4, 10.0), _rules(),
+            geom.pad_copper_polygon)
+        bystander = geom.pad_copper_polygon(
+            [p for fp in board.GetFootprints()
+             if fp.GetReference() == "BYS"
+             for p in fp.Pads()][0], pcbnew.F_Cu)
+        for segment in proposal["tracks"]:
+            line = LineString([tuple(segment["start_mm"]),
+                               tuple(segment["end_mm"])])
+            copper = line.buffer(segment["width_mm"] / 2.0)
+            # Either fully clear of the bystander (by the rules)
+            # or not touching it at all - never a graze.
+            self.assertGreaterEqual(
+                copper.distance(bystander),
+                0.15 * 0.999 - 1e-6)
+
+    def test_terminal_pads_stay_landable(self):
+        board = synth.new_board(layers=2, size_mm=30.0)
+        gnd = synth.add_net(board, "GNDX")
+        synth.add_pad_footprint(board, "SRC", 10.0, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (0.4, 0.4),
+                                net=gnd)
+        synth.add_pad_footprint(board, "DST", 12.0, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (0.6, 0.6),
+                                net=gnd)
+        proposal = critical_topology.local_connect(
+            board, "GNDX", (10.0, 10.0), (12.0, 10.0), _rules(),
+            geom.pad_copper_polygon)
+        self.assertGreaterEqual(len(proposal["tracks"]), 1)
+
+
+class AlternativeEndpointsWidenSearchNotAcceptance(
+        unittest.TestCase):
+    """A blocked primary endpoint no longer dooms the escape: the
+    SAME field, rules and reverification try the declared
+    alternatives in order, and the proposal names which endpoint
+    won."""
+
+    def setUp(self):
+        geom.configure(0.001)
+
+    def test_a_blocked_primary_falls_back_to_a_legal_alternative(
+            self):
+        board = synth.new_board(layers=2, size_mm=30.0)
+        gnd = synth.add_net(board, "GNDX")
+        other = synth.add_net(board, "SIG")
+        synth.add_pad_footprint(board, "SRC", 10.0, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (0.4, 0.4),
+                                net=gnd)
+        # A foreign pad sits exactly on the primary endpoint.
+        synth.add_pad_footprint(board, "WALL", 11.6, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.2, 1.2),
+                                net=other)
+        primary = (11.6, 10.0)
+        alternatives = [(10.0, 11.6), (8.4, 10.0)]
+        proposal = critical_topology.local_connect(
+            board, "GNDX", (10.0, 10.0), primary, _rules(),
+            geom.pad_copper_polygon, alternatives=alternatives)
+        self.assertEqual(proposal["endpoint_used"], [10.0, 11.6])
+        self.assertEqual(proposal["endpoint_index"], 1)
+        self.assertGreaterEqual(len(proposal["tracks"]), 1)
+        # The emitted copper still clears the wall by the rules.
+        from shapely.geometry import LineString
+        wall = geom.pad_copper_polygon(
+            [p for fp in board.GetFootprints()
+             if fp.GetReference() == "WALL"
+             for p in fp.Pads()][0], pcbnew.F_Cu)
+        for segment in proposal["tracks"]:
+            line = LineString([tuple(segment["start_mm"]),
+                               tuple(segment["end_mm"])])
+            self.assertGreaterEqual(
+                line.buffer(segment["width_mm"] / 2.0)
+                .distance(wall), 0.15 * 0.999 - 1e-6)
+
+    def test_all_endpoints_blocked_still_refuses(self):
+        board = synth.new_board(layers=2, size_mm=30.0)
+        gnd = synth.add_net(board, "GNDX")
+        other = synth.add_net(board, "SIG")
+        synth.add_pad_footprint(board, "SRC", 10.0, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (0.4, 0.4),
+                                net=gnd)
+        synth.add_pad_footprint(board, "WALL", 11.6, 10.0,
+                                pcbnew.PAD_SHAPE_RECT, (1.2, 1.2),
+                                net=other)
+        with self.assertRaisesRegex(TopologyPlanError,
+                                    "2 candidate"):
+            critical_topology.local_connect(
+                board, "GNDX", (10.0, 10.0), (11.6, 10.0),
+                _rules(), geom.pad_copper_polygon,
+                alternatives=[(11.7, 10.1)])
+
+
 class SuppliedClearanceMapsMustBeComplete(unittest.TestCase):
 
     def setUp(self):

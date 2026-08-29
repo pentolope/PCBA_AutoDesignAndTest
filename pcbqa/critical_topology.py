@@ -63,6 +63,44 @@ def validate_rules(rules):
     return rules
 
 
+def _reentry_segment(segments, terminal_polygons):
+    """The first segment whose copper clips a terminal pad in
+    ISOLATION - away from the path's own wide landing - fusing a
+    junction narrower than any connection minimum. Segments that
+    land on the pad (an endpoint inside), and segments whose
+    overlap touches the landing copper (the natural exit hugging
+    the pad edge beside its connection), are clean."""
+    from shapely.geometry import LineString, Point
+    from shapely.ops import unary_union
+    for polygon in terminal_polygons:
+        grown = polygon.buffer(1e-6)
+        landing = []
+        crossers = []
+        for segment in segments:
+            start = Point(*segment["start_mm"])
+            end = Point(*segment["end_mm"])
+            line = LineString([tuple(segment["start_mm"]),
+                               tuple(segment["end_mm"])])
+            copper = line.buffer(segment["width_mm"] / 2.0)
+            if not copper.intersects(grown):
+                continue
+            if grown.contains(start) or grown.contains(end):
+                landing.append(copper)
+            else:
+                crossers.append((segment, copper))
+        if not crossers:
+            continue
+        landed = unary_union(landing) if landing else None
+        for segment, copper in crossers:
+            overlap = copper.intersection(grown)
+            if overlap.is_empty:
+                continue
+            if landed is not None and                     overlap.distance(landed) < 1e-9:
+                continue
+            return segment
+    return None
+
+
 def _layer_id(board, name):
     for layer in board.GetEnabledLayers().CuStack():
         if board.GetLayerName(layer) == name:
@@ -96,7 +134,8 @@ class LocalField:
     """
 
     def __init__(self, board, net_name, center_mm, rules,
-                 pad_polygon, outline=None, net_clearances=None):
+                 pad_polygon, outline=None, net_clearances=None,
+                 terminal_points=None):
         import pcbnew
         from shapely.geometry import LineString, Point, box
         from shapely.ops import unary_union
@@ -117,6 +156,21 @@ class LocalField:
         # base clearance.
         self._clearances_supplied = net_clearances is not None
         self.net_clearances = dict(net_clearances or {})
+        # Points the planned copper is ALLOWED to land on. An
+        # own-net pad that carries none of them is an OBSTACLE at
+        # the base clearance: brushing its corner would fuse a
+        # copper junction narrower than any connection minimum -
+        # the 0.006 mm graze the DRC rightly rejects - and serves
+        # no connection this plan is making. None keeps every
+        # own-net pad passable (the pre-existing behaviour).
+        self._terminal_points = ([tuple(point) for point
+                                  in terminal_points]
+                                 if terminal_points is not None
+                                 else None)
+        #: Terminal pads' own polygons, kept so the emitted path
+        #: can be checked for RE-ENTRY: the first landing is a
+        #: connection, a later corner-clip is a hazard.
+        self.terminal_pad_polygons = []
         self.board = board
         self.net = net_name
         self.rules = rules
@@ -246,7 +300,19 @@ class LocalField:
                         continue
                     if same_net:
                         if layer == self.layer:
-                            self.own_copper.append(shape)
+                            if self._terminal_points is None or \
+                                    any(shape.buffer(1e-6).contains(
+                                        Point(px, py))
+                                        for px, py
+                                        in self._terminal_points):
+                                self.own_copper.append(shape)
+                                if self._terminal_points \
+                                        is not None:
+                                    self.terminal_pad_polygons \
+                                        .append(shape)
+                            else:
+                                _add(route_obstacles,
+                                     pad.GetNetname(), shape)
                     else:
                         if layer == self.layer:
                             _add(route_obstacles, pad.GetNetname(),
@@ -490,15 +556,44 @@ def stitch_to_plane(board, net_name, anchor_xy, plane_net, rules,
     """
     field = LocalField(board, net_name, anchor_xy, rules,
                        pad_polygon, outline=outline,
-                       net_clearances=net_clearances)
+                       net_clearances=net_clearances,
+                       terminal_points=[anchor_xy])
     plane_fill = field.plane_fill_at(plane_net)
-    site = field.find_via_site(anchor_xy, plane_fill, prefer_angle)
-    if site is None:
-        raise TopologyPlanError(
-            "no via site within the window satisfies copper "
-            "clearance, the mask annulus target, hole-to-hole and "
-            "keepout rules while landing on plane fill")
-    segments = field.escape(anchor_xy, site)
+    # Up to three via-site attempts around the preferred angle:
+    # a path that would RE-CROSS its own terminal pad (a corner
+    # graze fusing a sub-minimum junction) refuses that site and
+    # tries the next, with the last reason kept.
+    import math as math_module
+    segments = None
+    last_reason = None
+    for angle_offset in (0.0, 2.0 * math_module.pi / 3.0,
+                         -2.0 * math_module.pi / 3.0):
+        site = field.find_via_site(anchor_xy, plane_fill,
+                                   prefer_angle + angle_offset)
+        if site is None:
+            last_reason = (
+                "no via site within the window satisfies copper "
+                "clearance, the mask annulus target, hole-to-hole "
+                "and keepout rules while landing on plane fill")
+            continue
+        try:
+            candidate_segments = field.escape(anchor_xy, site)
+        except TopologyPlanError as error:
+            last_reason = str(error)
+            continue
+        reentry = _reentry_segment(candidate_segments,
+                                   field.terminal_pad_polygons)
+        if reentry is not None:
+            last_reason = (
+                "path re-crosses its own terminal pad near {} "
+                "without landing on it; a corner graze would "
+                "fuse a sub-minimum copper junction".format(
+                    reentry["start_mm"]))
+            continue
+        segments = candidate_segments
+        break
+    if segments is None:
+        raise TopologyPlanError(last_reason)
     return {
         "kind": "critical-topology-proposal",
         "net": net_name,
@@ -513,21 +608,60 @@ def stitch_to_plane(board, net_name, anchor_xy, plane_net, rules,
 
 
 def local_connect(board, net_name, from_xy, to_xy, rules,
-                  pad_polygon, outline=None, net_clearances=None):
-    """A verified short connection between two points of one net."""
+                  pad_polygon, outline=None, net_clearances=None,
+                  alternatives=None):
+    """A verified short connection between two points of one net.
+
+    ``alternatives`` widens the SEARCH, never the acceptance: an
+    ordered list of fallback endpoints tried - with the same rules,
+    the same obstacle field and the same exact reverification -
+    when the primary endpoint cannot be reached. A destination is
+    scaffolding geometry; which legal one the copper lands on is
+    design freedom, and the gates still judge whatever is emitted.
+    The proposal records which endpoint was used and how many were
+    tried, so a consumer can see the search, not just the result.
+    """
     field = LocalField(board, net_name, from_xy, rules, pad_polygon,
                        outline=outline,
-                       net_clearances=net_clearances)
-    segments = field.escape(from_xy, to_xy)
-    return {
-        "kind": "critical-topology-proposal",
-        "net": net_name,
-        "tracks": segments,
-        "vias": [],
-        "verified": "generated at declared values and re-verified "
-                    "against exact obstacle geometry; board gates "
-                    "remain the authority",
-    }
+                       net_clearances=net_clearances,
+                       terminal_points=[from_xy, to_xy]
+                       + [tuple(candidate) for candidate
+                          in (alternatives or [])])
+    endpoints = [tuple(to_xy)] + [tuple(candidate) for candidate
+                                  in (alternatives or [])]
+    failures = []
+    for index, endpoint in enumerate(endpoints):
+        try:
+            segments = field.escape(from_xy, endpoint)
+        except TopologyPlanError as error:
+            failures.append(str(error))
+            continue
+        reentry = _reentry_segment(segments,
+                                   field.terminal_pad_polygons)
+        if reentry is not None:
+            failures.append(
+                "path re-crosses its own terminal pad near "
+                "{} without landing on it; a corner graze "
+                "would fuse a sub-minimum copper "
+                "junction".format(reentry["start_mm"]))
+            continue
+        return {
+            "kind": "critical-topology-proposal",
+            "net": net_name,
+            "tracks": segments,
+            "vias": [],
+            "endpoint_used": list(endpoint),
+            "endpoint_index": index,
+            "endpoints_tried": index + 1,
+            "verified": "generated at declared values and "
+                        "re-verified against exact obstacle "
+                        "geometry; board gates remain the "
+                        "authority",
+        }
+    raise TopologyPlanError(
+        "no endpoint of {} candidate(s) is reachable at the "
+        "declared values within the search window (last: "
+        "{})".format(len(endpoints), failures[-1]))
 
 
 def apply_proposal(board, proposal):
