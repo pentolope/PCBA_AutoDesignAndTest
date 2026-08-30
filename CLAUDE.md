@@ -1,4 +1,4 @@
-# PCB_AutoDesignAndTest — generic KiCad/JLCPCB design verification toolkit
+# PCBA_AutoDesignAndTest — generic KiCad/JLCPCB design verification toolkit
 
 ## Mission
 

@@ -8,7 +8,7 @@ your manifest.
 ## 1. Add the submodule
 
 ```bash
-git submodule add https://github.com/pentolope/PCB_AutoDesignAndTest tooling/PCB_AutoDesignAndTest
+git submodule add https://github.com/pentolope/PCBA_AutoDesignAndTest tooling/PCB_AutoDesignAndTest
 ```
 
 ## 2. Start with the minimum manifest
