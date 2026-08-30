@@ -157,8 +157,16 @@ def utcnow():
 # ---------------------------------------------------------------------------
 
 # Directories that are never part of a design and must never be copied with
-# one. `.git` is enormous and irrelevant; the rest are caches.
-NEVER_COPY = (".git", "__pycache__", ".mypy_cache", ".pytest_cache")
+# one. `.git` is enormous and irrelevant; the caches are caches; and the
+# vendored router is neither a design nor a release input - a clean-room
+# release runs ERC, DRC, the exports and the parity checks and never routes
+# anything, so copying KiCadRoutingTools into every attempt would add its
+# whole working tree twice per release, most of it machine-specific Rust
+# build output whose bytes differ between two builds on one machine. Which
+# router drew the copper is provenance, and `pcbqa.krt` records it where it
+# belongs: at routing time, against the routed candidate.
+NEVER_COPY = (".git", "__pycache__", ".mypy_cache", ".pytest_cache",
+              "KiCadRoutingTools")
 
 
 def copy_project(source, destination, skip_archives=False):

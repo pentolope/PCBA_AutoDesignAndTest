@@ -71,38 +71,147 @@ class ResolutionIsDeterministicAndFailClosed(unittest.TestCase):
                          "10.0"), "old_pcm")
         with self.assertRaisesRegex(KRTError,
                                     "disabled_pcm_plugins"):
-            krt.resolve(configured=disabled, environ={})
+            krt.resolve(configured=disabled, environ={},
+                        vendored=None)
         # And a scan never even considers it.
         with self.assertRaisesRegex(KRTError, "no KiCadRouting"):
             krt.resolve(plugin_dirs=[os.path.join(
                 self.base, "disabled_pcm_plugins", "10.0")],
-                environ={})
+                environ={}, vendored=None)
 
     def test_missing_krt_fails_clearly(self):
         with self.assertRaisesRegex(KRTError,
                                     "no KiCadRoutingTools"):
             krt.resolve(plugin_dirs=[os.path.join(self.base,
                                                   "empty")],
-                        environ={})
+                        environ={}, vendored=None)
         with self.assertRaisesRegex(KRTError, "not a "
                                     "KiCadRoutingTools"):
             krt.resolve(configured=os.path.join(self.base,
                                                 "nonsense"),
-                        environ={})
+                        environ={}, vendored=None)
 
     def test_conflicting_installations_refuse_as_ambiguous(self):
         plugins = os.path.join(self.base, "plugins")
         _make_root(plugins, "KiCadRoutingTools")
         _make_root(plugins, "com_github_other_copy")
         with self.assertRaisesRegex(KRTError, "ambiguous"):
-            krt.resolve(plugin_dirs=[plugins], environ={})
+            krt.resolve(plugin_dirs=[plugins], environ={},
+                        vendored=None)
 
     def test_single_plugin_installation_resolves(self):
         plugins = os.path.join(self.base, "plugins-single")
         root = _make_root(plugins, "KiCadRoutingTools")
-        resolved = krt.resolve(plugin_dirs=[plugins], environ={})
+        resolved = krt.resolve(plugin_dirs=[plugins], environ={},
+                               vendored=None)
         self.assertEqual(resolved["path"],
                          os.path.realpath(root))
+
+
+class TheVendoredSubmoduleIsTheDefaultSource(unittest.TestCase):
+    """The router ships with the toolkit, so a recursive clone routes
+    without a sibling checkout - but a named source still outranks
+    it, and an absent one must not pretend to be present."""
+
+    def setUp(self):
+        self.base = synth.tempdir("krt-vendored")
+        import shutil
+        for stale in os.listdir(self.base):
+            shutil.rmtree(os.path.join(self.base, stale),
+                          ignore_errors=True)
+
+    def test_the_real_submodule_resolves_and_is_a_krt_root(self):
+        path = krt.vendored_path()
+        self.assertIsNotNone(
+            path, "the toolkit ships KiCadRoutingTools as a submodule; "
+                  "run git submodule update --init --recursive")
+        resolved = krt.resolve(environ={})
+        self.assertEqual(resolved["origin"], "vendored submodule")
+        self.assertEqual(resolved["path"], os.path.realpath(path))
+
+    def test_it_beats_a_plugin_installation(self):
+        plugins = os.path.join(self.base, "plugins")
+        _make_root(plugins, "KiCadRoutingTools")
+        vendored = _make_root(self.base, "vendored")
+        resolved = krt.resolve(plugin_dirs=[plugins], environ={},
+                               vendored=vendored)
+        self.assertEqual(resolved["path"], os.path.realpath(vendored))
+        self.assertEqual(resolved["origin"], "vendored submodule")
+
+    def test_every_named_source_still_outranks_it(self):
+        vendored = _make_root(self.base, "vendored2")
+        named = _make_root(self.base, "named")
+        for kwargs, origin in (
+                ({"override": named}, "override"),
+                ({"configured": named}, "configured checkout")):
+            resolved = krt.resolve(environ={}, vendored=vendored,
+                                   **kwargs)
+            self.assertEqual(resolved["path"],
+                             os.path.realpath(named), origin)
+            self.assertEqual(resolved["origin"], origin)
+        resolved = krt.resolve(environ={"PCB_KRT_PATH": named},
+                               vendored=vendored)
+        self.assertEqual(resolved["path"], os.path.realpath(named))
+
+    def test_a_vendored_path_that_is_not_a_root_is_an_error(self):
+        with self.assertRaisesRegex(KRTError, "not a KiCadRoutingTools"):
+            krt.resolve(environ={},
+                        vendored=os.path.join(self.base, "nothing"))
+
+    def test_an_uninitialised_submodule_reads_as_absent(self):
+        """A non-recursive clone leaves an EMPTY directory where the
+        submodule goes. That must read as "no vendored router", not
+        as a broken one - otherwise the default path would refuse on
+        a checkout that simply has not run `submodule update`.
+
+        This exercises the DEFAULT path, by moving VENDORED itself:
+        passing `vendored=` explicitly would take the named-source
+        branch, which is a different contract (see the test below).
+        """
+        empty = os.path.join(self.base, "uninitialised")
+        os.makedirs(empty, exist_ok=True)
+        original = krt.VENDORED
+        krt.VENDORED = empty
+        try:
+            self.assertIsNone(krt.vendored_path())
+            # ...so resolution falls through to the scan, and with no
+            # installation to find it refuses by name rather than
+            # returning an empty directory as a router.
+            with self.assertRaisesRegex(KRTError, "no KiCadRoutingTools"):
+                krt.resolve(environ={}, plugin_dirs=[])
+            # ...and a real one at that path is picked up again.
+            _make_root(self.base, "uninitialised")
+            self.assertEqual(krt.vendored_path(), empty)
+            self.assertEqual(krt.resolve(environ={})["origin"],
+                             "vendored submodule")
+        finally:
+            krt.VENDORED = original
+
+    def test_the_refusal_names_the_submodule_and_the_remedy(self):
+        """Vendoring makes "cloned without submodules" the likeliest
+        way to have no router at all, so the refusal a user actually
+        reads must name that cause and the command that fixes it -
+        not just enumerate the sources it did not find."""
+        original = krt.VENDORED
+        krt.VENDORED = os.path.join(self.base, "absent")
+        try:
+            with self.assertRaises(KRTError) as caught:
+                krt.resolve(environ={}, plugin_dirs=[])
+        finally:
+            krt.VENDORED = original
+        message = str(caught.exception)
+        self.assertIn("vendored", message.lower())
+        self.assertIn(os.path.join(self.base, "absent"), message)
+        self.assertIn("git submodule update --init --recursive", message)
+
+    def test_a_named_vendored_path_is_held_to_the_named_contract(self):
+        """Named explicitly and wrong is an ERROR, never a silent
+        fall-through - the same rule every other named source obeys.
+        Only the DEFAULT may be absent quietly."""
+        empty = os.path.join(self.base, "named-but-empty")
+        os.makedirs(empty, exist_ok=True)
+        with self.assertRaisesRegex(KRTError, "not a KiCadRoutingTools"):
+            krt.resolve(environ={}, vendored=empty)
 
 
 class ProvenanceRecordsTheActualIdentity(unittest.TestCase):

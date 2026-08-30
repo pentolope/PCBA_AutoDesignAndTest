@@ -1,0 +1,4 @@
+[submodule "tooling/KiCadRoutingTools"]
+	path = tooling/KiCadRoutingTools
+	url = https://github.com/pentolope/KiCadRoutingTools.git
+	branch = pcba-autonomy

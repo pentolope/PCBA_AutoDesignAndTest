@@ -11,14 +11,28 @@ run:
     environment variable)
         -> configured development checkout (the consumer's own
            toolchain configuration)
+        -> the router vendored into this toolkit as the
+           ``tooling/KiCadRoutingTools`` submodule
         -> the active KiCad plugin installation (a scan of the
            caller-named plugin directories; MORE than one valid
            installation refuses as ambiguous)
         -> refusal.
 
-Nothing else on disk is ever searched, and a path under a
-``disabled_pcm_plugins`` directory refuses outright - a disabled
-installation exists to be recoverable, never to be executed.
+The only path searched that no caller named is that submodule, which
+this module derives from its own ``__file__``; nothing else on disk
+is ever searched, and a path under a ``disabled_pcm_plugins``
+directory refuses outright - a disabled installation exists to be
+recoverable, never to be executed.
+
+Be plain about what vendoring costs. With the submodule present the
+plugin scan is unreachable: the pinned router wins, so an ambient
+PCM installation is silently NOT used, and the ambiguity and
+not-found refusals below it cannot fire. That is deliberate - a
+pinned, reviewable revision should beat whatever happens to be
+installed - and it is visible rather than silent, because every
+resolution reports the ``origin`` that answered and consumers log
+it. Pass ``vendored=None`` to resolve as if no submodule existed;
+that is how the scan and its refusals stay reachable and tested.
 
 A dirty checkout is honest evidence of an experiment, not of a
 reproducible build: ``provenance`` records the dirty state, and
@@ -42,6 +56,24 @@ ENV_OVERRIDE = "PCB_KRT_PATH"
 #: Files that make a directory a plausible KRT source root.
 _MARKERS = ("VERSION", os.path.join("py_router", "route.py"))
 
+#: The router vendored into this toolkit as a submodule, pinned to a
+#: commit that exists on its remote. This is the reproducible source:
+#: a recursive clone has it, at one known revision, with no sibling
+#: checkout to find and no absolute path to agree on.
+VENDORED = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "tooling", "KiCadRoutingTools")
+
+
+def vendored_path():
+    """The vendored router root, or None when submodules are absent.
+
+    Returns a path only when it actually looks like a KRT source
+    root, so an uninitialised submodule - an empty directory, which
+    is exactly what a non-recursive clone leaves - reads as absent
+    rather than as a broken installation.
+    """
+    return VENDORED if _is_krt_root(VENDORED) else None
+
 
 def _is_krt_root(path):
     return all(os.path.isfile(os.path.join(path, marker))
@@ -59,16 +91,28 @@ def _refuse_disabled(path, origin):
     return real
 
 
+#: Sentinel: use the real vendored submodule. A caller passing
+#: ``vendored=None`` is stating that no vendored router exists for
+#: this resolution, which is how the plugin-scan and refusal paths
+#: stay reachable and testable now that a submodule ships with the
+#: toolkit and would otherwise always win first.
+_VENDORED_DEFAULT = object()
+
+
 def resolve(override=None, configured=None, plugin_dirs=None,
-            environ=None):
+            environ=None, vendored=_VENDORED_DEFAULT):
     """One KRT source root, by the declared order, or a refusal.
 
     ``override`` beats the PCB_KRT_PATH environment variable beats
-    ``configured`` beats a scan of ``plugin_dirs``. An explicit
-    source (override/env/configured) that does not validate is an
-    ERROR, never a silent fall-through - a caller who named a path
-    meant it. The plugin-directory scan accepts exactly one valid
-    installation; two is ambiguity and refuses.
+    ``configured`` beats the vendored submodule beats a scan of
+    ``plugin_dirs``. An explicit source (override/env/configured)
+    that does not validate is an ERROR, never a silent fall-through
+    - a caller who named a path meant it. The vendored submodule is
+    the default rather than an override because it is the only
+    source a fresh recursive clone is guaranteed to have, and the
+    only one pinned to a reviewable revision. The plugin-directory
+    scan accepts exactly one valid installation; two is ambiguity
+    and refuses.
     """
     env = os.environ if environ is None else environ
     for origin, value in (("override", override),
@@ -100,6 +144,17 @@ def resolve(override=None, configured=None, plugin_dirs=None,
                 continue
             if _is_krt_root(real):
                 found.append(real)
+    if vendored is _VENDORED_DEFAULT:
+        vendored = vendored_path()
+    elif vendored and not _is_krt_root(os.path.realpath(vendored)):
+        # Named explicitly and wrong is an error, like every other
+        # named source; only the default may be absent silently.
+        raise KRTError(
+            "vendored submodule names {}, which is not a "
+            "KiCadRoutingTools source root".format(vendored))
+    if vendored:
+        return {"path": _refuse_disabled(vendored, "vendored submodule"),
+                "origin": "vendored submodule"}
     unique = sorted(set(found))
     if len(unique) == 1:
         return {"path": unique[0],
@@ -113,9 +168,12 @@ def resolve(override=None, configured=None, plugin_dirs=None,
                 len(unique), unique, ENV_OVERRIDE))
     raise KRTError(
         "no KiCadRoutingTools source found: no override, no {} "
-        "environment value, no configured checkout, and no active "
-        "plugin installation in {}".format(
-            ENV_OVERRIDE, list(plugin_dirs or [])))
+        "environment value, no configured checkout, nothing vendored "
+        "at {}, and no active plugin installation in {}.\n"
+        "The vendored router is this toolkit's own submodule, so the "
+        "usual cause is a clone that did not take submodules. Run:  "
+        "git submodule update --init --recursive".format(
+            ENV_OVERRIDE, VENDORED, list(plugin_dirs or [])))
 
 
 def _git(path, *arguments):

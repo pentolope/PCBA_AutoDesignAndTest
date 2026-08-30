@@ -62,8 +62,23 @@ def _matches(rel, patterns):
 
 
 def _find(root, patterns):
+    """Files under `root` matching `patterns`, ignoring what is not
+    part of the design.
+
+    The same directories `copy_project` refuses to copy are pruned
+    here, and for the same reason: they hold no design, so nothing
+    inside them can be a finding about one. Without that, a lock
+    glob written for KiCad reaches into machinery it was never
+    about - `*-lock` is meant for `*.kicad_prl-lock`, and it also
+    matches the `.cargo-lock` that Rust leaves in the vendored
+    router's build tree, which blocked a release over a file no
+    KiCad ever touched. A stale lock in `.git` or a cache would
+    have done the same.
+    """
+    from .core import NEVER_COPY
     hits = []
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in NEVER_COPY]
         for name in files:
             full = os.path.join(dirpath, name)
             rel = os.path.relpath(full, root).replace("\\", "/")

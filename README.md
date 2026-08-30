@@ -9,11 +9,15 @@ label or a Python model says so. This repository contains no production board â€
 concrete designs appear only as isolated fixtures and examples.
 
 Consume it from a board repository as a pinned Git submodule at
-`tooling/PCB_AutoDesignAndTest`.
+`tooling/PCB_AutoDesignAndTest`. It carries one submodule of its own:
+KiCad Routing Tools at `tooling/KiCadRoutingTools`, pinned to a commit on its
+`pcba-autonomy` branch, so clone recursively.
 
 ## Commands
 
-Use KiCad's bundled Python; it provides `pcbnew` and `shapely`.
+Ubuntu, and the system Python 3: the `kicad` package installs `pcbnew` into
+this interpreter's `dist-packages` and `kicad-cli` onto PATH, and Shapely is
+`python3-shapely`. See `docs/prerequisites.md`.
 
 ```bash
 python3 run.py preflight

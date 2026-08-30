@@ -234,6 +234,59 @@ class CleanRoomIsolation(unittest.TestCase):
             self.assertNotIn("extra-F_Courtyard.gbr", zf.namelist())
 
 
+class TheLockScanLooksOnlyAtTheDesign(unittest.TestCase):
+    """A lock file means KiCad may have the DESIGN open, so the bytes
+    on disk are not necessarily the design and the release refuses.
+    That reasoning does not reach into directories that hold no
+    design - and one of them now ships with the toolkit, whose Rust
+    build tree leaves a `.cargo-lock` that the `*-lock` glob written
+    for `*.kicad_prl-lock` happily matches."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="pcbqa_lockscan_")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.globs = ["*.lck", "~*.lck", ".#*", "*-lock",
+                      "*.kicad_prl-lock"]
+
+    def _touch(self, *parts):
+        full = os.path.join(self.root, *parts)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write("")
+        return full
+
+    def test_a_lock_beside_the_design_is_still_found(self):
+        self._touch("~board.kicad_pro.lck")
+        self._touch("sub", "board.kicad_prl-lock")
+        self.assertEqual(
+            cleanroom._find(self.root, self.globs),
+            ["sub/board.kicad_prl-lock", "~board.kicad_pro.lck"])
+
+    def test_a_lock_inside_a_never_copied_directory_is_not(self):
+        for directory in core.NEVER_COPY:
+            self._touch(directory, "rust_router", "target", ".cargo-lock")
+            self._touch(directory, "stale.lck")
+        self.assertEqual(cleanroom._find(self.root, self.globs), [],
+                         "a directory that holds no design cannot "
+                         "hold a finding about one")
+
+    def test_the_vendored_router_specifically_cannot_block_a_release(self):
+        """The case that actually happened: Rust's build lock, at the
+        depth the submodule really sits at, under a name the KiCad
+        glob matches."""
+        self._touch("tooling", "PCB_AutoDesignAndTest", "tooling",
+                    "KiCadRoutingTools", "rust_router", "target",
+                    "release", ".cargo-lock")
+        self.assertEqual(cleanroom._find(self.root, self.globs), [])
+        # ...while a real one at the same depth still blocks.
+        self._touch("tooling", "PCB_AutoDesignAndTest", "tooling",
+                    "elsewhere", "board.kicad_prl-lock")
+        self.assertEqual(
+            cleanroom._find(self.root, self.globs),
+            ["tooling/PCB_AutoDesignAndTest/tooling/elsewhere/"
+             "board.kicad_prl-lock"])
+
+
 class CleanRoomHygiene(unittest.TestCase):
     """Preparation refuses to work from a tree it cannot trust."""
 

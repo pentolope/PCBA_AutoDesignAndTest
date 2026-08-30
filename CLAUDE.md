@@ -90,9 +90,23 @@ a fetch.
 
 ## Routing
 
-KiCad Routing Tools is the only supported router. The superseded external
-autorouter and its Specctra DSN/SES exchange have been removed, and neither is
-to be reintroduced.
+KiCad Routing Tools is the only supported router, and it is a submodule of
+this repository at `tooling/KiCadRoutingTools`, pinned to a commit on its
+`pcba-autonomy` branch. `pcbqa.krt` resolves it by a declared order - explicit
+override, `PCB_KRT_PATH`, a consumer's configured checkout, that submodule,
+then exactly one active plugin installation - so a recursive clone can route
+with no sibling checkout and no absolute path. It is vendored, never edited
+here: changes belong upstream, and the pin moves deliberately.
+
+It is also the one directory a clean-room release must not copy. A release
+runs ERC, DRC, the exports and the parity checks and never routes, so the
+router is not a release input; copying it would put its whole working tree,
+most of it machine-specific Rust build output, into every attempt twice.
+`core.NEVER_COPY` therefore names it. Which router drew the copper stays
+provenance, recorded at routing time by `krt.provenance`.
+
+The superseded external autorouter and its Specctra DSN/SES exchange have been
+removed, and neither is to be reintroduced.
 
 Every attempt records: source board digest; project and configuration digests;
 KiCad and KiCad-Python versions; the router's package identity, resolved path
