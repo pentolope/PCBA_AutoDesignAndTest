@@ -4,7 +4,7 @@
 
 A board-agnostic, fail-closed verification, routing and release toolkit for
 KiCad projects manufactured by JLCPCB. It is consumed by board repositories as
-a pinned Git submodule at `tooling/PCB_AutoDesignAndTest`.
+a pinned Git submodule at `tooling/PCBA_AutoDesignAndTest`.
 
 It contains **no production consumer board**. Concrete boards are permitted
 only as explicitly isolated examples or test fixtures, under `tests/fixtures/`

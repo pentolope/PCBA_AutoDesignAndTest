@@ -9,7 +9,7 @@ label or a Python model says so. This repository contains no production board â€
 concrete designs appear only as isolated fixtures and examples.
 
 Consume it from a board repository as a pinned Git submodule at
-`tooling/PCB_AutoDesignAndTest`. It carries one submodule of its own:
+`tooling/PCBA_AutoDesignAndTest`. It carries one submodule of its own:
 KiCad Routing Tools at `tooling/KiCadRoutingTools`, pinned to a commit on its
 `pcba-autonomy` branch, so clone recursively.
 

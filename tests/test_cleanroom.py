@@ -274,16 +274,16 @@ class TheLockScanLooksOnlyAtTheDesign(unittest.TestCase):
         """The case that actually happened: Rust's build lock, at the
         depth the submodule really sits at, under a name the KiCad
         glob matches."""
-        self._touch("tooling", "PCB_AutoDesignAndTest", "tooling",
+        self._touch("tooling", "PCBA_AutoDesignAndTest", "tooling",
                     "KiCadRoutingTools", "rust_router", "target",
                     "release", ".cargo-lock")
         self.assertEqual(cleanroom._find(self.root, self.globs), [])
         # ...while a real one at the same depth still blocks.
-        self._touch("tooling", "PCB_AutoDesignAndTest", "tooling",
+        self._touch("tooling", "PCBA_AutoDesignAndTest", "tooling",
                     "elsewhere", "board.kicad_prl-lock")
         self.assertEqual(
             cleanroom._find(self.root, self.globs),
-            ["tooling/PCB_AutoDesignAndTest/tooling/elsewhere/"
+            ["tooling/PCBA_AutoDesignAndTest/tooling/elsewhere/"
              "board.kicad_prl-lock"])
 
 

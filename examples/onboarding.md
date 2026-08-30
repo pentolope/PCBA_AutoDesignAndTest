@@ -8,7 +8,7 @@ your manifest.
 ## 1. Add the submodule
 
 ```bash
-git submodule add https://github.com/pentolope/PCBA_AutoDesignAndTest tooling/PCB_AutoDesignAndTest
+git submodule add https://github.com/pentolope/PCBA_AutoDesignAndTest tooling/PCBA_AutoDesignAndTest
 ```
 
 ## 2. Start with the minimum manifest
@@ -28,7 +28,7 @@ git submodule add https://github.com/pentolope/PCBA_AutoDesignAndTest tooling/PC
 ```
 
 ```bash
-python3 tooling/PCB_AutoDesignAndTest/run.py validate board/manifest.json
+python3 tooling/PCBA_AutoDesignAndTest/run.py validate board/manifest.json
 ```
 
 Every gate you have not configured reports `NOT_APPLICABLE` **with a reason**
@@ -93,7 +93,7 @@ origin.
 ## 6. Release
 
 ```bash
-python3 tooling/PCB_AutoDesignAndTest/run.py release board/manifest.json
+python3 tooling/PCBA_AutoDesignAndTest/run.py release board/manifest.json
 ```
 
 The release copies your project, purges every previously generated output *from
