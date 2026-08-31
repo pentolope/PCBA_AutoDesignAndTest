@@ -1,8 +1,24 @@
 # pcbqa — board-agnostic KiCad / JLCPCB verification and release
 
 A fail-closed validator that takes a native KiCad project plus a declarative
-manifest and produces a machine-readable pass/fail matrix, then builds and
-publishes a fabrication release only once every mandatory gate has passed.
+manifest and produces a machine-readable pass/fail matrix, generates the
+fabrication outputs a release commit carries, and proves that a commit is one a
+release tag may name.
+
+**A release is a Git tag.**
+
+- **commit** = the complete project state
+- **committed fabrication artifacts** = the exact historical manufacturing
+  outputs, kept as ordinary files so an old board can be refabricated years
+  later without regenerating anything
+- **Git tag** = the release identity
+- **toolkit release gates** = engineering proof that the tagged state is
+  acceptable
+
+Git already provides immutable history, branches, diffs, rollback and exact
+source identity. This toolkit does not reimplement any of that; it answers the
+engineering question Git cannot: are these artifacts the ones this design
+produces, and does this design pass.
 
 KiCad is the sole design authority: nothing is believed because a report, a
 label or a Python model says so. This repository contains no production board —
@@ -26,30 +42,55 @@ python3 run.py preflight
 python3 run.py selftest
 ```
 ```bash
-python3 run.py validate <manifest.json>
+python3 run.py build <manifest.json>
 ```
 ```bash
-python3 run.py release <manifest.json>
+python3 run.py validate <manifest.json> --write
 ```
 ```bash
-python3 run.py coherence <manifest.json>
+python3 run.py release-check <manifest.json>
 ```
 
 `<manifest.json>` is a path. For this repository's own fixtures a bare name also
 works — `portability`, `clean`, or a negative fixture's directory name.
 
-Every invocation owns one attempt directory and writes nothing outside it:
+## The release workflow
 
-    out/<board_id>/attempts/<attempt_id>/     work/, build/, diagnostics/
-    out/<board_id>/published/<release_id>/    immutable once created
-    out/<board_id>/latest.json                pointer, replaced atomically
+```text
+develop on a branch
+        ↓  run.py build          regenerate the fabrication outputs into the tree
+        ↓  run.py validate -w    judge the design and those exact artifacts
+        ↓  git commit            artifacts included; they are ordinary files
+        ↓  run.py release-check  clean tree, exact submodules, gates pass now
+        ↓  git tag -a            the release exists
+```
 
-`validate` exits nonzero on a blocking result. `release` builds the candidate
-under `build/` and publishes it only after every mandatory gate has passed, by
-renaming that directory into a name that did not exist before — so no release is
-ever overwritten. A failed release removes its own `build/`, keeps
-`diagnostics/DO_NOT_ORDER.txt`, and leaves any previously published release and
-the `latest.json` pointer byte-identical.
+There is no "published but unsealed release candidate". A branch is the
+work-in-progress mechanism; a tag is the release.
+
+`build` runs KiCad against a private copy — the design is never opened for
+writing — and installs into the paths the manifest declares, all or nothing. It
+also writes `fabrication.json`: the digest of every artifact it produced and the
+source closure it produced them from.
+
+`validate` exits nonzero on a blocking result. It is read-only unless `--write`
+is given, so ordinary development validation never touches the working tree.
+
+`release-check` writes nothing and changes no Git state. It exits zero only when
+Git can say the tree is exactly the commit (submodules included), every release
+artifact and every piece of required evidence is tracked, every mandatory gate
+passes now, and the committed verdict is about this same design. Creating the
+tag is a deliberate act and is left to the user.
+
+To re-verify a historical release, check the tag out and run `release-check`
+against it: the artifacts, the reports and the verdict are all in that commit,
+and nothing has to be regenerated. Prefer annotated tags (`git tag -a`, or
+`-s` to sign); protecting them from being moved or deleted is a property of the
+remote — GitHub tag-protection rules, or `receive.denyDeleteTag` on a bare
+repository — not something a validator can enforce locally.
+
+Scratch for one invocation lives in `out/<board_id>/<run_id>/` and nothing
+durable is kept there.
 
 ## Layout
 
@@ -59,8 +100,10 @@ the `latest.json` pointer byte-identical.
 | `pcbqa/geom.py` | native pad/mask/via geometry via KiCad's own effective shapes |
 | `pcbqa/gerber.py` | independent Gerber X2 + Excellon readers, incl. an aperture-macro interpreter |
 | `pcbqa/canonical.py` | checkout-independent digests, driven by `.gitattributes` |
-| `pcbqa/cleanroom.py` | isolated release runs and the source closure |
-| `pcbqa/coherence.py` | is a published package one run? |
+| `pcbqa/closure.py` | the source closure: what a result depends on |
+| `pcbqa/build.py` | generating the fabrication outputs and installing them |
+| `pcbqa/artifacts.py` | which committed files are the release artifact set |
+| `pcbqa/release.py` | the Git preconditions of a release tag |
 | `pcbqa/connectivity.py` | copper graph built from geometric intersection |
 | `pcbqa/rules/` | reusable rule types: `NetTopologyRule`, `ConnectorContractRule`, `PlacementRule` |
 | `pcbqa/gates/` | the gates themselves |
@@ -69,7 +112,7 @@ the `latest.json` pointer byte-identical.
 | `tests/manifests/` | manifests for this repository's own fixtures |
 | `tests/fixtures/` | fixtures, including one curated negative integration fixture |
 | `tests/paths.py` | where test assets live — one place, so fixtures can move |
-| `tests/consumer.py` | optional external board for tests that need a real release |
+| `tests/consumer.py` | optional external board for tests that need a real design |
 
 ## Scope: JLCPCB only
 

@@ -29,8 +29,10 @@ try next, and whether a board is ready for fabrication.
   `backend-unavailable` — never a pass, never a fabricated failure.
 - **This toolkit** — the authority for provenance, constraints,
   connectivity, coverage, condition semantics, validation gates and
-  release lifecycle. Fail-closed everywhere: refusals over guesses,
-  unknown keys refuse, silence never reads as evidence.
+  the engineering preconditions of a release tag. Fail-closed
+  everywhere: refusals over guesses, unknown keys refuse, silence
+  never reads as evidence. Release *history* is Git's: a release is
+  a tag over a commit that already carries its fabrication artifacts.
 - **KiCad** — the authoritative board representation. Native files
   are the design authority; generators produce candidates.
 - **Headless discipline** (`pcbqa/headless.py`) — no code path may

@@ -16,9 +16,7 @@ and if a real change to any of those inputs changes it. Both were broken:
 
 from __future__ import annotations
 
-import copy
 import json
-import re
 import os
 import shutil
 import sys
@@ -29,7 +27,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from pcbqa import canonical, cleanroom                        # noqa: E402
+from pcbqa import canonical, closure as closure_mod                        # noqa: E402
 from pcbqa.core import Manifest                               # noqa: E402
 
 from tests import consumer                                               # noqa: E402
@@ -100,7 +98,7 @@ def _flat(document, prefix=""):
 
 def _live_closure():
     manifest = Manifest(_live())
-    return cleanroom.source_closure(manifest, _policy())
+    return closure_mod.source_closure(manifest, _policy())
 
 
 @consumer.needed
@@ -209,7 +207,7 @@ class TheClosureCoversTheDesignAndNothingElse(unittest.TestCase):
                           "registry requires, so there is nothing to drop")
         document["reports"]["implementation_closure"] = [
             name for name in pinned if name != droppable[0]]
-        closure = cleanroom.source_closure(_manifest(document), _policy())
+        closure = closure_mod.source_closure(_manifest(document), _policy())
         # Consistent: the reduced declaration and the closure still match.
         executed = sorted(k[len("<executed>"):] for k in closure
                           if k.startswith("<executed>"))
@@ -273,11 +271,11 @@ class LineEndingsAreNotAChange(unittest.TestCase):
         lf, _ = self._project(b"\n")
         crlf, _ = self._project(b"\r\n")
         policy = _policy()
-        left = cleanroom.source_closure(lf, policy)
-        right = cleanroom.source_closure(crlf, policy)
+        left = closure_mod.source_closure(lf, policy)
+        right = closure_mod.source_closure(crlf, policy)
         self.assertEqual(sorted(left), sorted(right))
-        self.assertEqual(cleanroom.closure_digest(left),
-                         cleanroom.closure_digest(right),
+        self.assertEqual(closure_mod.closure_digest(left),
+                         closure_mod.closure_digest(right),
                          "the same design checked out with the other line "
                          "ending is not the same design")
 
@@ -285,14 +283,14 @@ class LineEndingsAreNotAChange(unittest.TestCase):
         """Otherwise the fix above would be indistinguishable from ignoring it."""
         crlf, project = self._project(b"\r\n")
         policy = _policy()
-        before = cleanroom.closure_digest(
-            cleanroom.source_closure(crlf, policy))
+        before = closure_mod.closure_digest(
+            closure_mod.source_closure(crlf, policy))
         target = os.path.join(project, "fabrication", "jlc_orientation",
                               "raw", "C7668.json")
         with open(target, "ab") as fh:
             fh.write(b" ")
-        after = cleanroom.closure_digest(
-            cleanroom.source_closure(crlf, policy))
+        after = closure_mod.closure_digest(
+            closure_mod.source_closure(crlf, policy))
         self.assertNotEqual(before, after,
                             "an edited evidence body left the closure alone")
 
@@ -313,105 +311,63 @@ class LineEndingsAreNotAChange(unittest.TestCase):
                          "identity of the board than the gate computes")
 
 
-class TheConfigurationIdentitySurvivesTheCleanRoom(unittest.TestCase):
-    """The clean room rewrites paths. It must not rewrite the identity."""
+class TheConfigurationIdentityCoversTheWholeManifest(unittest.TestCase):
+    """Every key, paths included.
 
-    def _rewritten_like_a_clean_room(self, document):
-        """Exactly the pointers derive_manifest() is entitled to change."""
-        out = copy.deepcopy(document)
-        out["board_id"] = str(out["board_id"]) + "-cleanroom"
-        out["project_root"] = "fixture/project"
-        out["fixture"] = dict(out["fixture"])
-        out["fixture"]["hash_file"] = "../HASHES.json"
-        out["fixture"]["attributes_file"] = "../.gitattributes"
-        out["reports"] = dict(out["reports"])
-        out["reports"]["files"] = ["../../reports/*.json"]
-        out["artifacts"] = dict(out["artifacts"])
-        for key in ("gerber_dir", "bom", "cpl"):
-            out["artifacts"][key] = "/run/build/" + key
-        out["artifacts"]["cpl_fields"] = {"Designator": "Designator"}
-        out["artifacts"]["cpl_origin"] = {"frame": "somewhere else"}
-        out["assembly"] = dict(out["assembly"])
-        out["assembly"]["bom_fields"] = {"designators": "Designator"}
-        out["archive"] = dict(out["archive"])
-        out["archive"]["zip"] = "/run/build/x.zip"
-        out["archive"]["manifest"] = "/run/build/MANIFEST.md"
-        out["archive"].pop("pre_normalization_digests", None)
-        return out
+    Nothing rewrites a manifest any more - a build reads it where it lies and
+    installs into the paths it names - so there is no leaf a board could be
+    excused from binding, and the exclusion list that used to exist for the
+    clean room is gone rather than left empty.
+    """
 
-    def test_rewriting_paths_does_not_change_the_identity(self):
-        origin = _manifest(_doc())
-        derived = _manifest(self._rewritten_like_a_clean_room(_doc()))
-        self.assertNotEqual(origin.sha256, derived.sha256,
-                            "the two manifests must really differ as files")
-        self.assertEqual(cleanroom.configuration_identity(origin),
-                         cleanroom.configuration_identity(derived),
-                         "a clean room's path rewrites changed the "
-                         "configuration identity, so its reports can never be "
-                         "checked from the repository")
-
-    def test_changing_a_covered_value_does_change_the_identity(self):
+    def test_changing_a_covered_value_changes_the_identity(self):
         origin = _manifest(_doc())
         edited = _doc()
         spec = edited["release_generation"]["cpl_orientation"]
         spec["registry"][0]["offset_deg"] = 90.0
-        self.assertNotEqual(cleanroom.configuration_identity(origin),
-                            cleanroom.configuration_identity(_manifest(edited)),
+        self.assertNotEqual(closure_mod.configuration_identity(origin),
+                            closure_mod.configuration_identity(_manifest(edited)),
                             "a changed reviewed offset left the configuration "
                             "identity alone")
 
     def test_a_new_threshold_is_covered_without_being_listed(self):
-        """Coverage is by default; only the path pointers are excluded."""
         edited = _doc()
         edited["geometry_profile"]["invented_tolerance_mm"] = 1.0
-        self.assertNotEqual(cleanroom.configuration_identity(_manifest(_doc())),
-                            cleanroom.configuration_identity(_manifest(edited)))
+        self.assertNotEqual(closure_mod.configuration_identity(_manifest(_doc())),
+                            closure_mod.configuration_identity(_manifest(edited)))
 
-    def test_the_excluded_pointers_are_only_pointers(self):
-        excluded = Manifest(_live()).get("reports.configuration_excludes")
-        for pointer in excluded:
-            self.assertFalse(
-                pointer.startswith("release_generation"),
-                "{} would exclude release-affecting configuration".format(
-                    pointer))
-            self.assertFalse(pointer.startswith("release_profile"), pointer)
+    def test_moving_an_output_path_changes_the_identity(self):
+        """The property the exclusion list used to deny."""
+        edited = _doc()
+        edited["artifacts"]["bom"] = "somewhere/else/bom.csv"
+        self.assertNotEqual(closure_mod.configuration_identity(_manifest(_doc())),
+                            closure_mod.configuration_identity(_manifest(edited)),
+                            "an output path is release-affecting configuration "
+                            "and must be bound like any other")
 
-    def test_the_permitted_set_is_exactly_what_the_clean_room_rewrites(self):
-        """Read off derive_manifest rather than trusted.
+    def test_formatting_is_not_content(self):
+        """Two spellings of one configuration are one identity."""
+        import json as json_mod
+        document = _doc()
+        left = _manifest(document)
+        directory = _scratch("pcbqa_fmt_")
+        path = os.path.join(directory, "manifest.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json_mod.dump(document, fh, indent=8, sort_keys=True)
+        right = Manifest(path)
+        self.assertNotEqual(left.sha256, right.sha256,
+                            "the two files must really differ as bytes")
+        self.assertEqual(closure_mod.configuration_identity(left),
+                         closure_mod.configuration_identity(right))
 
-        Every permitted exclusion must correspond to an assignment in
-        derive_manifest, and every assignment there must be permitted. A leaf
-        that stops being rewritten should stop being excusable.
-        """
-        import inspect
-        source = inspect.getsource(cleanroom.CleanRun.derive_manifest)
-        assigned = set(re.findall(r'data\["(\w+)"\](?:\["(\w+)"\])?\s*(?:=|\.pop)',
-                                  source))
-        pointers = set()
-        for head, tail in assigned:
-            pointers.add("{}.{}".format(head, tail) if tail else head)
-        permitted = set(cleanroom.REWRITTEN_BY_THE_CLEAN_ROOM)
-
-        # derive_manifest also reassigns whole objects purely to copy them
-        # before editing a leaf; those are not rewrites of the object.
-        copied_before_editing = {"fixture", "artifacts", "assembly", "archive",
-                                 "reports"}
-        rewritten = {p for p in pointers if p not in copied_before_editing}
-        self.assertEqual(
-            rewritten - permitted, set(),
-            "derive_manifest rewrites values the identity still covers")
-        for pointer in permitted:
-            head = pointer.split(".")[0]
-            self.assertIn(head, pointers | copied_before_editing,
-                          "{} is excused but derive_manifest never touches "
-                          "it".format(pointer))
-
-    def test_whole_objects_that_are_not_rewritten_are_not_excused(self):
-        for pointer in cleanroom.REWRITTEN_BY_THE_CLEAN_ROOM:
-            self.assertNotIn(pointer, ("sources", "tools", "fixture"),
-                             "{} is copied through untouched or only partly "
-                             "rewritten; excusing the whole object hides real "
-                             "configuration".format(pointer))
+    def test_no_board_can_exclude_anything_from_its_own_provenance(self):
+        """There is no opt-out to find: the key is not read at all."""
+        edited = _doc()
+        edited["reports"]["configuration_excludes"] = ["release_generation"]
+        self.assertNotEqual(
+            closure_mod.configuration_identity(_manifest(_doc())),
+            closure_mod.configuration_identity(_manifest(edited)),
+            "declaring an exclusion changed what the identity covers")
 
 
 class TheIdentityCoversWhatWasSelected(unittest.TestCase):
@@ -423,8 +379,8 @@ class TheIdentityCoversWhatWasSelected(unittest.TestCase):
     """
 
     def _digest(self, document):
-        return cleanroom.closure_digest(
-            cleanroom.source_closure(_manifest(document), _policy()))
+        return closure_mod.closure_digest(
+            closure_mod.source_closure(_manifest(document), _policy()))
 
     def test_changing_the_selected_pcb_changes_the_closure(self):
         candidate = os.path.join(_project(), "candidates")
@@ -467,7 +423,7 @@ class TheIdentityCoversWhatWasSelected(unittest.TestCase):
         rel = "candidates/" + boards[0]
         edited = _doc()
         edited["sources"]["pcb"] = rel
-        closure = cleanroom.source_closure(_manifest(edited), _policy())
+        closure = closure_mod.source_closure(_manifest(edited), _policy())
         self.assertIn(rel, closure,
                       "the selected board is under an excluded directory and "
                       "was not covered at all")
@@ -479,28 +435,19 @@ class TheIdentityCoversWhatWasSelected(unittest.TestCase):
     def test_a_selected_source_that_does_not_exist_is_refused(self):
         edited = _doc()
         edited["sources"]["pcb"] = "no_such_board.kicad_pcb"
-        with self.assertRaises(cleanroom.CleanRoomError) as caught:
+        with self.assertRaises(closure_mod.ClosureError) as caught:
             self._digest(edited)
         self.assertIn("sources.pcb", str(caught.exception))
 
     def test_all_three_declared_sources_are_in_the_closure(self):
         manifest = Manifest(_live())
-        closure = cleanroom.source_closure(manifest, _policy())
+        closure = closure_mod.source_closure(manifest, _policy())
         for role in ("pcb", "schematic", "project"):
             declared = manifest.get("sources." + role)
             rel = declared.replace("\\", "/")
             self.assertIn(rel, closure,
                           "sources.{} is not represented in the "
                           "closure".format(role))
-
-    def test_a_board_cannot_widen_the_exclusions(self):
-        edited = _doc()
-        edited["reports"]["configuration_excludes"] = list(
-            edited["reports"]["configuration_excludes"]) + \
-            ["release_generation"]
-        with self.assertRaises(cleanroom.CleanRoomError) as caught:
-            cleanroom.configuration_identity(_manifest(edited))
-        self.assertIn("release_generation", str(caught.exception))
 
     def test_the_script_that_ran_is_checked_by_content(self):
         """Not by import cache, and not vacuously.
@@ -550,12 +497,6 @@ class TheIdentityCoversWhatWasSelected(unittest.TestCase):
         finally:
             g_orientation.LAST_DERIVATION = saved
         del tf
-
-    def test_a_board_may_narrow_them(self):
-        edited = _doc()
-        edited["reports"]["configuration_excludes"] = ["board_id",
-                                                       "project_root"]
-        cleanroom.configuration_identity(_manifest(edited))
 
 
 if __name__ == "__main__":

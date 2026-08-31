@@ -1,27 +1,28 @@
 #!/usr/bin/env python
 """pcbqa - board-agnostic KiCad/JLCPCB verification.
 
-    python run.py preflight [manifest]     diagnose the environment
-    python run.py selftest [--jobs auto|N] run the validator's own test suite
-    python run.py validate <manifest>      validate a board; nonzero if rejected
-    python run.py release  <manifest>      clean-room release attempt
-    python run.py coherence <manifest>     is the installed release one run?
-    python run.py gates                    list gate IDs
-    python run.py fab <cmd>                fabricator knowledge: refresh,
-                                           status, diff, promote, select,
-                                           export-stackup. The ONLY commands
-                                           that may touch the network, and
-                                           only `fab refresh` does.
+    python run.py preflight [manifest]      diagnose the environment
+    python run.py selftest [--jobs auto|N]  run the validator's own test suite
+    python run.py build <manifest>          generate the fabrication outputs
+    python run.py validate <manifest> [-w]  validate; nonzero if rejected
+    python run.py release-check <manifest>  is this commit taggable as a release?
+    python run.py gates                     list gate IDs
+    python run.py fab <cmd>                 fabricator knowledge: refresh,
+                                            status, diff, promote, select,
+                                            export-stackup. The ONLY commands
+                                            that may touch the network, and
+                                            only `fab refresh` does.
 
 <manifest> is a path. For the toolkit's own fixtures a bare name also works:
 `portability`, `clean`, or a negative fixture's directory name.
 
-Run everything with KiCad's own Python. pcbnew, Shapely and kicad-cli are
-externally supplied prerequisites; this tool reports what it finds and never
-installs or pins them.
+A release is a Git tag. `build` writes the fabrication artifacts into the
+working tree as ordinary files, `validate` judges the design and those exact
+artifacts, and `release-check` proves the committed state is one a tag may name.
+No command in this file creates, moves or deletes a Git tag.
 
-Fail-closed: a gate that cannot be evaluated reports ERROR and blocks, and the
-release command never produces a sealed package.
+Fail-closed: a gate that cannot be evaluated reports ERROR and blocks, and
+`release-check` exits nonzero unless every requirement is met.
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import sys
 
@@ -62,17 +62,17 @@ def _output_base(manifest=None):
        prevent, and nothing else may reintroduce it.
     2. `PCBQA_OUTPUT_ROOT`, an explicit override for one invocation.
     3. A consumer board's own project. When the manifest lives outside this
-       repository, its attempts and published candidates belong to it - not
-       inside a toolkit that is very likely a submodule, and a submodule
-       directory is one `git submodule update` away from being replaced.
+       repository, its scratch belongs to it - not inside a toolkit that is
+       very likely a submodule, and a submodule directory is one
+       `git submodule update` away from being replaced.
     4. This repository, for a manifest that lives here. Fixtures depend on
        this: a fixture's runs must not land inside the fixture, because
        PROV.FIXTURE_INTEGRITY holds fixtures to an exact inventory.
 
-    Deliberately decided here rather than by a manifest key. `output_root` in
-    a manifest would be hashed into `configuration_identity`, so merely
-    relocating output would unbind every report a board had already committed
-    - a provenance break in exchange for a directory choice.
+    Deliberately decided here rather than by a manifest key: `output_root` in a
+    manifest would be hashed into the configuration identity, so relocating
+    scratch would unbind every report a board had already committed.
+
     """
     from pcbqa.parallel import ENV_OUTPUT_ROOT
     worker_root = os.environ.get(ENV_OUTPUT_ROOT)
@@ -96,15 +96,14 @@ def open_board(manifest_path):
     """Load and validate a manifest, then derive its output layout.
 
     The single entry point for every manifest-driven command. Nothing
-    filesystem-shaped exists until both of these succeed, and the layout is
+    filesystem-shaped exists until both of these succeed, and the workspace is
     built from the validated manifest rather than from raw JSON, so no command
     is ever in a position to join untrusted text onto a path.
     """
     from pcbqa.core import load_manifest
-    from pcbqa.layout import OutputLayout
+    from pcbqa.layout import Workspace
     manifest = load_manifest(manifest_path)
-    return manifest, OutputLayout.for_manifest(manifest,
-                                               _output_base(manifest))
+    return manifest, Workspace.for_manifest(manifest, _output_base(manifest))
 
 
 def _refuse(exc):
@@ -125,20 +124,25 @@ def _emit(ctx, results, tag, directory=None):
     return doc, jpath, mpath
 
 
-def cmd_validate(manifest_path, quiet=False):
-    """Validate a board. Everything this run writes lives in its own attempt."""
-    from pcbqa import core
+def cmd_validate(manifest_path, write=False, quiet=False):
+    """Validate a board: its sources and the exact artifacts committed with it.
+
+    Read-only unless `write` is given, so ordinary development validation never
+    touches the working tree. `--write` records the verdict at the path the
+    manifest declares, which is the report a release commit carries.
+    """
+    from pcbqa import artifacts, core
     from pcbqa.core import Context, ManifestError
     from pcbqa.layout import LayoutError
 
     try:
-        manifest, layout = open_board(manifest_path)
+        manifest, workspace = open_board(manifest_path)
     except (ManifestError, LayoutError) as exc:
         return _refuse(exc), None, None
 
     _load_gates()
-    attempt = layout.new_attempt()
-    ctx = Context(manifest, attempt.work)
+    run = workspace.new_run()
+    ctx = Context(manifest, run.work)
     try:
         ctx.tool_versions["kicad"] = ctx.kicad_version()
     except Exception as exc:                                   # noqa: BLE001
@@ -146,45 +150,122 @@ def cmd_validate(manifest_path, quiet=False):
 
     try:
         results = core.run_all(ctx)
-        doc, jpath, mpath = _emit(ctx, results, "validation", attempt.path)
+        doc, jpath, mpath = _emit(ctx, results, "validation", run.path)
     except BaseException:
-        # This attempt produced nothing usable; it owns its directory and
-        # takes it with it. No sibling attempt and no published release is
-        # any of its business.
-        attempt.discard()
+        # This run produced nothing usable; it owns its directory and takes it
+        # with it.
+        run.discard()
         raise
+
+    recorded = None
+    if write:
+        recorded = artifacts.paths(manifest).get("validation_report")
+        if not recorded:
+            print("REFUSED: --write needs artifacts.validation_report in the "
+                  "manifest to say where the verdict belongs")
+            return 2, doc, ctx
+        os.makedirs(os.path.dirname(recorded), exist_ok=True)
+        shutil.copy2(jpath, recorded)
 
     if not quiet:
         print(core.to_markdown(doc))
-        print(chr(10) + "attempt:  " + attempt.path)
+        print(chr(10) + "run:      " + run.path)
         print("JSON:     " + jpath)
         print("Markdown: " + mpath)
+        if recorded:
+            print("Recorded: " + recorded)
     return (1 if doc["summary"]["blocking"] else 0), doc, ctx
 
 
-def cmd_release(manifest_path):
-    """Clean-room release.
+def cmd_build(manifest_path):
+    """Generate the fabrication outputs and install them into the tree.
 
-    One invocation, one attempt directory, and nothing outside it is touched
-    for any reason. The project is copied into the attempt, every previously
-    generated output is purged *from that copy*, and ERC, DRC, Gerbers,
-    drills, BOM, CPL and the fabrication archive are regenerated inside
-    `<attempt>/build`. That directory is a candidate until the moment every
-    mandatory gate has passed, at which point it is renamed into
-    `published/<release_id>` - a name that did not exist before, so nothing is
-    replaced and nothing has to be deleted to make room.
-
-    A failed run removes its own build directory and leaves diagnostics. It
-    does not remove a previous release, a sibling attempt, or anything else:
-    a run that could not produce a release has learned nothing about the
-    release that came before it.
+    One invocation, one scratch directory. KiCad runs against a private copy,
+    so the design is never opened for writing, and nothing reaches the project
+    until every generation step has succeeded: a build that could not produce a
+    complete set installs none of it and leaves the previous outputs alone.
     """
-    from pcbqa import cleanroom, core
+    from pcbqa import build as build_mod
     from pcbqa.core import Context, ManifestError
-    from pcbqa.layout import LayoutError, orderable_archives
+    from pcbqa.layout import LayoutError
 
     try:
-        manifest, layout = open_board(manifest_path)
+        manifest, workspace = open_board(manifest_path)
+    except (ManifestError, LayoutError) as exc:
+        return _refuse(exc)
+    if not manifest.has("release_generation"):
+        print("BUILD REFUSED: the manifest declares no release_generation "
+              "block, so there is nothing that says how to generate anything")
+        return 2
+    if not manifest.has("artifacts.fabrication_manifest"):
+        print("BUILD REFUSED: the manifest declares no "
+              "artifacts.fabrication_manifest, so a build could not record "
+              "what it produced")
+        return 2
+
+    run = workspace.new_run()
+    builder = build_mod.Build(Context(manifest, run.work), run.build)
+    try:
+        record = builder.run()
+    except build_mod.BuildError as exc:
+        builder.blockers.append(("build", "ERROR", str(exc)))
+        record = None
+    except KeyboardInterrupt:
+        print(chr(10) + "BUILD ABANDONED: interrupted before it could complete")
+        return 130
+    except BaseException as exc:                              # fail closed
+        print(chr(10) + "BUILD BLOCKED by an unhandled {}: {}".format(
+            type(exc).__name__, exc))
+        return 1
+
+    for entry in builder.summary()["steps"]:
+        if "exit" in entry:
+            print("  {}: exit {}".format(entry["step"], entry["exit"]))
+    if builder.blockers or record is None:
+        print(chr(10) + "BUILD BLOCKED by {} condition(s):".format(
+            len(builder.blockers)))
+        for step, status, why in builder.blockers[:25]:
+            print("  {}: {} - {}".format(step, status, why))
+        print("Nothing was installed; the previous fabrication outputs are "
+              "untouched.")
+        print("What this build did produce, for diagnosis: " + run.path)
+        return 1
+
+    installed = builder.install()
+    # The artifacts are in the tree and committed from there; the staging copy
+    # of the whole project has nothing left to say.
+    run.discard()
+    print(chr(10) + "Installed {} file(s) into the working tree:".format(
+        len(installed)))
+    root = manifest.resolve(".")
+    for path in installed:
+        print("  " + os.path.relpath(path, root))
+    print("source closure: " + str(record["source_closure_sha256"])[:16])
+    print(chr(10) + "These are ordinary files. Commit them, then run "
+                    "`release-check`.")
+    return 0
+
+
+def cmd_release_check(manifest_path):
+    """Is the committed state one a release tag may name?
+
+    Three independent questions, all of which must answer yes:
+
+      * Git can say the tree is exactly the commit, submodules included, and
+        every release artifact and every piece of required evidence is tracked;
+      * every mandatory gate passes right now against the committed sources and
+        the committed artifacts;
+      * the validation report committed beside them accepted this same design.
+
+    Nothing is written and no Git state is changed. The tag is the user's to
+    create, and this command's exit status is what says it may be.
+    """
+    from pcbqa import release
+    from pcbqa.core import ManifestError, Status
+    from pcbqa.layout import LayoutError
+
+    try:
+        manifest, _workspace = open_board(manifest_path)
     except (ManifestError, LayoutError) as exc:
         return _refuse(exc)
 
@@ -196,195 +277,100 @@ def cmd_release(manifest_path):
     if not mandatory:
         print("RELEASE BLOCKED: release profile names no mandatory gates")
         return 1
-    if not manifest.has("release_generation"):
-        print("RELEASE BLOCKED: manifest declares no release_generation block, "
-              "so a clean-room run cannot be reproduced")
-        return 1
 
-    _load_gates()
-    attempt = layout.new_attempt()
-    published = False
+    blockers = []
     try:
-        code = _release_attempt(manifest, layout, attempt, profile, mandatory)
-        published = (code == 0)
-        return code
-    except KeyboardInterrupt:
-        print(chr(10) + "RELEASE ABANDONED: interrupted before it could "
-                        "complete")
-        return 130
-    except BaseException as exc:                              # fail closed
-        print(chr(10) + "RELEASE BLOCKED by an unhandled {}: {}".format(
-            type(exc).__name__, exc))
-        return 1
-    finally:
-        if not published:
-            attempt.discard_build()
-        remaining = [a for a in orderable_archives(attempt.path)]
-        if remaining:
-            print("WARNING: archive(s) remain in the attempt: {}".format(
-                remaining))
+        problems, facts = release.readiness(manifest)
+    except release.GitError as exc:
+        problems, facts = [{"issue": str(exc)}], {}
+    for key in sorted(facts):
+        print("  {:26s} {}".format(key, facts[key]))
+    for problem in problems:
+        detail = problem["issue"]
+        if problem.get("paths"):
+            detail += ": " + ", ".join(problem["paths"])
+        blockers.append(("git:" + str(problem.get("file", "repository")),
+                         "ERROR", detail))
 
-
-def _release_attempt(manifest, layout, attempt, profile, mandatory):
-    from pcbqa import cleanroom, core
-    from pcbqa.core import Context, Status
-
-    source_ctx = Context(manifest, os.path.join(attempt.work, "driver"))
-    run = cleanroom.CleanRun(source_ctx, os.path.join(attempt.work, "clean_run"),
-                             attempt.build)
-
-    derived = None
-    try:
-        derived = run.build()
-    except cleanroom.CleanRoomError as exc:
-        run.blockers.append(("release:cleanroom", "ERROR", str(exc)))
-    except Exception as exc:                                   # fail closed
-        run.blockers.append(("release:cleanroom", "ERROR",
-                             f"{type(exc).__name__}: {exc}"))
-
-    blockers = list(run.blockers)
-    doc = jpath = mpath = None
-    if derived is not None:
-        ctx = Context(derived, os.path.join(attempt.work, "validation"),
-                      kicad_cli=run.source_ctx.kicad_cli)
-        results = core.run_all(ctx)
-        doc, jpath, mpath = _emit(ctx, results, "release_validation")
-        doc["clean_room"] = run.summary()
-        with open(jpath, "w", encoding="utf-8") as fh:
-            json.dump(doc, fh, indent=2)
-        print(core.to_markdown(doc))
-
-        by_id = {r.gate_id: r for r in results}
+    code, doc, _ctx = cmd_validate(manifest_path, quiet=True)
+    if doc is None:
+        blockers.append(("validate", "ERROR", "validation could not run"))
+    else:
+        by_id = {entry["gate"]: entry for entry in doc["gates"]}
         for gate_id in mandatory:
             result = by_id.get(gate_id)
             if result is None:
-                blockers.append((gate_id, "MISSING", "mandatory gate did not run"))
-            elif result.status not in (Status.PASS, Status.ADVISORY):
+                blockers.append((gate_id, "MISSING",
+                                 "mandatory gate did not run"))
+            elif result["status"] not in (Status.PASS, Status.ADVISORY):
                 # ADVISORY is a decision the board wrote down: the gate ran, it
                 # found what it found, and the manifest says with reasons that
                 # this finding does not stop a release. It stays on the
                 # mandatory list so it still has to run and still has to be
-                # reported - deleting the manifest's advisory entry is all it
-                # takes to make it block again.
-                blockers.append((gate_id, result.status, result.reason[:110]))
-        for r in results:
-            if r.status in Status.BLOCKING and r.gate_id not in mandatory:
-                blockers.append((r.gate_id, r.status, "non-mandatory gate blocked"))
-
-    print(os.linesep + "Attempt:       " + attempt.path)
-    print("Clean-room run: " + run.root)
-    for entry in run.summary()["steps"]:
-        if "exit" in entry:
-            print("  {}: exit {}".format(entry["step"], entry["exit"]))
-    print("  purged {} pre-existing output path(s) from the copy".format(
-        len(run.summary()["purged"])))
-    print("  {} authoritative path(s) proven inside the run".format(
-        len(run.summary()["authoritative_paths"])))
+                # reported.
+                blockers.append((gate_id, result["status"],
+                                 str(result.get("reason", ""))[:110]))
+        for entry in doc["gates"]:
+            if entry["status"] in Status.BLOCKING and \
+                    entry["gate"] not in mandatory:
+                blockers.append((entry["gate"], entry["status"],
+                                 "non-mandatory gate blocked"))
+        blockers += _committed_verdict(manifest, doc)
 
     if blockers:
-        _write_diagnostics(attempt, manifest, profile, blockers, jpath, mpath)
         print(chr(10) + "RELEASE BLOCKED by {} condition(s):".format(
             len(blockers)))
-        for gate_id, status, why in blockers[:25]:
-            print("  {}: {} - {}".format(gate_id, status, why))
-        print("Diagnostics only: " + attempt.diagnostics)
-        print("Published release created: NO")
+        for subject, status, why in blockers[:40]:
+            print("  {}: {} - {}".format(subject, status, why))
+        if len(blockers) > 40:
+            print("  ... {} more".format(len(blockers) - 40))
+        print(chr(10) + "No release tag should be created for this commit.")
         return 1
 
-    # Every mandatory gate passed. Finish the candidate, then publish it by
-    # renaming it into a name that has never existed.
-    shutil.copytree(run.reports, os.path.join(attempt.build, "reports"),
-                    dirs_exist_ok=True)
-    shutil.copy2(jpath, os.path.join(attempt.build, "validation.json"))
-    with open(os.path.join(attempt.build, "clean_room.json"), "w",
-              encoding="utf-8") as fh:
-        json.dump(run.summary(), fh, indent=2)
-    with open(os.path.join(attempt.build, "UNSEALED.txt"), "w",
-              encoding="utf-8") as fh:
-        fh.write(_unsealed_text(profile))
-
-    # The package is complete only now, so this is the first moment an
-    # inventory of it can be true. The receipt is written last and is what
-    # makes the set checkable later: a validation report cannot carry its own
-    # digest, so without a receipt nothing says which files belong together.
-    from pcbqa import coherence
-    names = coherence.member_names(manifest)
-    coherence.write_receipt(attempt.build, {
-        "board_id": manifest.board_id,
-        "attempt_id": attempt.id,
-        "verdict": doc["summary"]["verdict"],
-        "source_closure_sha256": run.summary()["source_closure_sha256"],
-        "members": names,
-    })
-    incoherent, facts = coherence.check(attempt.build, names)
-    if incoherent:
-        for problem in incoherent[:25]:
-            blockers.append(("release:coherence", "ERROR",
-                             "{}: {}".format(problem.get("file", "package"),
-                                             problem["issue"])))
-        _write_diagnostics(attempt, manifest, profile, blockers, jpath, mpath)
-        print(chr(10) + "RELEASE BLOCKED: the assembled package does not agree "
-                        "with itself")
-        for gate_id, status, why in blockers[-25:]:
-            print("  {}: {} - {}".format(gate_id, status, why))
-        print("Published release created: NO")
-        return 1
-    print("  package coherent: {} files, one source closure {}".format(
-        facts["files_in_package"],
-        str(facts.get("source_closure_sha256"))[:16]))
-
-    release_id, destination = attempt.publish()
-    pointer = layout.write_latest(release_id, {
-        "board_id": manifest.board_id,
-        "attempt_id": attempt.id,
-        "sealed": False,
-    })
-    print(chr(10) + "Published release: " + destination)
-    print("Release id:        " + release_id)
-    print("latest.json:       " + layout.latest_pointer)
-    print("Sealed:            NO (sealing requires visual-review evidence)")
+    commit = facts.get("commit", "HEAD")
+    print(chr(10) + "RELEASE READY")
+    print("  board:  " + manifest.board_id)
+    print("  commit: " + str(commit))
+    print("  source closure: "
+          + str(doc.get("source_closure_sha256"))[:16])
+    print(chr(10) + "This commit may be tagged. Creating the tag is a "
+                    "deliberate act and is not done here:")
+    print("  git tag -a <name> -m <message> " + str(commit))
     return 0
 
 
-def _unsealed_text(profile):
-    return ("Release CANDIDATE, not sealed." + chr(10) + chr(10)
-            + "Every artifact here was generated in one clean-room run from a "
-              "pristine project copy with all prior output purged, and every "
-              "mandatory gate passed against these exact artifacts before this "
-              "directory was published. It was assembled under the attempt "
-              "that produced it and moved here by a single rename, so it has "
-              "never existed in a partly-written state." + chr(10) + chr(10)
-            + "RECEIPT.json lists every other file here with its digest, "
-              "written after the gates passed. PROV.RELEASE_COHERENCE checks "
-              "that claim rather than asking you to take it: run "
-              "`run.py coherence <manifest>` against an installed package and "
-              "it will fail if any file came from a different run." + chr(10)
-            + chr(10)
-            + "Sealing additionally requires recorded visual-review evidence "
-              "({}).".format(profile.get("visual_review_evidence"))
-            + chr(10))
+def _committed_verdict(manifest, doc):
+    """The validation report committed beside the artifacts must accept them."""
+    from pcbqa import artifacts
 
-
-def _write_diagnostics(attempt, manifest, profile, blockers, jpath, mpath):
-    """What a failed attempt is allowed to leave: reasons, never artifacts."""
-    lines = ["UNSAFE DIAGNOSTIC OUTPUT - NOT A RELEASE", "",
-             "board: " + manifest.board_id,
-             "release profile: " + str(profile.get("id")),
-             "attempt: " + attempt.id, "",
-             "No fabrication archive was published. This attempt's build "
-             "directory has been removed; any previously published release is "
-             "untouched.", "", "blocking:"]
-    for gate_id, status, why in blockers:
-        lines.append("  {}: {} - {}".format(gate_id, status, why))
-    lines += ["", "No orderable package was produced.", ""]
-    with open(os.path.join(attempt.diagnostics, "DO_NOT_ORDER.txt"), "w",
-              encoding="utf-8") as fh:
-        fh.write(chr(10).join(lines))
-    if jpath:
-        shutil.copy2(jpath, os.path.join(attempt.diagnostics,
-                                         "validation.json"))
-        shutil.copy2(mpath, os.path.join(attempt.diagnostics,
-                                         "validation.md"))
+    blockers = []
+    recorded = artifacts.paths(manifest).get("validation_report")
+    if not recorded:
+        return [("release:validation_report", "ERROR",
+                 "the manifest declares no artifacts.validation_report, so no "
+                 "verdict travels with the release")]
+    if not os.path.isfile(recorded):
+        return [("release:validation_report", "ERROR",
+                 "no committed validation report at " + recorded)]
+    try:
+        with open(recorded, encoding="utf-8") as fh:
+            committed = json.load(fh)
+    except ValueError as exc:
+        return [("release:validation_report", "ERROR",
+                 "the committed validation report is not readable JSON: "
+                 "{}".format(exc))]
+    verdict = (committed.get("summary") or {}).get("verdict")
+    if verdict != "ACCEPTED":
+        blockers.append(("release:validation_report", "ERROR",
+                         "the committed verdict is {!r}".format(verdict)))
+    was = committed.get("source_closure_sha256")
+    now = doc.get("source_closure_sha256")
+    if was != now:
+        blockers.append((
+            "release:validation_report", "ERROR",
+            "the committed verdict is about a different design ({} vs "
+            "{})".format(str(was)[:16], str(now)[:16])))
+    return blockers
 
 
 def cmd_selftest(argv):
@@ -457,38 +443,6 @@ def cmd_gates():
         req = ", ".join(entry["requires"]) or "-"
         print("{:32s} {}".format(entry["id"], entry["title"]))
         print("{:32s} requires: {}".format("", req))
-    return 0
-
-
-def cmd_coherence(manifest_path):
-    """Is the installed release package one run? Nonzero if not.
-
-    The same check the release runs before publishing, pointed at whatever is
-    installed now. Worth running on its own because a package can be made
-    incoherent long after it was published - by refreshing one report, or by
-    keeping one file from a previous release - and nothing else notices.
-    """
-    from pcbqa import coherence
-    from pcbqa.core import ManifestError
-
-    try:
-        manifest, _layout = open_board(manifest_path)
-    except (ManifestError, Exception) as exc:                # noqa: BLE001
-        return _refuse(exc)
-    names = coherence.member_names(manifest)
-    root = os.path.dirname(manifest.resolve(manifest.get("archive.zip")))
-    print("package: " + root)
-    problems, facts = coherence.check(root, names)
-    for key, value in sorted(facts.items()):
-        print("  {:34s} {}".format(key, value))
-    for problem in problems:
-        print("  INCOHERENT  {}: {}".format(problem.get("file", "package"),
-                                            problem["issue"]))
-    if problems:
-        print(chr(10) + "{} incoherence(s): this directory is not one "
-                        "release.".format(len(problems)))
-        return 1
-    print(chr(10) + "Coherent: every file here came from one clean-room run.")
     return 0
 
 
@@ -625,16 +579,24 @@ def main(argv):
     if cmd == "fab":
         from pcbqa.fabricators import cli as fab_cli
         return fab_cli.main(argv[2:])
-    if cmd in ("validate", "release", "coherence"):
-        if len(argv) < 3:
-            print("usage: run.py {} <manifest.json>".format(cmd))
+    if cmd in ("validate", "build", "release-check"):
+        rest = [a for a in argv[2:] if not a.startswith("-")]
+        flags = [a for a in argv[2:] if a.startswith("-")]
+        if len(rest) != 1:
+            print("usage: run.py {} <manifest.json>{}".format(
+                cmd, " [--write]" if cmd == "validate" else ""))
             return 2
-        path = _find_manifest(argv[2])
+        unknown = [f for f in flags
+                   if not (cmd == "validate" and f in ("-w", "--write"))]
+        if unknown:
+            print("unknown option(s) for {}: {}".format(cmd, unknown))
+            return 2
+        path = _find_manifest(rest[0])
         if cmd == "validate":
-            return cmd_validate(path)[0]
-        if cmd == "coherence":
-            return cmd_coherence(path)
-        return cmd_release(path)
+            return cmd_validate(path, write=bool(flags))[0]
+        if cmd == "build":
+            return cmd_build(path)
+        return cmd_release_check(path)
     print(__doc__)
     return 2
 

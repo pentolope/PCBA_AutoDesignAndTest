@@ -33,7 +33,7 @@ every manifest the repository ships — fixtures included — and fails if one
 appears in framework source. **That test failing is a real failure. Do not add
 a board's name to its allowlist.**
 
-A test that needs a real, released board takes it from outside, through
+A test that needs a real board takes it from outside, through
 `tests/consumer.py` and the `PCBQA_CONSUMER_MANIFEST` environment variable. It
 skips with a reason when no consumer is registered. Do not import a consumer's
 files by path.
@@ -58,10 +58,44 @@ work.)
   being skipped. Silently skipping macro apertures is precisely how an earlier
   manual review missed a via-in-pad population.
 - A missing manifest key raises. There are no hidden defaults.
-- `release` publishes only after every mandatory gate has passed, by renaming a
-  candidate directory into a name that has never existed. A failed attempt
-  removes its own build directory, keeps `DO_NOT_ORDER.txt`, and leaves any
-  previously published release byte-identical.
+- `build` installs all of its output or none of it: a build that could not
+  produce a complete set leaves the previous artifacts alone.
+- `release-check` exits nonzero unless every requirement is met, and it never
+  creates a tag. It writes nothing and changes no Git state.
+
+## A release is a Git tag
+
+- **commit** = the complete project state
+- **committed fabrication artifacts** = the exact historical manufacturing
+  outputs, kept as ordinary files so an old board can be refabricated later
+  without regenerating anything
+- **Git tag** = the release identity
+- **release gates** = engineering proof that the tagged state is acceptable
+
+Git supplies immutable history, branches, diffs, rollback and exact source
+identity. Do not reimplement any of it here. There is no attempt directory, no
+published directory, no release id, no `latest.json`, no sealed or unsealed
+state, and no receipt: those existed to make a filesystem directory behave like
+version control, and version control is what Git is. `tests/test_release_readiness.py`
+fails if any of them comes back.
+
+What the toolkit owns instead is engineering correctness:
+
+1. the working tree is clean;
+2. submodules are clean and exactly at their committed gitlinks;
+3. the committed fabrication artifacts correspond to the current design, proven
+   by the source closure recorded in `fabrication.json`;
+4. required ERC/DRC and toolkit gates pass;
+5. required fabrication checks pass;
+6. stale fabrication outputs cannot silently be released;
+7. the exact committed artifacts being released are the ones that were
+   validated;
+8. tool, model and fabricator provenance is recorded where useful.
+
+`fabrication.json` is the binding, and it deliberately names no tag and no
+commit: it is committed *before* the tag and the commit that carry it exist, so
+its provenance is content-addressed - artifact digests and a source closure -
+rather than a name that would be a lie at the moment it was written.
 
 ## Never weaken a check
 
@@ -98,17 +132,16 @@ then exactly one active plugin installation - so a recursive clone can route
 with no sibling checkout and no absolute path. It is vendored, never edited
 here: changes belong upstream, and the pin moves deliberately.
 
-It is also the one directory a clean-room release must not copy. A release
-runs ERC, DRC, the exports and the parity checks and never routes, so the
-router is not a release input; copying it would put its whole working tree,
-most of it machine-specific Rust build output, into every attempt twice.
-`core.NEVER_COPY` therefore names it. Which router drew the copper stays
-provenance, recorded at routing time by `krt.provenance`.
+It is also the one directory a build must not copy. A build runs ERC, DRC and
+the exports and never routes, so the router is not a build input; copying it
+would put its whole working tree, most of it machine-specific Rust build
+output, into every run. `core.NEVER_COPY` therefore names it. Which router drew
+the copper stays provenance, recorded at routing time by `krt.provenance`.
 
 The superseded external autorouter and its Specctra DSN/SES exchange have been
 removed, and neither is to be reintroduced.
 
-Every attempt records: source board digest; project and configuration digests;
+Every routing attempt records: source board digest; project and configuration digests;
 KiCad and KiCad-Python versions; the router's package identity, resolved path
 and source digest; the exact plan and its hash; stage net selections; the
 environment; full stdout, stderr, exit code and runtime; every generated
@@ -200,5 +233,13 @@ python3 run.py selftest
 ```
 
 ```bash
-python3 run.py validate <manifest>
+python3 run.py build <manifest>
+```
+
+```bash
+python3 run.py validate <manifest> --write
+```
+
+```bash
+python3 run.py release-check <manifest>
 ```

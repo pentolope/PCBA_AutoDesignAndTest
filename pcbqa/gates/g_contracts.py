@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import csv
 import glob
-import hashlib
 import io
 import json
 import os
@@ -250,63 +249,107 @@ def _classify(name, data):
     return "other", f"Unclassified:{os.path.splitext(name)[1] or 'none'}", not data
 
 
-@gate("ARCH.PROVENANCE", "Archive and packaged artifacts share one source revision",
-      requires=("archive.manifest",))
+@gate("ARCH.PROVENANCE",
+      "The committed fabrication artifacts are the ones the record describes",
+      requires=("artifacts.fabrication_manifest",))
 def archive_provenance(ctx, res):
-    mpath = ctx.manifest.resolve(ctx.manifest.get("archive.manifest"))
-    if not os.path.isfile(mpath):
-        return res.errored(f"release manifest not found: {mpath}")
-    res.evidence_file(mpath)
-    required = res.limit(ctx.manifest.constraint(
-        "archive.manifest_required_fields", units="field name",
-        cid="archive.manifest_required_fields")).value
-    text = open(mpath, encoding="utf-8", errors="ignore").read()
-    missing = [f for f in required if f.lower() not in text.lower()]
-    problems = [{"field": f, "issue": "release manifest records no such provenance"}
-                for f in missing]
+    """Bind the committed artifacts to the design they were generated from.
 
-    # Recorded hashes must still match the files they describe.
-    base = os.path.dirname(mpath)
-    prenorm = {}
-    pre_path = ctx.manifest.get("archive.pre_normalization_digests", None)
-    if pre_path:
-        full = ctx.manifest.resolve(pre_path)
-        if os.path.isfile(full):
-            prenorm = {os.path.basename(k): v for k, v in
-                       json.load(open(full, encoding="utf-8"))["files"].items()}
-    stale = []
-    for m in re.finditer(r"`([^`]+)`\s*sha256\s*`([0-9a-f]{64})`", text):
-        name, digest = m.group(1), m.group(2)
-        for cand in (os.path.join(base, name),
-                     ctx.manifest.resolve(name),
-                     os.path.join(base, os.path.basename(name))):
-            if os.path.isfile(cand):
-                actual = sha256_file(cand)
-                if actual != digest:
-                    key = os.path.basename(name)
-                    # Normalisation drift only if the content is byte-identical
-                    # once line endings are put back; anything else is a real
-                    # change to the artifact after its hash was recorded.
-                    raw = open(cand, "rb").read()
-                    as_crlf = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
-                    same_modulo_eol = (
-                        hashlib.sha256(as_crlf).hexdigest() == digest)
-                    if prenorm.get(key) == digest and same_modulo_eol:
-                        issue = ("recorded digest predates the line-ending "
-                                 "normalisation commit; it describes bytes that no "
-                                 "longer exist in the tree")
-                    else:
-                        issue = "recorded hash no longer matches the file"
-                    stale.append({"artifact": name, "issue": issue,
-                                  "recorded": digest[:16], "actual": actual[:16]})
-                break
-    problems += stale
-    res.measurements["hashes_checked"] = len(re.findall(r"sha256\s*`[0-9a-f]{64}`", text))
-    for p in problems[:40]:
-        res.finding(**p)
+    Three separate claims, each checkable without trusting the others:
+
+    * the record carries the provenance a release needs at all;
+    * every artifact it names is present with exactly the digest it names, and
+      nothing sits in the release directories that it does not name;
+    * the source closure it was generated against is the closure of the design
+      as it stands now, so artifacts left behind by an earlier design cannot be
+      released beside sources that have moved on.
+    """
+    from .. import artifacts as artifact_set
+    from .. import closure as closure_mod
+
+    path = ctx.manifest.resolve(
+        ctx.manifest.get("artifacts.fabrication_manifest"))
+    res.measurements["fabrication_manifest"] = os.path.basename(path)
+    if not os.path.isfile(path):
+        res.finding(file=os.path.basename(path),
+                    issue="the design carries no fabrication record, so "
+                          "nothing ties its committed artifacts to it")
+        return res.failed("no fabrication manifest at " + path)
+    res.evidence_file(path)
+    try:
+        record = json.load(open(path, encoding="utf-8"))
+    except ValueError as exc:
+        return res.errored("fabrication manifest is not readable JSON: "
+                           "{}".format(exc))
+
+    problems = []
+    version = record.get("schema_version")
+    if version != artifact_set.FABRICATION_SCHEMA_VERSION:
+        problems.append({"issue": "fabrication manifest declares schema "
+                                  "version {!r}; this validator implements "
+                                  "{}".format(
+                                      version,
+                                      artifact_set.FABRICATION_SCHEMA_VERSION)})
+    for field in artifact_set.REQUIRED_PROVENANCE:
+        if not record.get(field):
+            problems.append({"field": field,
+                             "issue": "the fabrication manifest records no "
+                                      "such provenance"})
+
+    recorded = record.get("artifacts") or {}
+    res.measurements["artifacts_recorded"] = len(recorded)
+    base = os.path.dirname(path)
+    for name, digest in sorted(recorded.items()):
+        full = os.path.join(base, name)
+        if not os.path.isfile(full):
+            problems.append({"artifact": name,
+                             "issue": "recorded by the fabrication manifest "
+                                      "but not present"})
+            continue
+        actual = sha256_file(full)
+        if actual != digest:
+            problems.append({"artifact": name,
+                             "issue": "has changed since its digest was "
+                                      "recorded",
+                             "recorded": str(digest)[:16],
+                             "actual": actual[:16]})
+
+    present = artifact_set.generated_files(ctx.manifest)
+    res.measurements["artifacts_present"] = len(present)
+    for full in present:
+        name = artifact_set.record_key(ctx.manifest, full)
+        if name not in recorded:
+            problems.append({"artifact": name,
+                             "issue": "is in the release directory but not in "
+                                      "the fabrication manifest, so it is left "
+                                      "over from another build or was added by "
+                                      "hand"})
+
+    try:
+        _entries, now = closure_mod.current(ctx.manifest)
+    except Exception as exc:                                   # noqa: BLE001
+        return res.errored("the current source closure could not be computed, "
+                           "so artifact staleness cannot be decided: "
+                           "{}: {}".format(type(exc).__name__, exc))
+    was = record.get("source_closure_sha256")
+    res.measurements["source_closure_sha256"] = now
+    res.measurements["recorded_source_closure_sha256"] = was
+    if was != now:
+        problems.append({
+            "issue": "the committed artifacts were generated from a different "
+                     "design than the one in the tree; rebuild before "
+                     "releasing",
+            "recorded": str(was)[:16], "recomputed": now[:16]})
+
+    for problem in problems[:40]:
+        res.finding(**problem)
     if problems:
-        return res.failed(f"{len(problems)} release-provenance problem(s)")
-    return res.passed("release manifest records full provenance and every hash matches")
+        return res.failed("{} fabrication-provenance problem(s)".format(
+            len(problems)))
+    return res.passed(
+        "all {} committed artifact(s) match the digests recorded for them, "
+        "nothing else is in the release directories, and they were generated "
+        "from the source closure the design still has".format(len(recorded)))
 
 
 # ---------------------------------------------------------------------------

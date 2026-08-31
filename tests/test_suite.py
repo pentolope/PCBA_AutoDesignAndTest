@@ -176,40 +176,34 @@ class RevAExpectedFailureMatrix(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class ReleaseBlocked(unittest.TestCase):
-    """Rev A must not be publishable, and must publish nothing trying."""
+    """Rev A must not be taggable as a release, and must say why."""
 
-    def _out_root(self):
-        board_id = json.load(open(REVA, encoding="utf-8"))["board_id"]
-        return os.path.join(os.environ.get("PCBQA_TEST_OUTPUT_ROOT", HERE),
-                            "out", board_id)
+    def _release_check(self, manifest_path):
+        return subprocess.run(
+            [PYTHON, os.path.join(HERE, "run.py"), "release-check",
+             manifest_path], capture_output=True, text=True, cwd=HERE)
 
-    def test_release_publishes_nothing(self):
-        from pcbqa import layout
-        proc = subprocess.run([PYTHON, os.path.join(HERE, "run.py"), "release", REVA],
-                              capture_output=True, text=True, cwd=HERE)
+    def test_a_rejected_board_is_not_releasable(self):
+        proc = self._release_check(REVA)
         self.assertNotEqual(proc.returncode, 0)
-        board = self._out_root()
-        self.assertFalse(os.path.isdir(os.path.join(board, "published")),
-                         "a rejected board published a release")
-        self.assertFalse(os.path.isfile(os.path.join(board, "latest.json")))
-        # Every attempt this produced must be free of orderable artifacts.
-        attempts = os.path.join(board, "attempts")
-        self.assertTrue(os.path.isdir(attempts))
-        self.assertEqual(layout.orderable_archives(attempts), [],
-                         "a failed attempt kept an orderable archive")
-        newest = sorted(os.listdir(attempts))[-1]
-        diagnostics = os.path.join(attempts, newest, "diagnostics")
-        text = open(os.path.join(diagnostics, "DO_NOT_ORDER.txt"),
-                    encoding="utf-8").read()
-        self.assertIn("NOT A RELEASE", text)
-        self.assertIn("No orderable package was produced", text)
+        self.assertIn("RELEASE BLOCKED", proc.stdout)
+        self.assertIn("No release tag should be created", proc.stdout)
+        # The gates it fails, named, not merely a nonzero status.
+        for gate_id in ("DRC.AUTHORITATIVE", "ERC.AUTHORITATIVE",
+                        "ARCH.PROVENANCE"):
+            self.assertIn(gate_id, proc.stdout)
+
+    def test_it_writes_nothing_into_the_frozen_fixture(self):
+        before = _digest_tree(paths.REVA_PROJECT)
+        self._release_check(REVA)
+        self.assertEqual(_digest_tree(paths.REVA_PROJECT), before,
+                         "release-check modified the design it was judging")
 
     def test_missing_mandatory_gate_blocks_release(self):
-        """A gate that is NOT_APPLICABLE but mandatory must block publication."""
+        """A gate that is NOT_APPLICABLE but mandatory must block."""
         tmp = temp_manifest("mandatory",
                             lambda doc: doc.pop("via_mask"))   # four VIA gates N/A
-        proc = subprocess.run([PYTHON, os.path.join(HERE, "run.py"), "release", tmp],
-                              capture_output=True, text=True, cwd=HERE)
+        proc = self._release_check(tmp)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("NOT_APPLICABLE", proc.stdout)
 
@@ -217,9 +211,20 @@ class ReleaseBlocked(unittest.TestCase):
         def _empty(doc):
             doc["release_profile"]["mandatory_gates"] = []
         tmp = temp_manifest("empty_profile", _empty)
-        proc = subprocess.run([PYTHON, os.path.join(HERE, "run.py"), "release", tmp],
-                              capture_output=True, text=True, cwd=HERE)
+        proc = self._release_check(tmp)
         self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("no mandatory gates", proc.stdout)
+
+
+def _digest_tree(root):
+    out = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in sorted(files):
+            full = os.path.join(dirpath, name)
+            with open(full, "rb") as fh:
+                out[os.path.relpath(full, root)] = hashlib.sha256(
+                    fh.read()).hexdigest()
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -560,24 +565,74 @@ class Mutations(unittest.TestCase):
                             or "no source hash" in i for i in issues), issues)
 
     def test_altered_output_after_hash_recorded_is_detected(self):
-        """Mutate a packaged file and the release manifest hash must mismatch."""
-        src = os.path.join(paths.REVA_PROJECT, "generated", "release")
+        """Mutate a recorded artifact and the fabrication record must object."""
+        from pcbqa import artifacts as artifact_set
+        from pcbqa import closure
+
         work = tempfile.mkdtemp(prefix="pcbqa_alt_")
-        shutil.copytree(src, os.path.join(work, "release"))
-        target = os.path.join(work, "release", "bom.csv")
-        with open(target, "a", encoding="utf-8") as fh:
+        project = os.path.join(work, "project")
+        shutil.copytree(paths.REVA_PROJECT, project)
+        path = temp_manifest("altered", project=project)
+
+        # A fabrication record that is honest about the tree as it stands.
+        manifest = Manifest(path)
+        _entries, digest = closure.current(manifest)
+        record = {
+            "schema_version": artifact_set.FABRICATION_SCHEMA_VERSION,
+            "board_id": manifest.board_id,
+            "constraint_version": manifest.get("constraint_version"),
+            "source_closure_sha256": digest,
+            "tools": {"kicad_cli": "kicad-cli"},
+            "commands": ["kicad-cli pcb export gerbers"],
+            "artifacts": {artifact_set.record_key(manifest, p):
+                          core.sha256_file(p)
+                          for p in artifact_set.generated_files(manifest)},
+        }
+        record_path = manifest.resolve(
+            manifest.get("artifacts.fabrication_manifest"))
+        os.makedirs(os.path.dirname(record_path), exist_ok=True)
+        _write_json(record_path, record)
+        self.assertEqual(validate(path)[0]["ARCH.PROVENANCE"]["status"],
+                         Status.PASS,
+                         "the honest record must pass before it is broken")
+
+        with open(manifest.resolve(manifest.get("artifacts.bom")), "a",
+                  encoding="utf-8") as fh:
             fh.write("MUTATED,,,,\n")
-        path = self._mutated_manifest(lambda d: d["archive"].update({
-            "manifest": os.path.relpath(
-                os.path.join(work, "release", "MANIFEST.md"),
-                paths.REVA_PROJECT).replace("\\", "/"),
-        }))
-        results, _ = validate(path)
-        arch = results["ARCH.PROVENANCE"]
+        arch = validate(path)[0]["ARCH.PROVENANCE"]
         self.assertEqual(arch["status"], Status.FAIL)
-        self.assertTrue(any("recorded hash no longer matches" in f.get("issue", "")
-                            for f in arch["findings"]),
-                        arch["findings"])
+        self.assertTrue(
+            any("changed since its digest was recorded" in f.get("issue", "")
+                for f in arch["findings"]), arch["findings"])
+
+    def test_a_stale_artifact_set_is_detected(self):
+        """The design moved; the artifacts did not."""
+        from pcbqa import artifacts as artifact_set
+
+        work = tempfile.mkdtemp(prefix="pcbqa_stale_")
+        project = os.path.join(work, "project")
+        shutil.copytree(paths.REVA_PROJECT, project)
+        path = temp_manifest("stale", project=project)
+        manifest = Manifest(path)
+        record_path = manifest.resolve(
+            manifest.get("artifacts.fabrication_manifest"))
+        os.makedirs(os.path.dirname(record_path), exist_ok=True)
+        _write_json(record_path, {
+            "schema_version": artifact_set.FABRICATION_SCHEMA_VERSION,
+            "board_id": manifest.board_id,
+            "constraint_version": manifest.get("constraint_version"),
+            "source_closure_sha256": "0" * 64,
+            "tools": {"kicad_cli": "kicad-cli"},
+            "commands": ["kicad-cli pcb export gerbers"],
+            "artifacts": {artifact_set.record_key(manifest, p):
+                          core.sha256_file(p)
+                          for p in artifact_set.generated_files(manifest)},
+        })
+        arch = validate(path)[0]["ARCH.PROVENANCE"]
+        self.assertEqual(arch["status"], Status.FAIL)
+        self.assertTrue(
+            any("generated from a different design" in f.get("issue", "")
+                for f in arch["findings"]), arch["findings"])
 
     def test_drill_map_in_the_archive_is_detected(self):
         results, _ = validate(REVA)

@@ -40,6 +40,7 @@
     "gerber_dir": "generated/release/gerbers",
     "bom": "generated/release/bom.csv",
     "cpl": "generated/release/cpl.csv",
+    "fabrication_manifest": "generated/release/fabrication.json",
     "position_tolerance_mm": 0.01,
     "cpl_fields": {
       "designator": "Designator",
@@ -320,13 +321,6 @@
   },
   "archive": {
     "zip": "generated/release/microphone_array_v2-revA-fabrication.zip",
-    "manifest": "generated/release/MANIFEST.md",
-    "manifest_required_fields": [
-      "sha256",
-      "kicad",
-      "command",
-      "constraint"
-    ],
     "allow": [
       {
         "file_function": "Copper,L1,Top",
@@ -404,8 +398,7 @@
         "file_function": "Drillmap",
         "reason": "drill-map drawings are documentation, not fabrication data, and can be mistaken for a copper or legend layer by an importer"
       }
-    ],
-    "pre_normalization_digests": "../PRE_NORMALIZATION_HASHES.json"
+    ]
   },
   "constraint_parity": {
     "rival_scan": {
@@ -535,7 +528,6 @@
   },
   "release_profile": {
     "id": "jlcpcb-4layer-assembled",
-    "visual_review_evidence": "generated/release/visual_review.json",
     "mandatory_gates": [
       "PROV.FIXTURE_INTEGRITY",
       "PROV.SOURCE_AUTHORITY",
@@ -562,6 +554,9 @@
       "ARCH.PROVENANCE",
       "CFG.NO_RIVAL_THRESHOLDS",
       "CFG.THRESHOLD_PARITY"
+    ],
+    "required_evidence": [
+      "generated/release/visual_review.json"
     ]
   },
   "release_generation": {
@@ -572,10 +567,6 @@
       ".#*",
       "*-lock",
       "*.kicad_prl-lock"
-    ],
-    "purge_globs": [
-      "generated/**",
-      "generated"
     ],
     "erc": {
       "output": "erc.json"
@@ -653,8 +644,7 @@
       }
     },
     "archive": {
-      "zip": "microphone_array_v2-revA-fabrication.zip",
-      "manifest": "MANIFEST.md"
+      "zip": "microphone_array_v2-revA-fabrication.zip"
     }
   },
   "derived_from": {

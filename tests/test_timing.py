@@ -29,7 +29,7 @@ if HERE not in sys.path:
 
 import pcbnew                                                      # noqa: E402
 
-from pcbqa import (canonical, cleanroom, component_models, core,    # noqa: E402
+from pcbqa import (canonical, closure as closure_mod, component_models, core,    # noqa: E402
                    electrical_path, geom, propagation, stackup_physical)
 from pcbqa.core import Context, Manifest, Status                    # noqa: E402
 from pcbqa.electrical_path import PathError                         # noqa: E402
@@ -1296,16 +1296,16 @@ class TimingInputsAreTracked(unittest.TestCase):
     def test_changing_a_model_file_changes_the_source_closure(self):
         fixture = make(mutate=self._with_model, tag="modelhash")
         policy = canonical.AttributePolicy.load(paths.ATTRIBUTES)
-        before = cleanroom.closure_digest(
-            cleanroom.source_closure(fixture.manifest, policy))
+        before = closure_mod.closure_digest(
+            closure_mod.source_closure(fixture.manifest, policy))
         target = os.path.join(fixture.project, "models",
                               "physical_stackup.json")
         document = json.load(open(target, encoding="utf-8"))
         document["layers"][1]["epsilon_r"] = 4.2
         with open(target, "w", encoding="utf-8") as handle:
             json.dump(document, handle, indent=2)
-        after = cleanroom.closure_digest(
-            cleanroom.source_closure(Manifest(fixture.manifest_path), policy))
+        after = closure_mod.closure_digest(
+            closure_mod.source_closure(Manifest(fixture.manifest_path), policy))
         self.assertNotEqual(before, after,
                             "a material figure changed and the closure did "
                             "not, so every committed result would still look "
@@ -1313,13 +1313,13 @@ class TimingInputsAreTracked(unittest.TestCase):
 
     def test_timing_policy_is_part_of_the_configuration_identity(self):
         fixture = make(tag="cfgid")
-        before = cleanroom.configuration_identity(fixture.manifest)
+        before = closure_mod.configuration_identity(fixture.manifest)
         document = json.load(open(fixture.manifest_path, encoding="utf-8"))
         document["timing"]["interfaces"]["series"]["groups"]["loads"][
             "max_length_spread_mm"] = 99.0
         other = write_manifest(
             tempfile.mkdtemp(prefix="pcbqa_cfgid_"), document)
-        after = cleanroom.configuration_identity(Manifest(other))
+        after = closure_mod.configuration_identity(Manifest(other))
         self.assertNotEqual(before, after,
                             "a timing limit changed without changing the "
                             "configuration identity")
@@ -1716,7 +1716,7 @@ class ProvenanceIsCheckedIndependently(unittest.TestCase):
         """So a test comparing those two would have passed on the broken board."""
         fixture = make(mutate=_pinning("pcbqa.propagation"), tag="prov_agree")
         policy = canonical.AttributePolicy.load(paths.ATTRIBUTES)
-        closure = cleanroom.source_closure(fixture.manifest, policy)
+        closure = closure_mod.source_closure(fixture.manifest, policy)
         executed = sorted(k[len("<executed>"):] for k in closure
                           if k.startswith("<executed>"))
         declared = sorted(fixture.manifest.get(

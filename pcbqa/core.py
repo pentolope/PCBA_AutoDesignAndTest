@@ -169,6 +169,12 @@ NEVER_COPY = (".git", "__pycache__", ".mypy_cache", ".pytest_cache",
               "KiCadRoutingTools")
 
 
+# Anything a fabricator could accept as an order. A tool opening a project has
+# no use for its previously packaged output, and copying one costs megabytes.
+ORDERABLE_SUFFIXES = (".zip", ".7z", ".rar", ".tar", ".tgz", ".tar.gz",
+                      ".tar.bz2", ".tar.xz", ".gz")
+
+
 def copy_project(source, destination, skip_archives=False):
     """Copy a project tree without copying the destination into itself.
 
@@ -180,7 +186,6 @@ def copy_project(source, destination, skip_archives=False):
     here, so the copy terminates whatever the project root happens to contain.
     """
     import shutil
-    from .layout import ORDERABLE_SUFFIXES
 
     target = os.path.realpath(destination)
     # Every ancestor of the destination, so a parent on the path to it is not
@@ -539,7 +544,7 @@ def summarise(results):
     return counts, blocking
 
 
-def _toolkit_identity():
+def toolkit_identity():
     """The validation implementation's own identity.
 
     A verdict is a function of the board AND of the code that
@@ -582,7 +587,7 @@ def _tooling(context):
     return {
         "environment_ok": ok,
         "kicad_cli": context.kicad_cli,
-        "validation_implementation": _toolkit_identity(),
+        "validation_implementation": toolkit_identity(),
         "kicad_version": context.tool_versions.get("kicad", "unrecorded"),
         "components": [
             {"name": r["name"], "version": r["version"], "path": r.get("path"),
@@ -593,11 +598,24 @@ def _tooling(context):
     }
 
 
+def _source_closure_sha256(context):
+    """The design identity this verdict is about, or why it is unknown."""
+    from . import closure
+    try:
+        return closure.current(context.manifest)[1]
+    except Exception as exc:                                   # noqa: BLE001
+        return "UNAVAILABLE: {}: {}".format(type(exc).__name__, exc)
+
+
 def to_json(results, context, extra=None):
     counts, blocking = summarise(results)
     doc = {
         "schema_version": SCHEMA_VERSION,
         "generated_utc": utcnow(),
+        # A verdict is about one design state. Recorded at the top level so a
+        # committed validation report can be bound to the sources beside it
+        # without reading a gate's measurements.
+        "source_closure_sha256": _source_closure_sha256(context),
         "manifest": {
             "path": context.manifest.path,
             "sha256": context.manifest.sha256,

@@ -758,16 +758,16 @@ class TheImplementationIsPinnedToo(unittest.TestCase):
     """
 
     def setUp(self):
-        from pcbqa import canonical, cleanroom
+        from pcbqa import canonical, closure as closure_mod
         from pcbqa.core import Manifest
-        self.cleanroom = cleanroom
+        self.closure_mod = closure_mod
         self.manifest = Manifest(_live())
         self.policy = canonical.AttributePolicy.load(
             self.manifest.resolve(self.manifest.get("fixture.attributes_file")))
         self.required = _spec()["reproduction_inputs"]["required_modules"]
 
     def _closure(self):
-        return self.cleanroom.source_closure(self.manifest, self.policy)
+        return self.closure_mod.source_closure(self.manifest, self.policy)
 
     def test_every_required_module_is_in_the_closure(self):
         closure = self._closure()
@@ -785,7 +785,7 @@ class TheImplementationIsPinnedToo(unittest.TestCase):
     def test_modifying_an_implementation_file_changes_the_closure(self):
         """Provenance must not survive an edit to the code it describes."""
         import importlib
-        before = self.cleanroom.closure_digest(self._closure())
+        before = self.closure_mod.closure_digest(self._closure())
         name = "pcbqa.orientation"
         module = importlib.import_module(name)
         original = module.__file__
@@ -797,7 +797,7 @@ class TheImplementationIsPinnedToo(unittest.TestCase):
             fh.write(body + b"\n# one comment, and the release is a different one\n")
         module.__file__ = edited
         try:
-            after = self.cleanroom.closure_digest(self._closure())
+            after = self.closure_mod.closure_digest(self._closure())
         finally:
             module.__file__ = original
         self.assertNotEqual(before, after,
@@ -823,7 +823,7 @@ class TheImplementationIsPinnedToo(unittest.TestCase):
 
     def test_a_module_that_cannot_be_imported_is_refused(self):
         with self.assertRaises(Exception):
-            self.cleanroom.executed_implementation(["pcbqa.not_a_module"])
+            self.closure_mod.executed_implementation(["pcbqa.not_a_module"])
 
 
 # ---------------------------------------------------------------------------
@@ -835,9 +835,9 @@ class ACleanReleaseRefusesAnUnreviewedPart(unittest.TestCase):
 
     apply_to_rows() refusing and the gate objecting are each worth testing and
     neither proves that a release cannot ship. This drives the same entry point
-    a real release uses, against an isolated copy of the project whose registry
-    has lost U2's part number, and requires that nothing is published and that
-    the release committed in this repository is not touched.
+    a real build uses, against an isolated copy of the project whose registry
+    has lost U2's part number, and requires that nothing was installed - not
+    into the copy, and not into the release committed in this repository.
     """
 
     def _tree_digest(self, root):
@@ -850,7 +850,7 @@ class ACleanReleaseRefusesAnUnreviewedPart(unittest.TestCase):
                         fh.read()).hexdigest()
         return out
 
-    def test_it_is_rejected_and_nothing_is_published(self):
+    def test_it_is_rejected_and_nothing_is_installed(self):
         import run
 
         committed = os.path.join(_project(), "generated", "release")
@@ -859,6 +859,8 @@ class ACleanReleaseRefusesAnUnreviewedPart(unittest.TestCase):
         work = _scratch("pcbqa_release_missing_")
         project = os.path.join(work, "project")
         _copy_project_safely(project)
+        isolated = os.path.join(project, "generated", "release")
+        isolated_before = self._tree_digest(isolated)
 
         doc = _manifest_doc()
         doc["board_id"] = "orientation-missing-mapping"
@@ -879,7 +881,7 @@ class ACleanReleaseRefusesAnUnreviewedPart(unittest.TestCase):
         captured = io.StringIO()
         try:
             with contextlib.redirect_stdout(captured):
-                code = run.cmd_release(manifest_path)
+                code = run.cmd_build(manifest_path)
         finally:
             if saved is None:
                 os.environ.pop(ENV_OUTPUT_ROOT, None)
@@ -888,7 +890,7 @@ class ACleanReleaseRefusesAnUnreviewedPart(unittest.TestCase):
         printed = captured.getvalue()
 
         self.assertNotEqual(code, 0, "a release shipped without U2 reviewed")
-        self.assertIn("RELEASE BLOCKED", printed)
+        self.assertIn("BUILD BLOCKED", printed)
         blamed = [line for line in printed.splitlines()
                   if "C7668" in line or "U2" in line]
         self.assertTrue(blamed,
@@ -899,12 +901,8 @@ class ACleanReleaseRefusesAnUnreviewedPart(unittest.TestCase):
             "the refusal names the part but not the missing mapping:\n"
             + "\n".join(blamed))
 
-        board_out = os.path.join(work, "out", doc["board_id"])
-        published = os.path.join(board_out, "published")
-        self.assertFalse(os.path.isdir(published) and os.listdir(published),
-                         "a candidate was published anyway")
-        self.assertFalse(os.path.isfile(os.path.join(board_out, "latest.json")),
-                         "a latest.json was written for a rejected release")
+        self.assertEqual(self._tree_digest(isolated), isolated_before,
+                         "a blocked build installed artifacts anyway")
         self.assertEqual(self._tree_digest(committed), before,
                          "the committed release was modified by a failed run")
 

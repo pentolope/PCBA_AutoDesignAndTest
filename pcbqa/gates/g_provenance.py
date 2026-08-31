@@ -112,17 +112,17 @@ def report_freshness(ctx, res):
     that records no hashes cannot be tied to a revision and is stale by
     definition.
     """
-    from .. import canonical, cleanroom
+    from .. import canonical
+    from .. import closure as closure_mod
 
     spec = ctx.manifest.get("reports")
     root = ctx.manifest.resolve(".")
     res.limit(ctx.manifest.constraint("reports.source_closure",
                                       units="path glob",
                                       cid="reports.source_closure"))
-    policy = canonical.AttributePolicy.load(
-        ctx.manifest.resolve(ctx.manifest.get("fixture.attributes_file")))
-    closure = cleanroom.source_closure(ctx.manifest, policy)
-    closure_hash = cleanroom.closure_digest(closure)
+    policy = closure_mod.policy_for(ctx.manifest)
+    closure = closure_mod.source_closure(ctx.manifest, policy)
+    closure_hash = closure_mod.closure_digest(closure)
     res.measurements["source_closure_files"] = len(closure)
     res.measurements["source_closure_sha256"] = closure_hash
 
@@ -205,8 +205,8 @@ def report_freshness(ctx, res):
     # release must produce are named by the generation steps that produce
     # them, so "the glob found nothing" and "this board has no reports" are
     # told apart by configuration rather than by an empty result.
-    from ..coherence import leaf, required_report_files
-    required = [leaf(name) for name in required_report_files(ctx.manifest)]
+    from ..artifacts import leaf, report_files
+    required = [leaf(name) for name in report_files(ctx.manifest)]
     seen = {leaf(rel) for rel in examined}
     res.measurements["reports_required"] = required
     res.measurements["reports_examined"] = len(examined)
@@ -256,7 +256,8 @@ def source_closure_covers_derivations(ctx, res):
     both as globs and per registry entry. Losing a single evidence file, or
     dropping the glob that carries them, fails here rather than later.
     """
-    from .. import canonical, cleanroom
+    from .. import canonical
+    from .. import closure as closure_mod
     from ..orientation import Registry
 
     spec = ctx.manifest.get(
@@ -266,9 +267,8 @@ def source_closure_covers_derivations(ctx, res):
         units="path glob",
         cid="cpl_orientation.reproduction_inputs.required_globs"))
 
-    policy = canonical.AttributePolicy.load(
-        ctx.manifest.resolve(ctx.manifest.get("fixture.attributes_file")))
-    closure = cleanroom.source_closure(ctx.manifest, policy)
+    policy = closure_mod.policy_for(ctx.manifest)
+    closure = closure_mod.source_closure(ctx.manifest, policy)
     res.measurements["source_closure_files"] = len(closure)
 
     root = ctx.manifest.resolve(".")
@@ -385,53 +385,3 @@ def source_closure_covers_derivations(ctx, res):
         "schema, and both evidence files for each of the {} registry entries - "
         "are inside the {}-file source closure".format(
             len(covered), len(registry.entries), len(closure)))
-
-
-# ---------------------------------------------------------------------------
-# release coherence
-# ---------------------------------------------------------------------------
-
-@gate("PROV.RELEASE_COHERENCE",
-      "The release package is one run, and every file in it says so",
-      requires=("archive.zip", "archive.manifest", "artifacts.bom",
-                "artifacts.cpl"))
-def release_coherence(ctx, res):
-    """Do the files in the release directory agree about what they are?
-
-    Each of them makes checkable claims about the others, and a package can
-    reach a state where every file is individually well formed and the set is
-    a lie: a validation report describing an archive that is not there, beside
-    an archive no report describes. Prose explaining the mismatch does not fix
-    it; only a check does.
-
-    A package still being built has no reports yet, so there are two cases and
-    the discriminator is whether the package claims to have been validated. If
-    it carries a validation report it must also carry the receipt that says
-    which files belong to it - the report cannot contain its own digest, so
-    the receipt is written last and is the anchor for everything else.
-    """
-    from .. import coherence
-
-    names = coherence.member_names(ctx.manifest)
-    root = os.path.dirname(ctx.manifest.resolve(ctx.manifest.get("archive.zip")))
-    res.evidence_file(os.path.join(root, names["manifest"]))
-    validated = os.path.isfile(os.path.join(root, names["validation"]))
-    problems, facts = coherence.check(root, names, require_receipt=validated)
-
-    res.measurements.update(facts)
-    for problem in problems[:40]:
-        res.finding(**problem)
-    if problems:
-        return res.failed("{} incoherence(s) in the release package".format(
-            len(problems)))
-    if facts.get("stage") == "candidate":
-        return res.passed(
-            "the release manifest records the digests of the archive, BOM and "
-            "CPL beside it; this package is still a candidate, so it carries "
-            "no reports to cross-check yet")
-    return res.passed(
-        "all {} files in the release came from one run: the manifest, both "
-        "check reports, the clean-room record and the validation report name "
-        "one source closure, the validated archive and manifest are the "
-        "installed ones, and the receipt accounts for every file".format(
-            facts.get("files_in_package")))

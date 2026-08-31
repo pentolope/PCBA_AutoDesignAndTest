@@ -52,7 +52,7 @@ tells you exactly what you have not yet opted into.
 | `placement_rules` | `CONTRACT.PLACEMENT` |
 | `artifacts.bom` + `artifacts.cpl` | `BOM.NATIVE_PARITY`, `CPL.NATIVE_PARITY` |
 | `archive.zip` + `archive.allow` | `ARCH.CONTENTS` |
-| `archive.manifest` | `ARCH.PROVENANCE` |
+| `artifacts.fabrication_manifest` | `ARCH.PROVENANCE` |
 | `fabrication_naming` | `FAB.LAYER_IDENTITY` |
 | `release_generation.cpl_orientation` | `CPL.ORIENTATION` |
 | `constraint_parity.rival_scan` | `CFG.NO_RIVAL_THRESHOLDS` |
@@ -92,13 +92,38 @@ origin.
 
 ## 6. Release
 
+A release is a Git tag over a commit that already contains the fabrication
+artifacts, so an old board can be refabricated from the tag without regenerating
+anything.
+
 ```bash
-python3 tooling/PCBA_AutoDesignAndTest/run.py release board/manifest.json
+python3 tooling/PCBA_AutoDesignAndTest/run.py build board/manifest.json
 ```
 
-The release copies your project, purges every previously generated output *from
-that copy*, regenerates everything in one run, and publishes only after every
-mandatory gate passes. A published release is a **candidate**, not an order.
+Runs KiCad against a private copy of your project and installs the Gerbers,
+drills, BOM, CPL, archive and check reports into the paths your manifest
+declares, together with `fabrication.json` - the digest of every artifact and
+the source closure it was generated from. All of it or none of it.
+
+```bash
+python3 tooling/PCBA_AutoDesignAndTest/run.py validate board/manifest.json --write
+```
+
+Judges the design and those exact artifacts, and records the verdict at
+`artifacts.validation_report`.
+
+Commit everything, artifacts included. Then:
+
+```bash
+python3 tooling/PCBA_AutoDesignAndTest/run.py release-check board/manifest.json
+```
+
+Exits zero only when the working tree is clean, every submodule is exactly at
+its committed gitlink, every release artifact and every file named in
+`release_profile.required_evidence` is tracked, every mandatory gate passes now,
+and the committed verdict is about this same design. It writes nothing and
+creates no tag; when it passes it prints the `git tag -a` command to run. A tag
+is a release, not an order.
 
 ## A worked example
 

@@ -116,11 +116,11 @@
   "fixture": {},
   "release_profile": {
     "id": "generic-2layer",
-    "visual_review_evidence": "generated/release/visual_review.json",
     "mandatory_gates": [
       "STACK.NATIVE_VS_MANIFEST",
       "ROUTE.ANGLE_STYLE"
-    ]
+    ],
+    "required_evidence": []
   },
   "artifacts": {
     "gerber_export_flags": [

@@ -18,7 +18,7 @@ from pcbqa import core                              # noqa: E402
 class TheImplementationIdentityIsStamped(unittest.TestCase):
 
     def test_the_identity_names_the_executing_commit(self):
-        record = core._toolkit_identity()
+        record = core.toolkit_identity()
         self.assertEqual(record["toolkit_root"], HERE)
         head = subprocess.run(
             ["git", "-C", HERE, "rev-parse", "HEAD"],
@@ -41,7 +41,7 @@ class TheImplementationIdentityIsStamped(unittest.TestCase):
         block = core._tooling(context)
         identity = block["validation_implementation"]
         self.assertEqual(identity["toolkit_root"], HERE)
-        self.assertEqual(identity, core._toolkit_identity())
+        self.assertEqual(identity, core.toolkit_identity())
 
 
 if __name__ == "__main__":                        # pragma: no cover

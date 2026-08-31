@@ -22,7 +22,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from tests import paths                                                    # noqa: E402
-from pcbqa import canonical, cleanroom, core, reports    # noqa: E402
+from pcbqa import canonical, closure as closure_mod, core, reports    # noqa: E402
 from pcbqa.core import Context, Manifest, Status         # noqa: E402
 from pcbqa.gates import g_checks, g_provenance           # noqa: E402,F401
 
@@ -412,8 +412,8 @@ class ReportFreshness(unittest.TestCase):
 
         manifest = Manifest(box.manifest_path)
         policy = canonical.AttributePolicy.load(self.ATTRIBUTES)
-        closure = cleanroom.source_closure(manifest, policy)
-        digest = cleanroom.closure_digest(closure)
+        closure = closure_mod.source_closure(manifest, policy)
+        digest = closure_mod.closure_digest(closure)
         pairs = (("erc.json", manifest.resolve(manifest.get("sources.schematic"))),
                  ("drc.json", manifest.resolve(manifest.get("sources.pcb"))))
         for name, source in pairs:

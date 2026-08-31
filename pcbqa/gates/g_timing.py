@@ -1045,14 +1045,13 @@ def timing_models(ctx, res):
     changing the source closure, every committed timing report keeps looking
     fresh after the number it reports has stopped being true.
     """
-    from .. import canonical, cleanroom
+    from .. import closure as closure_mod
 
     declared = ctx.manifest.get("timing.models")
     res.limit(ctx.manifest.constraint("timing.models", units="model role",
                                       cid="timing.models"))
-    policy = canonical.AttributePolicy.load(
-        ctx.manifest.resolve(ctx.manifest.get("fixture.attributes_file")))
-    closure = cleanroom.source_closure(ctx.manifest, policy)
+    closure = closure_mod.source_closure(ctx.manifest,
+                                         closure_mod.policy_for(ctx.manifest))
     res.measurements["source_closure_files"] = len(closure)
 
     root = ctx.manifest.resolve(".")
@@ -1116,11 +1115,10 @@ def derivation_closure(ctx, res):
     entry from a board's manifest and this fails, because the toolkit still
     says the code is load-bearing.
     """
-    from .. import canonical, cleanroom, core
+    from .. import closure as closure_mod, core
 
-    policy = canonical.AttributePolicy.load(
-        ctx.manifest.resolve(ctx.manifest.get("fixture.attributes_file")))
-    closure = cleanroom.source_closure(ctx.manifest, policy)
+    closure = closure_mod.source_closure(ctx.manifest,
+                                         closure_mod.policy_for(ctx.manifest))
 
     # A gate is applicable exactly when the manifest declares everything it
     # requires - the same test the registry applies before running it. A gate
