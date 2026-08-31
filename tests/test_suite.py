@@ -331,13 +331,11 @@ class GenericSourceHygiene(unittest.TestCase):
                     # A fabricator profile mixes two kinds of file: authored
                     # source (process.json and friends), which these hygiene
                     # rules govern, and the ACQUIRED evidence store - the
-                    # approved/observed catalog snapshots, whose numbers are
-                    # the fabricator's own (a 69% resin content is data, not
-                    # a leaked fixture answer) and whose observed side is
-                    # machine-local and not even committed. The store
-                    # directories are data, not source, and are not scanned.
-                    dirs[:] = [d for d in dirs
-                               if d not in ("catalog", "observed")]
+                    # the committed catalog, whose numbers are JLCPCB's own
+                    # (a 69% resin content is data, not a leaked fixture
+                    # answer). The catalog directory is data, not source, and
+                    # is not scanned.
+                    dirs[:] = [d for d in dirs if d != "catalog"]
                 for name in files:
                     if not name.endswith(self.PRODUCTION_SUFFIXES):
                         continue
@@ -532,28 +530,6 @@ class Mutations(unittest.TestCase):
 
     def _mutated_manifest(self, mutate):
         return temp_manifest("mut", mutate)
-
-    def test_relaxing_a_checker_threshold_without_the_manifest_is_detected(self):
-        """CFG.NO_RIVAL_THRESHOLDS must catch a divergent constant in a checker."""
-        results, _ = validate(REVA)
-        rival = results["CFG.NO_RIVAL_THRESHOLDS"]
-        self.assertEqual(rival["status"], Status.FAIL)
-        constants = {f["constant"] for f in rival["findings"]}
-        self.assertIn("BRANCH_SKEW_LIMIT_MM", constants)
-
-    def test_threshold_parity_detects_a_gate_that_invents_a_limit(self):
-        """A gate citing a manifest key whose value differs must be caught."""
-        from pcbqa.core import GateResult
-        manifest = Manifest(REVA)
-        ctx = Context(manifest, tempfile.mkdtemp(prefix="pcbqa_"))
-        applied = ctx.cache("applied_limits", dict)
-        applied["FAKE.limit"] = {
-            "value": 999.0,
-            "source": manifest.source_of("routing.min_segment_mm"),
-        }
-        res = GateResult("CFG.THRESHOLD_PARITY", "t")
-        g_contracts.threshold_parity(ctx, res)
-        self.assertEqual(res.status, Status.FAIL)
 
     def test_stale_drc_report_substitution_is_detected(self):
         """Swapping in a report that names a different source must be caught."""

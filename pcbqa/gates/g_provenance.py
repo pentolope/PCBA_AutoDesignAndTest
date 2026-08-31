@@ -1,7 +1,6 @@
-"""Provenance, source authority and authoritative ERC/DRC gates.
+"""Provenance gates: are the committed results about the design in the tree?
 
-Generic: every path, rule name, tolerance and claim pattern comes from the
-manifest.
+Generic: every path, rule name and tolerance comes from the manifest.
 """
 
 from __future__ import annotations
@@ -9,80 +8,8 @@ from __future__ import annotations
 import glob
 import json
 import os
-import re
-import sys
 
-from ..core import Status, gate, sha256_file
-
-
-# ---------------------------------------------------------------------------
-# source-of-truth authority
-# ---------------------------------------------------------------------------
-
-@gate("PROV.SOURCE_AUTHORITY", "KiCad is the sole design authority",
-      requires=("source_authority",))
-def source_authority(ctx, res):
-    policy = ctx.manifest.get("source_authority")
-    root = ctx.manifest.resolve(".")
-    res.limit(ctx.manifest.constraint("source_authority.authority",
-                                      units="policy", cid="source_authority"))
-
-    claims = []
-    for spec in policy.get("claim_scan", []):
-        pattern = re.compile(spec["pattern"], re.I)
-        for rel in _expand(root, spec["files"]):
-            path = os.path.join(root, rel)
-            try:
-                text = open(path, encoding="utf-8", errors="ignore").read()
-            except OSError:
-                continue
-            for m in pattern.finditer(text):
-                line = text[:m.start()].count("\n") + 1
-                claims.append({"file": rel, "line": line,
-                               "claim": spec["claim"],
-                               "text": m.group(0)[:110]})
-    by_claim = {}
-    for c in claims:
-        by_claim.setdefault(c["claim"], []).append(c)
-
-    # Contradiction: two mutually exclusive claims both asserted somewhere.
-    conflicts = []
-    for pair in policy.get("mutually_exclusive_claims", []):
-        present = [c for c in pair if c in by_claim]
-        if len(present) > 1:
-            conflicts.append(present)
-
-    # A non-KiCad model must not be a data source for released artifacts.
-    derived = []
-    for spec in policy.get("forbidden_derivations", []):
-        pattern = re.compile(spec["pattern"])
-        for rel in _expand(root, spec["files"]):
-            path = os.path.join(root, rel)
-            try:
-                text = open(path, encoding="utf-8", errors="ignore").read()
-            except OSError:
-                continue
-            for m in pattern.finditer(text):
-                derived.append({"file": rel,
-                                "line": text[:m.start()].count("\n") + 1,
-                                "issue": spec["issue"], "text": m.group(0)[:110]})
-
-    for group in conflicts:
-        members = []
-        for claim in group:
-            for c in by_claim[claim][:4]:
-                members.append(f"{c['file']}:{c['line']}")
-        res.finding(issue="contradictory source-of-truth claims",
-                    claims=group, seen_at=members)
-    for d in derived:
-        res.finding(**d)
-
-    res.measurements["claims_found"] = {k: len(v) for k, v in by_claim.items()}
-    if conflicts or derived:
-        return res.failed(
-            f"{len(conflicts)} contradictory authority claim group(s), "
-            f"{len(derived)} non-authoritative derivation(s) of released data")
-    return res.passed("a single, consistent design authority is asserted")
+from ..core import gate
 
 
 def _expand(root, patterns):
@@ -255,6 +182,11 @@ def source_closure_covers_derivations(ctx, res):
     So the inputs are named in the manifest and checked to be closure members,
     both as globs and per registry entry. Losing a single evidence file, or
     dropping the glob that carries them, fails here rather than later.
+
+    Which toolkit code derived them is not asked here. The toolkit enters the
+    closure as its own commit, and a release requires that commit clean and
+    pinned; the board's own derivation script is not toolkit code, so it is
+    still checked by content below.
     """
     from .. import canonical
     from .. import closure as closure_mod
@@ -321,36 +253,9 @@ def source_closure_covers_derivations(ctx, res):
                                   "not in the closure, so the registry's "
                                   "configuration is untracked"})
 
-    # The code that derives the offsets, checked as code that ran rather than
-    # as a file lying at a path. Hashing an unused copy would prove nothing.
-    import importlib
-    executed = {}
-    for name in spec.get("required_modules", []):
-        key = "<executed>" + name
-        if key not in closure:
-            problems.append({
-                "module": name,
-                "issue": "is required to reproduce the offsets but is not in "
-                         "the source closure, so the code that computed them "
-                         "is untracked"})
-            continue
-        module = importlib.import_module(name)
-        path = getattr(module, "__file__", "")
-        digest = sha256_file(path) if path and os.path.isfile(path) else None
-        executed[name] = path
-        if digest != closure[key]:
-            problems.append({
-                "module": name, "file": path,
-                "issue": "the module that is loaded is not the one the closure "
-                         "recorded, so the recorded provenance is of code that "
-                         "did not run",
-                "closure": str(closure[key])[:16],
-                "loaded": str(digest)[:16]})
-    res.measurements["executed_implementation"] = {
-        name: os.path.basename(path) for name, path in sorted(executed.items())}
-
-    # And the derivation script, which travels inside the project: prove the
-    # file that ran has the content the closure recorded.
+    # The derivation script travels inside the project, so the toolkit's own
+    # commit says nothing about it: prove the file that ran has the content
+    # the closure recorded.
     #
     # Asked of what CPL.ORIENTATION loaded, not of sys.modules. The import
     # cache is per process, and a process that had already loaded another

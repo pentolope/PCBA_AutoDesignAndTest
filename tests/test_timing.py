@@ -411,7 +411,6 @@ def manifest_document(project, **overrides):
         "reports": {
             "source_closure": ["*.kicad_pcb", "*.kicad_sch", "*.kicad_pro",
                                "models/*.json"],
-            "implementation_closure": [],
         },
         "fixture": {"attributes_file": paths.ATTRIBUTES},
         "timing": {
@@ -671,9 +670,7 @@ class WhatAPathMeasures(unittest.TestCase):
         self.assertEqual(measurements["propagation_model"],
                          propagation.HAMMERSTAD)
         self.assertEqual(measurements["via_delay_model"], propagation.VIA_NONE)
-        self.assertEqual(measurements["backend_requested"], "analytic")
-        self.assertEqual(measurements["backend_used"], "analytic")
-        self.assertFalse(measurements["backend_fell_back"])
+        self.assertEqual(measurements["backend"], "analytic")
         self.assertIn("interconnect", measurements["scope"])
 
 
@@ -1404,54 +1401,41 @@ class WhereAStackupComesFrom(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# backends
+# the one backend that exists
 # ---------------------------------------------------------------------------
 
-class BackendsStayOptional(unittest.TestCase):
+class OnlyTheImplementedBackendMayBeSelected(unittest.TestCase):
+    """One evaluation exists, so there is nothing to dispatch between.
+
+    What replaced the selection machinery is the property it was there to
+    guarantee: a board naming a solver this release cannot run is refused by
+    name, never quietly given the analytic estimate under that solver's label.
+    """
 
     def test_no_solver_is_imported_by_loading_the_gates(self):
-        """Importing a gate module must not drag in an EM solver."""
         loaded = [name for name in sys.modules
-                  if "openems" in name.lower() or "openEMS" in name]
-        self.assertEqual(
-            [n for n in loaded if not n.startswith("pcbqa.backends")], [],
-            "an EM solver was imported by ordinary validation: {}".format(
-                loaded))
+                  if "openems" in name.lower()]
+        self.assertEqual(loaded, [], loaded)
 
-    def test_the_analytic_backend_is_always_available(self):
-        from pcbqa import backends
-        ok, detail = backends.available(backends.ANALYTIC)
-        self.assertTrue(ok, detail)
+    def test_the_dispatch_package_is_gone(self):
+        with self.assertRaises(ImportError):
+            __import__("pcbqa.backends")
 
-    def test_an_unknown_backend_is_refused_not_approximated(self):
-        from pcbqa import backends
-        with self.assertRaises(backends.BackendError):
-            backends.require("magic-solver")
-
-    def test_a_board_requiring_an_unavailable_solver_blocks(self):
-        from pcbqa.backends import openems
-        if openems.executable():                       # pragma: no cover
-            self.skipTest("openEMS is installed here, so unavailability "
-                          "cannot be exercised")
-
+    def test_an_unimplemented_backend_is_refused_by_name(self):
         def mutate(document, _project):
             document["timing"]["propagation"]["backend"] = "openems"
-        fixture = make(mutate=mutate, tag="openems")
-        results = fixture.gates(only={"TIMING.PATH_INTEGRITY",
-                                      "TIMING.INTERCONNECT_DELAY",
+        fixture = make(mutate=mutate, tag="other_backend")
+        results = fixture.gates(only={"TIMING.INTERCONNECT_DELAY",
                                       "TIMING.INTERCONNECT_SKEW"})
-        for gate_id in ("TIMING.INTERCONNECT_DELAY",
-                        "TIMING.INTERCONNECT_SKEW"):
-            self.assertEqual(results[gate_id].status, Status.ERROR, gate_id)
-            self.assertIn("openems", results[gate_id].reason.lower())
-        # The geometry question never needed the solver.
-        self.assertEqual(results["TIMING.PATH_INTEGRITY"].status, Status.PASS,
-                         results["TIMING.PATH_INTEGRITY"].reason)
+        for gate_id, result in results.items():
+            self.assertEqual(result.status, Status.ERROR, gate_id)
+            self.assertIn("openems", result.reason.lower())
 
-    def test_the_solver_stub_refuses_rather_than_estimating(self):
-        from pcbqa.backends import openems
-        with self.assertRaises(NotImplementedError):
-            openems.extract(None, None)
+    def test_the_result_names_the_backend_that_ran(self):
+        fixture = make(tag="backend_named")
+        result = fixture.gates(only={"TIMING.INTERCONNECT_DELAY"})[
+            "TIMING.INTERCONNECT_DELAY"]
+        self.assertEqual(result.measurements["backend"], "analytic")
 
 
 # ---------------------------------------------------------------------------
@@ -1490,7 +1474,7 @@ class ExistingBehaviourIsUnchanged(unittest.TestCase):
         self.assertEqual(result.status, Status.FAIL)
 
     def test_every_timing_limit_is_a_typed_manifest_constraint(self):
-        """What CFG.THRESHOLD_PARITY demands of every gate, checked here too."""
+        """What tests/test_gate_limits.py demands of every gate, for these."""
         def mutate(document, _project):
             interface = document["timing"]["interfaces"]["series"]
             interface["limits"] = {"max_delay_ps": 100000.0}
@@ -1522,8 +1506,7 @@ class ExistingBehaviourIsUnchanged(unittest.TestCase):
         """A second pass over just the new modules, cheap and specific."""
         forbidden = ("PDM", "MSM261", "microphone", "SN74LVC")
         for name in ("electrical_path.py", "propagation.py",
-                     "stackup_physical.py", "backends/__init__.py",
-                     "backends/openems.py", "gates/g_timing.py"):
+                     "stackup_physical.py", "gates/g_timing.py"):
             path = os.path.join(paths.PACKAGE, *name.split("/"))
             text = open(path, encoding="utf-8").read()
             for token in forbidden:
@@ -1635,9 +1618,7 @@ class ARegisteredConsumersTimingPolicy(unittest.TestCase):
                        stackup_physical.MERGED))
         self.assertIn(measurements["propagation_model"], propagation.MODELS)
         self.assertIn(measurements["via_delay_model"], propagation.VIA_MODELS)
-        self.assertTrue(measurements["backend_requested"])
-        self.assertTrue(measurements["backend_used"])
-        self.assertIn("backend_fell_back", measurements)
+        self.assertEqual(measurements["backend"], propagation.ANALYTIC)
 
     def test_no_delay_is_reported_where_the_stackup_cannot_support_one(self):
         """The whole point: absent material data produce absence, not numbers."""
@@ -1672,76 +1653,45 @@ def _declared_routes(interface):
 
 
 # ---------------------------------------------------------------------------
-# provenance, checked against something other than the declaration
+# provenance: the toolkit that judged, from Git
 # ---------------------------------------------------------------------------
 
-def _pinning(*extra):
-    """A mutation that pins the modules the applicable gates say they need."""
-    def mutate(document, _project):
-        needed = sorted(core.derivation_modules())
-        document["reports"]["implementation_closure"] = [
-            name for name in needed if name not in extra]
-    return mutate
+class TheToolkitIsIdentifiedByItsCommit(unittest.TestCase):
+    """One entry, not a per-module list a board maintained by hand.
 
-
-class ProvenanceIsCheckedIndependently(unittest.TestCase):
-    """Removing a dependency must fail even though nothing contradicts itself.
-
-    The trap this replaces compared the closure's executed modules against the
-    manifest key the closure was built from. That comparison holds however
-    wrong the manifest is: delete an entry and both sides shrink together. The
-    requirement has to come from somewhere the board cannot edit, which is the
-    gate registry - each gate states which modules compute what it reports.
+    A release requires the toolkit submodule clean and at its gitlink, so at
+    the moment identity has to be right the commit determines the code. What
+    the commit cannot describe - the board's own derivation script - is still
+    checked by content, by PROV.SOURCE_CLOSURE.
     """
 
-    def test_a_complete_declaration_passes(self):
-        fixture = make(mutate=_pinning(), tag="prov_ok")
-        result = fixture.gates(only={"PROV.DERIVATION_CLOSURE"})[
-            "PROV.DERIVATION_CLOSURE"]
-        self.assertEqual(result.status, Status.PASS, result.reason)
-        self.assertTrue(result.measurements["derivation_modules_required"])
+    def test_the_closure_names_the_toolkit_commit(self):
+        from pcbqa import closure as closure_mod
+        fixture = make(tag="prov_commit")
+        closure = closure_mod.source_closure(
+            fixture.manifest, closure_mod.policy_for(fixture.manifest))
+        self.assertIn("<toolkit>", closure)
+        commit, _, state = closure["<toolkit>"].partition("+")
+        self.assertEqual(len(commit), 40, closure["<toolkit>"])
+        self.assertIn(state, ("clean", "dirty"))
 
-    def test_dropping_a_timing_dependency_is_caught(self):
-        """The whole point. Manifest and closure agree; the toolkit does not."""
-        fixture = make(mutate=_pinning("pcbqa.propagation"), tag="prov_gap")
-        result = fixture.gates(only={"PROV.DERIVATION_CLOSURE"})[
-            "PROV.DERIVATION_CLOSURE"]
-        self.assertEqual(result.status, Status.FAIL, result.reason)
-        self.assertEqual([f["module"] for f in result.findings],
-                         ["pcbqa.propagation"])
-        self.assertIn("TIMING.INTERCONNECT_DELAY",
-                      result.findings[0]["required_by"])
+    def test_a_dirty_toolkit_is_a_different_identity(self):
+        from pcbqa import closure as closure_mod, core as pcbqa_core
+        real = pcbqa_core.toolkit_identity
+        seen = set()
+        try:
+            for dirty in (False, True):
+                pcbqa_core.toolkit_identity = (
+                    lambda d=dirty: {"commit": "a" * 40,
+                                     "working_tree_dirty": d})
+                seen.add(closure_mod.implementation_identity()["<toolkit>"])
+        finally:
+            pcbqa_core.toolkit_identity = real
+        self.assertEqual(len(seen), 2, seen)
 
-    def test_the_declaration_and_the_closure_still_agree_with_each_other(self):
-        """So a test comparing those two would have passed on the broken board."""
-        fixture = make(mutate=_pinning("pcbqa.propagation"), tag="prov_agree")
-        policy = canonical.AttributePolicy.load(paths.ATTRIBUTES)
-        closure = closure_mod.source_closure(fixture.manifest, policy)
-        executed = sorted(k[len("<executed>"):] for k in closure
-                          if k.startswith("<executed>"))
-        declared = sorted(fixture.manifest.get(
-            "reports.implementation_closure"))
-        self.assertEqual(executed, declared,
-                         "the two sides of the old check must still match, or "
-                         "this test is not demonstrating anything")
-
-    def test_a_gate_that_is_not_applicable_demands_nothing(self):
-        """A board with no timing policy keeps its previous obligations."""
-        def mutate(document, project):
-            _pinning()(document, project)
-            document.pop("timing")
-            document["reports"]["implementation_closure"] = []
-        fixture = make(mutate=mutate, tag="prov_none")
-        result = fixture.gates(only={"PROV.DERIVATION_CLOSURE"})[
-            "PROV.DERIVATION_CLOSURE"]
-        self.assertEqual(result.status, Status.PASS, result.reason)
-
-    def test_every_declared_derivation_module_is_importable(self):
-        """A registry naming a module that does not exist would fail closed
-        for the wrong reason, and only on a board unlucky enough to run it."""
-        import importlib
-        for module in sorted(core.derivation_modules()):
-            self.assertTrue(importlib.import_module(module))
+    def test_the_registry_no_longer_carries_derivation_declarations(self):
+        for entry in core.registered():
+            self.assertNotIn("derives", entry, entry["id"])
 
 
 # ---------------------------------------------------------------------------
@@ -1883,22 +1833,28 @@ class ComponentModelsFailSafely(unittest.TestCase):
                                        "delay_ps": -1.0,
                                        "provenance": "x"}, "R1.1")
 
-    def test_an_unknown_model_name_refuses_at_declaration_time(self):
-        with self.assertRaises(PathError):
-            electrical_path.step_from_spec(
-                {"kind": "component", "reference": "R1", "from_pad": "1",
-                 "to_pad": "2", "delay_model": {"model": "vibes"}}, 1)
+    def test_an_unknown_model_name_is_refused_per_traversal(self):
+        """Well formed, so it parses; unimplementable, so it derives nothing."""
+        step = electrical_path.step_from_spec(
+            {"kind": "component", "reference": "R1", "from_pad": "1",
+             "to_pad": "2", "delay_model": {"model": "vibes"}}, 1)
+        self.assertIsNotNone(step)
+        contribution = component_models.evaluate({"model": "vibes"}, "R1.1")
+        self.assertEqual(contribution.kind, component_models.UNSUPPORTED)
+        self.assertFalse(contribution.evaluable)
 
     def test_a_bare_string_model_refuses(self):
         with self.assertRaises(component_models.ComponentModelError):
             component_models.evaluate("none", "R1.1")
 
     def test_every_reserved_name_is_refused_rather_than_unknown(self):
-        for name in component_models.RESERVED_MODELS:
+        for name in ("ibis", "touchstone", "sparameter", "device",
+                     "not_a_model_at_all"):
             contribution = component_models.evaluate({"model": name}, "R1.1")
             self.assertEqual(contribution.kind, component_models.UNSUPPORTED,
                              name)
             self.assertFalse(contribution.evaluable, name)
+            self.assertIsNone(contribution.delay_ps, name)
 
 
 # ---------------------------------------------------------------------------
@@ -1963,70 +1919,6 @@ class UnpopulatedPartsDoNotConduct(unittest.TestCase):
             "resolved"].component_traversals()[0]
         self.assertIn("dnp", traversal)
         self.assertFalse(traversal["dnp"])
-
-
-# ---------------------------------------------------------------------------
-# backends
-# ---------------------------------------------------------------------------
-
-class BackendFallbackSemantics(unittest.TestCase):
-
-    def setUp(self):
-        from pcbqa.backends import openems
-        if openems.executable():                        # pragma: no cover
-            self.skipTest("openEMS is installed here")
-
-    def test_a_required_backend_that_is_missing_blocks(self):
-        from pcbqa import backends
-        with self.assertRaises(backends.BackendUnavailable):
-            backends.select("openems", {"required": True})
-
-    def test_silence_means_required(self):
-        from pcbqa import backends
-        with self.assertRaises(backends.BackendUnavailable):
-            backends.select("openems", {})
-
-    def test_an_optional_backend_falls_back_and_says_so(self):
-        from pcbqa import backends
-        selection = backends.select("openems", {"required": False})
-        self.assertEqual(selection.used, backends.ANALYTIC)
-        self.assertEqual(selection.requested, "openems")
-        self.assertTrue(selection.fell_back)
-        self.assertIn("fallback", selection.detail.lower() + " fallback")
-
-    def test_a_fallback_to_something_unimplemented_refuses(self):
-        from pcbqa import backends
-        with self.assertRaises(backends.BackendError):
-            backends.select("openems", {"required": False,
-                                        "fallback": "handwaving"})
-
-    def test_a_backend_cannot_fall_back_to_itself(self):
-        from pcbqa import backends
-        with self.assertRaises(backends.BackendError):
-            backends.select("openems", {"required": False,
-                                        "fallback": "openems"})
-
-    def test_the_gates_report_the_backend_that_actually_ran(self):
-        def mutate(document, _project):
-            document["timing"]["propagation"].update(
-                {"backend": "openems", "required": False})
-        fixture = make(mutate=mutate, tag="backend_fb")
-        result = fixture.gates(only={"TIMING.INTERCONNECT_DELAY"})[
-            "TIMING.INTERCONNECT_DELAY"]
-        self.assertNotEqual(result.status, Status.ERROR, result.reason)
-        self.assertEqual(result.measurements["backend_requested"], "openems")
-        self.assertEqual(result.measurements["backend_used"], "analytic")
-        self.assertTrue(result.measurements["backend_fell_back"])
-
-    def test_a_required_backend_blocks_delay_but_not_geometry(self):
-        def mutate(document, _project):
-            document["timing"]["propagation"]["backend"] = "openems"
-        fixture = make(mutate=mutate, tag="backend_req")
-        results = fixture.gates(only={"TIMING.PATH_INTEGRITY",
-                                      "TIMING.INTERCONNECT_DELAY"})
-        self.assertEqual(results["TIMING.INTERCONNECT_DELAY"].status,
-                         Status.ERROR)
-        self.assertEqual(results["TIMING.PATH_INTEGRITY"].status, Status.PASS)
 
 
 # ---------------------------------------------------------------------------
@@ -2468,7 +2360,8 @@ class FidelityCannotOverstate(unittest.TestCase):
 
     def test_an_unrecognised_fidelity_never_ranks_high(self):
         self.assertEqual(
-            propagation.weakest({propagation.DEVICE_AWARE, "from-the-future"}),
+            propagation.weakest({propagation.DECLARED_MODEL,
+                                 "from-the-future"}),
             "from-the-future")
         self.assertEqual(propagation.fidelity_rank("from-the-future"), -1)
 
@@ -2484,12 +2377,9 @@ class FidelityCannotOverstate(unittest.TestCase):
                         rank(propagation.ANALYTIC_TRANSMISSION_LINE))
         self.assertLess(rank(propagation.ANALYTIC_TRANSMISSION_LINE),
                         rank(propagation.DECLARED_PROPAGATION))
-        self.assertLess(rank(propagation.DECLARED_PROPAGATION),
-                        rank(propagation.QUASI_STATIC_EXTRACTED))
-        self.assertLess(rank(propagation.QUASI_STATIC_EXTRACTED),
-                        rank(propagation.FULL_WAVE_EXTRACTED))
-        self.assertLess(rank(propagation.FULL_WAVE_EXTRACTED),
-                        rank(propagation.DEVICE_AWARE))
+        self.assertEqual(rank(propagation.DECLARED_PROPAGATION),
+                         rank(propagation.DECLARED_MODEL),
+                         "two kinds of declared value rank equally")
 
     def test_a_path_with_no_modelled_copper_reports_nothing(self):
         """A total of zero would be a number where nothing was measured."""
@@ -2662,14 +2552,11 @@ class AnUndeclaredViaTreatmentIsAnOmission(unittest.TestCase):
         self.assertTrue(named["vias"][0]["policy"]["declared"])
         self.assertFalse(absent["vias"][0]["policy"]["declared"])
 
-    def test_a_reserved_via_model_is_refused_by_name(self):
-        for name in propagation.VIA_RESERVED:
+    def test_a_via_model_this_release_does_not_implement_refuses(self):
+        for name in ("extracted", "sparameter", "quasi_static", "full_wave",
+                     "guesswork"):
             with self.assertRaises(propagation.PropagationError):
                 propagation.via_policy({"model": name})
-
-    def test_an_unknown_via_model_refuses(self):
-        with self.assertRaises(propagation.PropagationError):
-            propagation.via_policy({"model": "guesswork"})
 
     def test_declaring_nothing_makes_the_total_a_lower_bound(self):
         record = self._record("via_silent", {
@@ -2849,87 +2736,6 @@ class PadsCanBeLayerTransitions(unittest.TestCase):
                                    "from": "R1.2", "to": "L2.1"}], "flat")}}
         flat = make(mutate=mutate, tag="pthflat")
         self.assertEqual(_find(flat, "flat")["resolved"].via_transitions(), [])
-
-
-# ---------------------------------------------------------------------------
-# backends: what the machine has is not what the release implements
-# ---------------------------------------------------------------------------
-
-class BackendAvailabilityIsAboutThisRelease(unittest.TestCase):
-    """Every case here holds whether or not a solver is installed.
-
-    That is the property under test. The old probe asked the filesystem, so a
-    board declaring `required: false` fell back cleanly on a machine without
-    openEMS and hard-errored on a machine with it - a validator answering
-    differently depending on whose laptop it ran on.
-    """
-
-    def test_a_recognised_but_unimplemented_backend_is_not_available(self):
-        from pcbqa import backends
-        ok, detail = backends.available("openems")
-        self.assertFalse(ok)
-        self.assertIn("implements no evaluation", detail)
-
-    def test_that_holds_with_the_executable_present(self):
-        from pcbqa import backends
-        from pcbqa.backends import openems
-        ok, detail = backends.available(
-            "openems", {"executable": sys.executable})
-        self.assertEqual(openems.executable({"executable": sys.executable}),
-                         sys.executable, "the probe should have found it")
-        self.assertFalse(ok, "an installed binary this release cannot drive is "
-                             "not availability")
-        self.assertIn("does not help", detail)
-
-    def test_required_blocks_with_the_executable_present(self):
-        from pcbqa import backends
-        with self.assertRaises(backends.BackendUnavailable):
-            backends.select("openems", {"required": True,
-                                        "executable": sys.executable})
-
-    def test_optional_falls_back_with_the_executable_present(self):
-        from pcbqa import backends
-        selection = backends.select("openems", {"required": False,
-                                                "executable": sys.executable})
-        self.assertEqual(selection.used, backends.ANALYTIC)
-        self.assertTrue(selection.fell_back)
-
-    def test_optional_falls_back_with_the_executable_absent(self):
-        from pcbqa import backends
-        selection = backends.select("openems", {"required": False,
-                                                "executable": "/nowhere/at/all"})
-        self.assertEqual(selection.used, backends.ANALYTIC)
-        self.assertTrue(selection.fell_back)
-
-    def test_the_two_states_give_the_same_answer(self):
-        from pcbqa import backends
-        present = backends.select("openems", {"required": False,
-                                              "executable": sys.executable})
-        absent = backends.select("openems", {"required": False,
-                                             "executable": "/nowhere"})
-        self.assertEqual((present.used, present.fell_back),
-                         (absent.used, absent.fell_back))
-
-    def test_describe_still_reports_the_binary_for_a_human(self):
-        from pcbqa import backends
-        rows = {row["backend"]: row for row in backends.describe()}
-        self.assertFalse(rows["openems"]["evaluation_implemented"])
-        self.assertTrue(rows["analytic"]["evaluation_implemented"])
-        self.assertIn("executable_found", rows["openems"])
-
-    def test_the_gates_are_deterministic_either_way(self):
-        for tag, executable in (("be_present", sys.executable),
-                                ("be_absent", "/nowhere/at/all")):
-            def mutate(document, _project, executable=executable):
-                document["timing"]["propagation"].update(
-                    {"backend": "openems", "required": False,
-                     "executable": executable})
-            fixture = make(mutate=mutate, tag=tag)
-            result = fixture.gates(only={"TIMING.INTERCONNECT_DELAY"})[
-                "TIMING.INTERCONNECT_DELAY"]
-            self.assertNotEqual(result.status, Status.ERROR, tag)
-            self.assertEqual(result.measurements["backend_used"], "analytic")
-            self.assertTrue(result.measurements["backend_fell_back"], tag)
 
 
 # ---------------------------------------------------------------------------

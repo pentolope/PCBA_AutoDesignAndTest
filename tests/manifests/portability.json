@@ -60,13 +60,6 @@
       "forbid_dangling": false
     }
   },
-  "source_authority": {
-    "authority": "native_kicad",
-    "claim_scan": [],
-    "mutually_exclusive_claims": [],
-    "forbidden_derivations": []
-  },
-  "constraint_parity": {},
   "waivers": [],
   "geometry_profile": {
     "version": "geom-1",

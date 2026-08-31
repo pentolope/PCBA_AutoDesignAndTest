@@ -32,11 +32,6 @@ authority", and there are exactly three honest answers:
     unimplemented model look like a valid zero. Nothing is attributed, the
     delay is not derivable at all, and the gate says so.
 
-The names under `RESERVED_MODELS` are deliberately recognised-but-refused. A
-board that writes `ibis` today gets told this release does not implement it,
-rather than being told the model name is a typo - and the spelling is fixed
-now, so declaring one later is not a schema change.
-
 Nothing here invents electrical behaviour for a generic two-pin part, and
 nothing here knows what kind of part it is looking at.
 """
@@ -56,11 +51,6 @@ MODEL_NONE = "none"
 MODEL_FIXED = "fixed_delay"
 IMPLEMENTED_MODELS = (MODEL_NONE, MODEL_FIXED)
 
-#: Recognised but not implemented. Listed so a board asking for one is refused
-#: by name rather than by "unknown model", and so the spelling is settled
-#: before anything depends on it.
-RESERVED_MODELS = ("package_delay", "ibis", "touchstone", "sparameter",
-                   "cable", "transmission_line", "device")
 
 
 class ComponentModelError(Exception):
@@ -168,20 +158,16 @@ def evaluate(declaration, reference=None):
         raise ComponentModelError(
             "{}: delay_model declares no `model`".format(where))
 
-    if model in RESERVED_MODELS:
+    if model not in IMPLEMENTED_MODELS:
+        # Not an exception: a declaration must never make an unimplemented
+        # model look like a valid zero, and answering per traversal lets the
+        # gate name the route that used it.
         return Contribution(
             UNSUPPORTED, model, None, GEOMETRY_ONLY,
-            "{} declares the {!r} delay model, which this release recognises "
-            "but does not implement. No delay is attributed and none is "
-            "guessed: a declaration must not make an unimplemented model look "
-            "like a valid zero".format(where, model))
-
-    if model not in IMPLEMENTED_MODELS:
-        raise ComponentModelError(
-            "{}: delay_model {!r} is not a model this validator knows. "
-            "Implemented: {}. Recognised but not implemented: {}".format(
-                where, model, ", ".join(IMPLEMENTED_MODELS),
-                ", ".join(RESERVED_MODELS)))
+            "{} declares the {!r} delay model, which this release does not "
+            "implement, so no delay is derivable for this traversal; "
+            "implemented: {}".format(where, model,
+                                     ", ".join(IMPLEMENTED_MODELS)))
 
     if model == MODEL_NONE:
         justification = declaration.get("justification")
@@ -240,8 +226,9 @@ def evaluate(declaration, reference=None):
 def validate(declaration, reference=None):
     """Check a declaration at parse time, so a bad one fails before any board.
 
-    Returns nothing; raises `ComponentModelError`. A model that is recognised
-    but unimplemented is *not* an error here - it is a legitimate declaration
-    whose refusal belongs to evaluation, where it can be reported per path.
+    Returns nothing; raises `ComponentModelError`. A model this release does
+    not implement is *not* an error here - the declaration is well formed, and
+    its refusal belongs to evaluation, where it can be reported against the
+    path that used it.
     """
     evaluate(declaration, reference)

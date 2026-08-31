@@ -72,10 +72,10 @@ xnet level and does its job there.
 - `place_optimize.py` boundary detection (`placement/quench.py` via
   `kicad_parser.extract_board_bounds`) reads gr_rect/gr_line/gr_arc/
   gr_poly on Edge.Cuts but NOT `gr_circle`: a circular board outline
-  raises "No board boundary (Edge.Cuts) found". The Board B candidate
-  generator works around it by converting the CANDIDATE's circle to
-  two semicircular arcs (geometrically identical; the authoritative
-  board is untouched). Upstreamable.
+  raises "No board boundary (Edge.Cuts) found". A generator can work
+  around it by converting the CANDIDATE's circle to two semicircular
+  arcs (geometrically identical; the authoritative board is
+  untouched). Upstreamable.
 - `--lock REF ...` works as advertised for requirement-fixed parts.
 
 ## Routability signal
@@ -89,7 +89,7 @@ this shape.
 
 - Prototype: constraint set -> place_optimize -> route -> score, on a
   disposable candidate board copy (never the authoritative board).
-- Define the score vector alongside the A/B metric schema in the
-  board repository (boardB/ab_metrics.schema.json).
+- Define the score vector alongside whatever metric schema the
+  consuming repository uses to compare candidates.
 - Decide the invocation boundary (CLI vs python API) after a trial
   run; the plugin exposes both.

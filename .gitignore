@@ -15,7 +15,5 @@ out/
 # Scratch.
 *.log
 
-# Latest fabricator observations: fetched, unreviewed, trusted for nothing.
-# Only promoted (approved) catalogs and their evidence are committed.
-profiles/*/observed/
-profiles/*/catalog/verification.json
+# A refresh writes its acquisition into scratch; only the reviewed catalog
+# and the evidence it names are committed.

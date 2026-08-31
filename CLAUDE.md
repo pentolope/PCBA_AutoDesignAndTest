@@ -108,7 +108,21 @@ the reason for any change beside the fixture.
 
 Do not build a multi-manufacturer abstraction, provider plug-in layer, or
 additional manufacturer profiles for hypothetical future use. `profiles/jlcpcb/`
-is organisation, not indirection.
+is organisation, not indirection. `pcbqa/fabricators/` holds JLCPCB's sources,
+parsers and catalog: there is no adapter registry, no `FABRICATORS`, and
+nothing takes a `fabricator` argument. The package and one or two of its
+identifiers still read as generic; that is a name, not a seam.
+
+Manufacturer-independent physics does not live there. Transmission-line closed
+forms are `pcbqa/transmission_line.py` and the covered-microstrip reference
+transcription is `pcbqa/overlay_reference.py`; both are physics that would be
+true of any fabricator's stackup.
+
+The catalog is committed data, not a state machine. `fab refresh` fetches,
+parses and shows a semantic diff into a scratch directory; adopting a change
+means committing the new catalog and its evidence. The commit is the approval
+and `git log` is the promotion record. There is no observed/previous pair, no
+promotion ledger, no verification ledger and no lock file.
 
 Every value promoted to a JLCPCB-wide requirement must record: the
 authoritative source, a URL or document identifier, the retrieval or effective
@@ -133,10 +147,10 @@ with no sibling checkout and no absolute path. It is vendored, never edited
 here: changes belong upstream, and the pin moves deliberately.
 
 It is also the one directory a build must not copy. A build runs ERC, DRC and
-the exports and never routes, so the router is not a build input; copying it
-would put its whole working tree, most of it machine-specific Rust build
-output, into every run. `core.NEVER_COPY` therefore names it. Which router drew
-the copper stays provenance, recorded at routing time by `krt.provenance`.
+the exports and never routes, so the router is not a build input. Nothing
+copies it, because a build stages only the design reached from the declared
+sources and the router is not one of them. Which router drew the copper stays
+provenance, recorded at routing time by `krt.provenance`.
 
 The superseded external autorouter and its Specctra DSN/SES exchange have been
 removed, and neither is to be reintroduced.
@@ -161,6 +175,33 @@ to accept or reject.
 - Never claim bitwise determinism that has not been demonstrated. Where a
   router is not bit-reproducible, compare candidates semantically and record
   the differences.
+
+## One evidence model, partly adopted
+
+`pcbqa/claim.py` is the shared shape a producer of a number states its claim
+in: phenomenon, scope, units, how well it is known (exact / lower bound /
+upper bound / interval / approximate / unknown), evidence class, provenance,
+applicability, assumptions, omissions, optional requirement - and the
+conservative verdict rule that decides from it.
+
+**Only `pcbqa/parasitics.py` has been migrated.** `propagation.py`,
+`component_models.py`, `sim/fidelity.py` and `sim/scenario.py` still carry
+their own vocabularies, and `sim/scenario.classify_assertion` is a second
+conservative-verdict machine. Finishing the migration means changing the
+timing and simulation plumbing, and is not done.
+
+Move a producer INTO this model rather than growing another vocabulary beside
+it, and write its adapter as part of migrating it - not before. Do not invent
+a universal quality ladder across unrelated phenomena.
+
+## Do not reserve architecture
+
+An abstraction earns its place when a second implementation exists. Do not add
+dispatch, availability probing or fallback for a solver that is not
+implemented, and do not maintain a list of recognised-but-unimplemented names
+to settle future spelling - an unimplemented name refuses either way. Research
+and roadmap documents are welcome; production machinery pretending an
+implementation exists is not.
 
 ## Fixtures
 

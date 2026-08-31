@@ -18,7 +18,7 @@ semantics:
                       to PASS or FAIL a requirement by itself.
 
 Requirement linkage is explicit and optional: a metric with no
-linked requirement is DESCRIPTIVE - it may rank candidates in A/B
+linked requirement is DESCRIPTIVE - it may rank candidates in a
 comparison but never becomes an invented gate. A linked metric
 yields PASS / FAIL / UNKNOWN under conservative rules: a bound may
 only decide in the direction it actually establishes, an interval
@@ -221,69 +221,37 @@ def requirement_verdict(record):
     None for a descriptive one - a metric with no requirement
     never becomes a gate.
 
-    Conservative by construction: a bound decides only in the
+    The conservative rule itself is `pcbqa.claim`, which every
+    producer in this toolkit shares: a bound decides only in the
     direction it establishes, an interval decides only when it
     decides entirely, and an approximation never decides.
     """
     validate_metric(record)
-    linkage = record["requirement_linkage"]
-    if linkage is None:
-        return None
-    op = linkage["assertion"]["op"]
-    limit = linkage["assertion"]["value"]
-    quantity = record["quantity"]
-    semantics = quantity["semantics"]
-    if semantics == "exact":
-        value = quantity["value"]
-        satisfied = value <= limit if op == "<=" else value >= limit
-        return "PASS" if satisfied else "FAIL"
-    if semantics == "approximate":
-        return "UNKNOWN"
-    if semantics == "bound":
-        direction = quantity["bound"]["direction"]
-        value = quantity["bound"]["value"]
-        if op == "<=":
-            if direction == "upper" and value <= limit:
-                return "PASS"
-            if direction == "lower" and value > limit:
-                return "FAIL"
-            return "UNKNOWN"
-        if direction == "lower" and value >= limit:
-            return "PASS"
-        if direction == "upper" and value < limit:
-            return "FAIL"
-        return "UNKNOWN"
-    interval = quantity["interval"]
-    if op == "<=":
-        if interval["upper"] <= limit:
-            return "PASS"
-        if interval["lower"] > limit:
-            return "FAIL"
-        return "UNKNOWN"
-    if interval["lower"] >= limit:
-        return "PASS"
-    if interval["upper"] < limit:
-        return "FAIL"
-    return "UNKNOWN"
+    from . import claim as claim_module
+    return claim_module.verdict(claim_module.from_parasitic_metric(record))
 
 
 def require_comparable(one, other):
-    """Refuse before any two parasitic metrics meet in a
-    comparison: same phenomenon, same scope level, same units,
-    same semantics, same model name and fidelity. Unmatched
-    fidelity never yields an A-versus-B statement."""
+    """Refuse a comparison the two metrics do not license.
+
+    Phenomenon, scope level, units and knowledge kind are checked by
+    `pcbqa.claim`, which is what every other producer is held to.
+    The model NAME is checked here as well: two metrics may share an
+    evidence class and still come from different models, and only
+    this vocabulary knows that.
+    """
     validate_metric(one)
     validate_metric(other)
-    for path in (("phenomenon",), ("scope", "level"),
-                 ("quantity", "units"), ("quantity", "semantics"),
-                 ("model", "name"), ("model", "fidelity")):
-        a, b = one, other
-        for key in path:
-            a, b = a[key], b[key]
-        if a != b:
-            raise ParasiticsError(
-                "metrics are not comparable: {} differs "
-                "({!r} vs {!r}); a comparison across unmatched "
-                "semantics or fidelity is refused".format(
-                    ".".join(path), a, b))
+    from . import claim as claim_module
+    try:
+        claim_module.require_comparable(
+            claim_module.from_parasitic_metric(one),
+            claim_module.from_parasitic_metric(other))
+    except claim_module.ClaimError as exc:
+        raise ParasiticsError(str(exc)) from exc
+    if one["model"]["name"] != other["model"]["name"]:
+        raise ParasiticsError(
+            "these two metrics come from different models ({!r} and {!r}); a "
+            "comparison across unmatched models is refused".format(
+                one["model"]["name"], other["model"]["name"]))
     return True

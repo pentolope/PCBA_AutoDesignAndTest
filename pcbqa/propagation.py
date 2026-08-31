@@ -73,6 +73,7 @@ EMBEDDED_MICROSTRIP = "embedded_microstrip"
 STRIPLINE = "stripline"
 ASYMMETRIC_STRIPLINE = "asymmetric_stripline"
 
+ANALYTIC = "analytic"
 HAMMERSTAD = "hammerstad"
 HAMMERSTAD_T = "hammerstad-thickness-corrected"
 DECLARED_EFFECTIVE = "declared-effective"
@@ -97,9 +98,6 @@ ANALYTIC_TRANSMISSION_LINE = "analytic-transmission-line-estimate"
 ASSUMED_TRANSMISSION_LINE = "analytic-estimate-under-declared-assumptions"
 DECLARED_PROPAGATION = "declared-propagation-constant"
 DECLARED_MODEL = "declared-model"
-QUASI_STATIC_EXTRACTED = "quasi-static-extracted"      # reserved for a solver
-FULL_WAVE_EXTRACTED = "full-wave-extracted"            # reserved for a solver
-DEVICE_AWARE = "device-aware-timing"                   # reserved, needs models
 
 #: Rank, not order: two kinds of declared value are equally good and neither is
 #: below the other. A rank comparison also means an unrecognised fidelity - one
@@ -112,9 +110,6 @@ FIDELITY_RANK = {
     ANALYTIC_TRANSMISSION_LINE: 3,
     DECLARED_PROPAGATION: 4,
     DECLARED_MODEL: 4,
-    QUASI_STATIC_EXTRACTED: 5,
-    FULL_WAVE_EXTRACTED: 6,
-    DEVICE_AWARE: 7,
 }
 
 FIDELITY_ORDER = tuple(sorted(FIDELITY_RANK, key=lambda f: (FIDELITY_RANK[f],
@@ -154,9 +149,6 @@ VIA_NONE = "none"
 VIA_GEOMETRIC = "geometric"
 VIA_MODELS = (VIA_NONE, VIA_GEOMETRIC)
 
-#: Recognised but not implemented, so a board asking for one is refused by name
-#: rather than by "unknown model".
-VIA_RESERVED = ("extracted", "sparameter", "quasi_static", "full_wave")
 
 
 class ViaPolicy:
@@ -293,11 +285,6 @@ def via_policy(declaration):
         raise PropagationError(
             "via_delay_model is a {}, not a string or an object".format(
                 type(declaration).__name__))
-    if model in VIA_RESERVED:
-        raise PropagationError(
-            "via delay model {!r} is recognised but this release implements no "
-            "evaluation for it; implemented: {}".format(
-                model, ", ".join(VIA_MODELS)))
     if model not in VIA_MODELS:
         raise PropagationError(
             "via delay model {!r} is not implemented; this validator has "

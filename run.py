@@ -7,11 +7,11 @@
     python run.py validate <manifest> [-w]  validate; nonzero if rejected
     python run.py release-check <manifest>  is this commit taggable as a release?
     python run.py gates                     list gate IDs
-    python run.py fab <cmd>                 fabricator knowledge: refresh,
-                                            status, diff, promote, select,
-                                            export-stackup. The ONLY commands
-                                            that may touch the network, and
-                                            only `fab refresh` does.
+    python run.py fab <cmd>                 JLCPCB knowledge: refresh, select,
+                                            impedance, export-stackup. Only
+                                            `fab refresh` may touch the
+                                            network, and it writes nothing
+                                            into the catalog.
 
 <manifest> is a path. For the toolkit's own fixtures a bare name also works:
 `portability`, `clean`, or a negative fixture's directory name.
@@ -232,8 +232,8 @@ def cmd_build(manifest_path):
         return 1
 
     installed = builder.install()
-    # The artifacts are in the tree and committed from there; the staging copy
-    # of the whole project has nothing left to say.
+    # The artifacts are in the tree and committed from there; the staged
+    # design and the scratch it was built in have nothing left to say.
     run.discard()
     print(chr(10) + "Installed {} file(s) into the working tree:".format(
         len(installed)))
@@ -497,10 +497,9 @@ def cmd_extract(argv):
     if from_requirements:
         import hashlib
         from pcbqa.fabricators.store import CatalogStore
-        fabricator = options.get("fabricator") or "jlcpcb"
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "profiles", fabricator)
-        approved = CatalogStore(root, fabricator).approved()
+                            "profiles", "jlcpcb")
+        approved = CatalogStore(root).approved()
         if approved is None:
             print("extract: no approved catalog; refusing to invent "
                   "physical inputs")
@@ -520,10 +519,9 @@ def cmd_extract(argv):
             hashlib.sha256(requirements_bytes).hexdigest())
     elif options.get("approved-copper"):
         from pcbqa.fabricators.store import CatalogStore
-        fabricator = options.get("fabricator") or "jlcpcb"
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "profiles", fabricator)
-        approved = CatalogStore(root, fabricator).approved()
+                            "profiles", "jlcpcb")
+        approved = CatalogStore(root).approved()
         if approved is None:
             print("extract: no approved catalog; refusing to invent "
                   "physical inputs")

@@ -112,7 +112,7 @@ def _rederive(ctx, spec):
                        "project": os.path.abspath(ctx.manifest.resolve("."))}
     # The tool addresses its evidence through module globals, and this gate
     # points them at whichever project it is validating - which may be a
-    # clean-room copy. They are put back afterwards: leaving a shared module
+    # staged copy. They are put back afterwards: leaving a shared module
     # aimed at a temporary directory makes the next caller's answer depend on
     # who ran first, which is not a property a validator may have.
     saved = (jlc_orientation.HERE, jlc_orientation.FIXTURES,
@@ -133,10 +133,7 @@ def _rederive(ctx, spec):
 @gate("CPL.ORIENTATION",
       "Placement angles come from a reviewed, evidence-backed registry",
       requires=("artifacts.cpl", "artifacts.cpl_fields",
-                "release_generation.cpl_orientation"),
-      # The offsets are derived from frozen evidence by this code, not
-      # read off the board.
-      derives=("pcbqa.orientation", "pcbqa.gates.g_orientation"))
+                "release_generation.cpl_orientation"))
 def cpl_orientation(ctx, res):
     spec = ctx.manifest.get("release_generation.cpl_orientation")
     path = ctx.manifest.resolve(ctx.manifest.get("artifacts.cpl"))

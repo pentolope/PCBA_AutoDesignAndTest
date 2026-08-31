@@ -1,11 +1,8 @@
-"""Contract, BOM/CPL parity, archive and constraint-parity gates."""
+"""Contract, BOM/CPL parity and archive gates."""
 
 from __future__ import annotations
 
-import ast
-import csv
 import glob
-import io
 import json
 import os
 import fnmatch
@@ -13,7 +10,7 @@ import re
 import zipfile
 from collections import Counter
 
-from ..core import Status, gate, sha256_file, sha256_bytes
+from ..core import gate, sha256_file
 from .. import gerber, geom
 from ..rules import NetTopologyRule, ConnectorContractRule, PlacementRule
 
@@ -37,11 +34,7 @@ def _docs(ctx, patterns):
 # ---------------------------------------------------------------------------
 
 @gate("NET.TOPOLOGY", "Critical-net topology and length matching",
-      requires=("net_topology.rules",),
-      # These lengths are computed, not read: a shortest connected walk over
-      # copper polygons is an answer this code produces, so a board pinning
-      # its inputs has to pin this too.
-      derives=("pcbqa.connectivity", "pcbqa.rules", "pcbqa.gates.g_contracts"))
+      requires=("net_topology.rules",))
 def net_topology(ctx, res):
     board = ctx.board()
     # Connectivity is decided by whether copper shapes actually intersect, so
@@ -350,97 +343,3 @@ def archive_provenance(ctx, res):
         "all {} committed artifact(s) match the digests recorded for them, "
         "nothing else is in the release directories, and they were generated "
         "from the source closure the design still has".format(len(recorded)))
-
-
-# ---------------------------------------------------------------------------
-# constraint / checker parity
-# ---------------------------------------------------------------------------
-
-@gate("CFG.THRESHOLD_PARITY", "Every gate limit is a typed manifest constraint",
-      requires=("constraint_parity",), order=900)
-def threshold_parity(ctx, res):
-    """Prove each applied limit resolves to the manifest key it names."""
-    applied = ctx.cache("applied_limits", dict)
-    res.measurements["limits_applied"] = len(applied)
-    res.measurements["by_kind"] = {}
-    problems = []
-    for name, record in applied.items():
-        kind = record.get("kind")
-        res.measurements["by_kind"][kind] = res.measurements["by_kind"].get(kind, 0) + 1
-        key = record.get("manifest_key")
-        if not key or not record.get("provenance"):
-            problems.append({"limit": name, "issue": "limit carries no provenance"})
-            continue
-        if record.get("units") is None:
-            problems.append({"limit": name, "issue": "limit declares no units"})
-        if not ctx.manifest.has(key):
-            problems.append({"limit": name, "key": key,
-                             "issue": "limit cites a manifest key that does not exist"})
-            continue
-        if _leaf(record["value"]) != _leaf(ctx.manifest.get(key)):
-            problems.append({"limit": name, "key": key,
-                             "issue": "gate applied a value that is not the "
-                                      "manifest value",
-                             "applied": record["value"],
-                             "manifest": ctx.manifest.get(key)})
-    for p in problems:
-        res.finding(**p)
-    if problems:
-        return res.failed(f"{len(problems)} gate limit(s) are not typed manifest "
-                          f"constraints")
-    return res.passed(f"all {len(applied)} applied limits are typed constraints "
-                      f"traced to the manifest")
-
-
-def _leaf(value):
-    if isinstance(value, list):
-        return [_leaf(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _leaf(v) for k, v in sorted(value.items())}
-    return value
-
-
-@gate("CFG.NO_RIVAL_THRESHOLDS", "No checker outside the manifest defines its own limits",
-      requires=("constraint_parity.rival_scan",))
-def rival_thresholds(ctx, res):
-    spec = ctx.manifest.get("constraint_parity.rival_scan")
-    root = ctx.manifest.resolve(".")
-    watched = spec["watched_constants"]
-    res.limit(ctx.manifest.constraint(
-        "constraint_parity.rival_scan.watched_constants", units="constant name",
-        cid="constraint_parity.watched_constants"))
-    problems = []
-    for pat in spec["files"]:
-        for path in sorted(glob.glob(os.path.join(root, pat), recursive=True)):
-            rel = os.path.relpath(path, root).replace("\\", "/")
-            try:
-                source = open(path, encoding="utf-8", errors="ignore").read()
-                tree = ast.parse(source)
-            except (OSError, SyntaxError):
-                continue
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Assign):
-                    continue
-                for target in node.targets:
-                    if not isinstance(target, ast.Name):
-                        continue
-                    entry = watched.get(target.id)
-                    if entry is None:
-                        continue
-                    try:
-                        value = ast.literal_eval(node.value)
-                    except ValueError:
-                        continue
-                    canonical = ctx.manifest.get(entry["manifest_key"])
-                    if _leaf(value) != _leaf(canonical):
-                        problems.append({
-                            "file": rel, "line": node.lineno, "constant": target.id,
-                            "declares": value, "manifest_key": entry["manifest_key"],
-                            "manifest_value": canonical,
-                            "issue": "a second, divergent copy of a canonical limit"})
-    for p in problems:
-        res.finding(**p)
-    if problems:
-        return res.failed(f"{len(problems)} rival threshold definition(s) outside "
-                          f"the canonical manifest")
-    return res.passed("no rival threshold definitions found")

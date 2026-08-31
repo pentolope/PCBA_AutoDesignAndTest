@@ -96,7 +96,6 @@ class _Board:
             "source_closure": ["*.kicad_sch", "*.kicad_pcb", "*.kicad_pro"],
             "source_closure_exclude": ["generated/**", "out/**", ".git/**",
                                        "tooling/**"],
-            "implementation_closure": [],
             "required_steps": ["erc"],
         }
         doc["release_generation"] = {"erc": {"output": "erc.json"}}
@@ -470,6 +469,55 @@ class AFailingGateRefuses(_Base):
         self.assertIn("no release_profile", output)
 
 
+class TheRemovedArchitectureStaysRemoved(unittest.TestCase):
+    """Concepts deleted because a repository grew them, not a domain."""
+
+    def test_no_ab_experiment_lives_in_the_toolkit(self):
+        """Board A, Board B and compute accounting are research, not a
+        generic PCBA toolkit."""
+        for name in ("pcbqa.benchmark", "pcbqa.compute", "pcbqa.progression"):
+            with self.assertRaises(ImportError):
+                __import__(name)
+
+    def test_no_backend_dispatch_for_an_unimplemented_solver(self):
+        with self.assertRaises(ImportError):
+            __import__("pcbqa.backends")
+
+    def test_the_producer_closure_layer_is_gone(self):
+        """Nothing in the toolkit reuses an artifact across runs."""
+        with self.assertRaises(ImportError):
+            __import__("pcbqa.freshness")
+
+    def test_no_fabricator_adapter_registry(self):
+        from pcbqa import fabricators
+        for name in ("adapter", "FABRICATORS"):
+            self.assertFalse(hasattr(fabricators, name), name)
+        from pcbqa.fabricators.store import CatalogStore
+        for name in ("promote", "observed", "previous_observed",
+                     "verification", "record_observation",
+                     "record_verification", "freshness"):
+            self.assertFalse(hasattr(CatalogStore, name), name)
+
+    def test_no_gate_polices_toolkit_implementation_style(self):
+        from pcbqa import core as pcbqa_core
+        registered = {entry["id"] for entry in pcbqa_core.registered()}
+        for gate_id in ("CFG.THRESHOLD_PARITY", "CFG.NO_RIVAL_THRESHOLDS",
+                        "PROV.SOURCE_AUTHORITY", "PROV.DERIVATION_CLOSURE"):
+            self.assertNotIn(gate_id, registered)
+
+    def test_no_manifest_this_repository_ships_configures_them(self):
+        for path in (paths.REVA_MANIFEST, paths.PORTABILITY_MANIFEST,
+                     paths.CLEAN_MANIFEST):
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            for key in ("source_authority", "constraint_parity"):
+                self.assertNotIn(key, doc, "{} still declares {}".format(
+                    os.path.basename(path), key))
+            reports = doc.get("reports") or {}
+            for key in ("implementation_closure", "configuration_excludes"):
+                self.assertNotIn(key, reports, key)
+
+
 class TheOldSyntheticLifecycleIsGone(unittest.TestCase):
     """No release logic may depend on a directory pretending to be Git."""
 
@@ -507,6 +555,11 @@ class TheOldSyntheticLifecycleIsGone(unittest.TestCase):
         for name in ("pcbqa.cleanroom", "pcbqa.coherence"):
             with self.assertRaises(ImportError):
                 __import__(name)
+
+    def test_the_whole_project_is_never_copied(self):
+        from pcbqa import core as pcbqa_core
+        for name in ("copy_project", "NEVER_COPY", "ORDERABLE_SUFFIXES"):
+            self.assertFalse(hasattr(pcbqa_core, name), name)
 
     def test_the_release_command_is_a_check_and_not_a_publisher(self):
         self.assertFalse(hasattr(run_cli, "cmd_release"))

@@ -305,7 +305,7 @@ def construction_digest(copper_parameters, board_thickness_parameter,
     measurement consumed - every layer's copper record, the board
     thickness record, and the resistivity. Two boards measured under
     the same fabricator catalog but different resolved constructions
-    get different digests, so an A/B binding over this digest asks
+    get different digests, so a comparison bound to this digest asks
     the right question: same construction, not merely same catalog.
     """
     for layer, record in sorted(copper_parameters.items()):
@@ -324,7 +324,7 @@ def construction_digest(copper_parameters, board_thickness_parameter,
 #: Stable semantic identities for the metrics this module produces.
 #: The extract version is part of the identity: a metric produced
 #: under different extraction semantics is a different metric, and
-#: the A/B comparator refuses to pair them.
+#: no comparison may pair the two.
 METRIC_DEFINITIONS = {
     "copper_length_mm":
         "pcbqa.extract/net-copper-length@" + EXTRACT_VERSION,

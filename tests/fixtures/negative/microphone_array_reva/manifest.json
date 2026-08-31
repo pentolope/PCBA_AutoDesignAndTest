@@ -283,42 +283,6 @@
       }
     }
   ],
-  "source_authority": {
-    "authority": "native_kicad",
-    "claim_scan": [
-      {
-        "claim": "native_kicad_is_authority",
-        "files": [
-          "README.md",
-          "docs/*.md"
-        ],
-        "pattern": "no longer (regenerated|reproducible)|source of truth for routing|edited in place"
-      },
-      {
-        "claim": "python_model_is_authority",
-        "files": [
-          "README.md",
-          "docs/*.md"
-        ],
-        "pattern": "generated from `?tools/netlist\\.py|single source of truth|Nothing in the KiCad files should be hand-edited|do not hand-edit"
-      }
-    ],
-    "mutually_exclusive_claims": [
-      [
-        "native_kicad_is_authority",
-        "python_model_is_authority"
-      ]
-    ],
-    "forbidden_derivations": [
-      {
-        "files": [
-          "tools/make_release.py"
-        ],
-        "pattern": "import netlist|nl\\.build\\(\\)",
-        "issue": "released BOM/CPL data is taken from a Python model instead of the native KiCad project"
-      }
-    ]
-  },
   "archive": {
     "zip": "generated/release/microphone_array_v2-revA-fabrication.zip",
     "allow": [
@@ -399,24 +363,6 @@
         "reason": "drill-map drawings are documentation, not fabrication data, and can be mistaken for a copper or legend layer by an importer"
       }
     ]
-  },
-  "constraint_parity": {
-    "rival_scan": {
-      "files": [
-        "tools/check_routes.py"
-      ],
-      "watched_constants": {
-        "BRANCH_SKEW_LIMIT_MM": {
-          "manifest_key": "net_topology.rules.0.max_spread_mm"
-        },
-        "MIN_SEGMENT_MM": {
-          "manifest_key": "routing.min_segment_mm"
-        },
-        "MAX_TURN_DEGREES": {
-          "manifest_key": "routing.permitted_turn_degrees.1"
-        }
-      }
-    }
   },
   "waivers": [],
   "geometry_profile": {
@@ -530,7 +476,6 @@
     "id": "jlcpcb-4layer-assembled",
     "mandatory_gates": [
       "PROV.FIXTURE_INTEGRITY",
-      "PROV.SOURCE_AUTHORITY",
       "PROV.REPORT_FRESHNESS",
       "ERC.AUTHORITATIVE",
       "DRC.AUTHORITATIVE",
@@ -551,9 +496,7 @@
       "BOM.NATIVE_PARITY",
       "CPL.NATIVE_PARITY",
       "ARCH.CONTENTS",
-      "ARCH.PROVENANCE",
-      "CFG.NO_RIVAL_THRESHOLDS",
-      "CFG.THRESHOLD_PARITY"
+      "ARCH.PROVENANCE"
     ],
     "required_evidence": [
       "generated/release/visual_review.json"

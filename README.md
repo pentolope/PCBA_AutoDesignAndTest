@@ -50,6 +50,17 @@ python3 run.py validate <manifest.json> --write
 ```bash
 python3 run.py release-check <manifest.json>
 ```
+```bash
+python3 run.py gates
+```
+```bash
+python3 run.py fab refresh | select | impedance | export-stackup
+```
+
+`fab refresh` is the only command that may touch the network. It writes its
+acquisition into a scratch directory in the committed catalog layout and
+prints the semantic diff; adopting a change is a Git commit, and `git log` is
+the promotion record.
 
 `<manifest.json>` is a path. For this repository's own fixtures a bare name also
 works — `portability`, `clean`, or a negative fixture's directory name.
@@ -68,10 +79,15 @@ develop on a branch
 There is no "published but unsealed release candidate". A branch is the
 work-in-progress mechanism; a tag is the release.
 
-`build` runs KiCad against a private copy — the design is never opened for
-writing — and installs into the paths the manifest declares, all or nothing. It
-also writes `fabrication.json`: the digest of every artifact it produced and the
-source closure it produced them from.
+`build` stages the design — the sources the manifest declares, the library
+tables, and whatever those name inside the project — and runs KiCad against
+that, never against the authoritative files. It has to: every `kicad-cli` run
+drops a lock file beside the project it opens, and `pcb drc --refill-zones
+--save-board`, which this validator requires because an export ships whatever
+zone fill is stored, rewrites the board. `tests/test_design_staging.py`
+reproduces both. Outputs are installed into the paths the manifest declares,
+all or nothing, together with `fabrication.json`: the digest of every artifact
+and the source closure it came from.
 
 `validate` exits nonzero on a blocking result. It is read-only unless `--write`
 is given, so ordinary development validation never touches the working tree.
@@ -101,6 +117,8 @@ durable is kept there.
 | `pcbqa/gerber.py` | independent Gerber X2 + Excellon readers, incl. an aperture-macro interpreter |
 | `pcbqa/canonical.py` | checkout-independent digests, driven by `.gitattributes` |
 | `pcbqa/closure.py` | the source closure: what a result depends on |
+| `pcbqa/claim.py` | one evidence model, and the conservative verdict rule |
+| `pcbqa/transmission_line.py` | manufacturer-independent closed forms |
 | `pcbqa/build.py` | generating the fabrication outputs and installing them |
 | `pcbqa/artifacts.py` | which committed files are the release artifact set |
 | `pcbqa/release.py` | the Git preconditions of a release tag |
@@ -152,9 +170,10 @@ That alone runs the geometry-only gates. Every other gate stays
 `NOT_APPLICABLE` **with a reason** until you add its policy block. Absence is
 never a silent pass, and the gate still appears in the matrix.
 
-`CFG.THRESHOLD_PARITY` always runs last and proves every limit any gate applied
-resolves to the manifest key it cited. `CFG.NO_RIVAL_THRESHOLDS` proves no
-checker outside the manifest defines its own copy of one.
+Every limit a gate applies is a typed `Constraint` carrying its value, units
+and manifest provenance — `GateResult.limit` refuses anything else, and a
+`Constraint` refuses to exist without units, so a board needs no configuration
+to police that. `tests/test_gate_limits.py` audits it across every gate.
 
 ## The generic/board split is enforced, not documented
 

@@ -1,9 +1,9 @@
-"""The normalized fabricator catalog: one schema, whoever the fabricator is.
+"""The normalized JLCPCB catalog: one schema for everything read off the site.
 
-Everything downstream of an adapter - storage, diffing, promotion, selection,
-stackup export - operates on this shape and knows nothing about any particular
-fabricator's website. An adapter's whole job is to turn its raw sources into
-one of these, holding every record to the same rules:
+Everything downstream of the parsers - storage, diffing, selection, stackup
+export - operates on this shape rather than on any page's HTML. The parsers'
+whole job is to turn raw sources into one of these, holding every record to
+the same rules:
 
   * every record names the source it came from and carries the excerpt of
     source text it was read from, so a number is auditable back to evidence;
@@ -22,6 +22,8 @@ thickness cannot.
 
 from __future__ import annotations
 
+#: The one manufacturer this toolkit targets. Not a registry key.
+FABRICATOR = "jlcpcb"
 import hashlib
 import json
 

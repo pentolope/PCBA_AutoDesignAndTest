@@ -43,16 +43,6 @@ from .. import electrical_path, geom, propagation, stackup_physical
 from ..electrical_path import PathError
 from ..stackup_physical import StackupError
 
-#: The modules that compute what these gates report. Declared on each gate so
-#: `PROV.DERIVATION_CLOSURE` can check a board's provenance against the
-#: toolkit's own statement of its implementation rather than against the
-#: board's copy of that statement.
-_GEOMETRY_DERIVATION = ("pcbqa.connectivity", "pcbqa.electrical_path",
-                        "pcbqa.gates.g_timing")
-_PROPAGATION_DERIVATION = _GEOMETRY_DERIVATION + (
-    "pcbqa.propagation", "pcbqa.stackup_physical", "pcbqa.component_models")
-
-
 # ---------------------------------------------------------------------------
 # layer 1: geometry
 # ---------------------------------------------------------------------------
@@ -170,7 +160,7 @@ def _identifier(kind, name):
     """Names that index into the manifest cannot contain a dot.
 
     A limit is traced back to the manifest by dotted key, so a name with a dot
-    in it would cite a key that does not exist and CFG.THRESHOLD_PARITY would
+    in it would cite a key that does not exist and `Manifest.constraint` would
     be unable to prove where the number came from.
     """
     if not isinstance(name, str) or not name or "." in name:
@@ -284,8 +274,8 @@ class PropagationAnalysis:
     only needs geometry carries on.
     """
 
-    def __init__(self, selection=None, model=None, delays=None, error=None):
-        self.selection = selection
+    def __init__(self, backend=None, model=None, delays=None, error=None):
+        self.backend = backend
         self.model = model
         self.delays = delays or {}
         self.error = error
@@ -297,34 +287,34 @@ class PropagationAnalysis:
 
 def propagation_analysis(ctx):
     def build():
-        from .. import backends
         spec = ctx.manifest.get("timing.propagation", {}) or {}
         shape = stackup(ctx)
         paths = geometry(ctx)
+        requested = spec.get("backend", propagation.ANALYTIC)
         try:
-            selection = backends.select(spec.get("backend", backends.ANALYTIC),
-                                        spec)
-            if selection.used != backends.ANALYTIC:
-                raise backends.BackendError(
-                    "backend {!r} reports itself available, but this release "
-                    "implements evaluation only for the analytic backend. "
-                    "Refusing to report a result attributed to a backend that "
-                    "did not produce it".format(selection.used))
+            if requested != propagation.ANALYTIC:
+                # One evaluation exists. A board naming another is refused by
+                # name rather than quietly given this one: a result attributed
+                # to a solver that did not run is worse than no result.
+                raise propagation.PropagationError(
+                    "this release evaluates propagation only with the {!r} "
+                    "backend, and this board selects {!r}".format(
+                        propagation.ANALYTIC, requested))
             model = propagation.PropagationModel(
                 shape.stackup, shape.reference_layers,
                 model=spec.get("model", propagation.HAMMERSTAD),
                 via_model=spec.get("via_delay_model"),
                 declared_layers=spec.get("declared_layers"),
-                backend=selection.used,
+                backend=requested,
                 discontinuity=spec.get("reference_discontinuity"),
                 unfilled_reference_layers=paths.unfilled_layers)
-        except (backends.BackendError, propagation.PropagationError) as exc:
+        except propagation.PropagationError as exc:
             return PropagationAnalysis(
                 error="{}: {}".format(type(exc).__name__, exc))
         delays = {}
         for _name, record in paths.all_paths():
             delays[paths.key(record)] = model.evaluate(record["resolved"])
-        return PropagationAnalysis(selection, model, delays)
+        return PropagationAnalysis(requested, model, delays)
     return ctx.cache("timing_propagation", build)
 
 
@@ -343,8 +333,7 @@ def _requested_fields(ctx, layers):
 
 @gate("TIMING.PATH_INTEGRITY",
       "Declared electrical paths exist, end to end, across every component",
-      requires=("timing.interfaces",), order=310,
-      derives=_GEOMETRY_DERIVATION)
+      requires=("timing.interfaces",), order=310)
 def path_integrity(ctx, res):
     """Does the board contain the paths the timing policy describes?
 
@@ -490,8 +479,7 @@ def path_integrity(ctx, res):
 
 @gate("STACK.PHYSICAL",
       "The physical stackup supports the analysis this board asks for",
-      requires=("timing.physical_stackup",), order=305,
-      derives=("pcbqa.stackup_physical", "pcbqa.gates.g_timing"))
+      requires=("timing.physical_stackup",), order=305)
 def physical_stackup(ctx, res):
     """Is enough known about the materials to do what this board asked for?
 
@@ -590,8 +578,7 @@ def physical_stackup(ctx, res):
 
 @gate("TIMING.INTERCONNECT_DELAY",
       "Passive PCB propagation delay of each declared path is within its limit",
-      requires=("timing.interfaces",), order=320,
-      derives=_PROPAGATION_DERIVATION)
+      requires=("timing.interfaces",), order=320)
 def interconnect_delay(ctx, res):
     """Board copper only. Not device-aware, and the report says so.
 
@@ -612,7 +599,7 @@ def interconnect_delay(ctx, res):
             "so no delay was evaluated: {}".format(state.error))
 
     paths = geometry(ctx)
-    res.measurements.update(state.selection.to_dict())
+    res.measurements["backend"] = state.backend
     rows, problems, unresolved = [], [], []
     limited = 0
     fidelities = set()
@@ -661,7 +648,7 @@ def interconnect_delay(ctx, res):
         "all {} path(s) with a declared delay limit are within it, from {} at "
         "fidelity {}, backend {}".format(
             limited, state.model.stackup.source, ", ".join(sorted(fidelities)),
-            state.selection.used))
+            state.backend))
 
 
 def _compare_maximum(value, limit, insufficient, lower=None, upper=None):
@@ -740,8 +727,7 @@ def _delay_row(interface, delay):
 
 @gate("TIMING.INTERCONNECT_SKEW",
       "Passive PCB arrival spread within each declared endpoint group",
-      requires=("timing.interfaces",), order=330,
-      derives=_PROPAGATION_DERIVATION)
+      requires=("timing.interfaces",), order=330)
 def interconnect_skew(ctx, res):
     """The spread of passive interconnect delay across a group of endpoints.
 
@@ -760,7 +746,7 @@ def interconnect_skew(ctx, res):
         return res.errored(
             "this board's declared propagation policy could not be honoured, "
             "so no spread was evaluated: {}".format(state.error))
-    res.measurements.update(state.selection.to_dict())
+    res.measurements["backend"] = state.backend
 
     groups, problems = [], []
     limited = 0
@@ -1096,60 +1082,3 @@ def timing_models(ctx, res):
 # ---------------------------------------------------------------------------
 # derivation provenance
 # ---------------------------------------------------------------------------
-
-@gate("PROV.DERIVATION_CLOSURE",
-      "Code that computes a reported result is inside the source closure",
-      requires=("reports.source_closure", "reports.implementation_closure"),
-      order=355)
-def derivation_closure(ctx, res):
-    """On whose word does a board's provenance cover its implementation?
-
-    Not the board's. `reports.implementation_closure` is a declaration, and
-    checking it against a closure built from that same declaration proves only
-    that a list equals itself. It cannot notice a module that should have been
-    on the list and is not - which is the only failure worth catching.
-
-    So the requirement comes from the other side. Each gate declares, in the
-    toolkit, which modules compute what it reports; this gate takes the gates
-    applicable to this board and insists those modules are covered. Delete an
-    entry from a board's manifest and this fails, because the toolkit still
-    says the code is load-bearing.
-    """
-    from .. import closure as closure_mod, core
-
-    closure = closure_mod.source_closure(ctx.manifest,
-                                         closure_mod.policy_for(ctx.manifest))
-
-    # A gate is applicable exactly when the manifest declares everything it
-    # requires - the same test the registry applies before running it. A gate
-    # that never runs derives nothing that needs covering.
-    applicable = [entry["id"] for entry in core.registered()
-                  if all(ctx.manifest.has(key) for key in entry["requires"])]
-    needed = core.derivation_modules(applicable)
-
-    res.measurements["applicable_gates"] = sorted(applicable)
-    res.measurements["derivation_modules_required"] = needed
-    res.measurements["source_closure_files"] = len(closure)
-
-    problems = []
-    for module, gates in sorted(needed.items()):
-        if "<executed>" + module not in closure:
-            problems.append({
-                "module": module, "required_by": gates,
-                "issue": "computes what these gates report but is not in the "
-                         "source closure, so the code behind those results is "
-                         "untracked; add it to reports.implementation_closure"})
-    for problem in problems[:40]:
-        res.finding(**problem)
-    if problems:
-        return res.failed(
-            "{} module(s) that derive a reported result are outside the "
-            "source closure".format(len(problems)))
-    if not needed:
-        return res.passed(
-            "no gate applicable to this board derives a value in code, so "
-            "there is no implementation to cover beyond the design itself")
-    return res.passed(
-        "all {} module(s) that derive a result for the {} gate(s) applicable "
-        "to this board are inside the source closure".format(
-            len(needed), len(applicable)))

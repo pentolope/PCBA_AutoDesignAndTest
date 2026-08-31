@@ -8,7 +8,7 @@ layer, the length of one net's centerline whose copper edge runs
 within a declared separation of the other's, and the closest
 approach observed. Those are exact geometric quantities with
 honest units (millimetres), suitable for risk RANKING and for
-matched-fidelity A/B comparison - and for nothing electrical
+matched-fidelity comparison - and for nothing electrical
 until a source-supported coupling model consumes them.
 
 Every record produced here says so: phenomenon ``coupling``,

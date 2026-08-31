@@ -57,7 +57,7 @@ import re
 
 from . import model
 
-FABRICATOR = "jlcpcb"
+from .model import FABRICATOR                             # noqa: F401
 
 #: Bump when extraction logic changes meaning. A changed parser version with
 #: unchanged raw sources explains a changed normalized catalog by itself.

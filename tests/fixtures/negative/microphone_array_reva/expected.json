@@ -61,16 +61,13 @@
       }
     ],
     "unexplained_changes": 0,
-    "timing_gates": "Rev A predates the interconnect timing layer and declares no `timing` block, so every timing gate is non-applicable here. That is the property being frozen: adding a gate must not change what an existing board is rejected for.",
-    "derivation_closure": "Rev A declares no reports.implementation_closure, so it does not opt into PROV.DERIVATION_CLOSURE and the gate is non-applicable. That is the property being frozen: a board that pinned no implementation before this gate existed is under no new obligation because of it."
+    "timing_gates": "Rev A predates the interconnect timing layer and declares no `timing` block, so every timing gate is non-applicable here. That is the property being frozen: adding a gate must not change what an existing board is rejected for."
   },
   "verdict": "REJECTED",
   "gates": {
     "ARCH.CONTENTS": "FAIL",
     "ARCH.PROVENANCE": "FAIL",
     "BOM.NATIVE_PARITY": "PASS",
-    "CFG.NO_RIVAL_THRESHOLDS": "FAIL",
-    "CFG.THRESHOLD_PARITY": "PASS",
     "CONTRACT.CONNECTOR": "FAIL",
     "CONTRACT.PLACEMENT": "PASS",
     "CPL.NATIVE_PARITY": "PASS",
@@ -80,10 +77,8 @@
     "ERC.AUTHORITATIVE": "FAIL",
     "FAB.LAYER_IDENTITY": "NOT_APPLICABLE",
     "NET.TOPOLOGY": "FAIL",
-    "PROV.DERIVATION_CLOSURE": "NOT_APPLICABLE",
     "PROV.FIXTURE_INTEGRITY": "PASS",
     "PROV.REPORT_FRESHNESS": "FAIL",
-    "PROV.SOURCE_AUTHORITY": "FAIL",
     "PROV.SOURCE_CLOSURE": "NOT_APPLICABLE",
     "PROV.TIMING_MODELS": "NOT_APPLICABLE",
     "ROUTE.ANGLE_STYLE": "FAIL",

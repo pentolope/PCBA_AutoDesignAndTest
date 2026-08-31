@@ -82,12 +82,6 @@ contract, a generated wrapper and main, DUT swapped per run).
   — a well-shaped forgery refuses. Derived models embed their full
   derivation with truthful roots (mixed stays mixed) and carry the
   physical-input digest in their identity.
-- **Benchmark** (`pcbqa/benchmark.py`): typed measured/unmeasured
-  metrics with stable semantic definition identities;
-  `compare_reports` is the only comparison path and refuses unknown
-  schemas, different resolved physical constructions, different
-  metric definitions, or mismatched units. Unmeasured never becomes
-  zero; partial copper never pairs with a complete route.
 - **Zone inheritance** (`pcbqa/zone_inheritance.py`): a declarative,
   EXECUTABLE policy decides which zones a derived candidate inherits
   as architecture and which placement-derived zones survive only
@@ -98,35 +92,19 @@ contract, a generated wrapper and main, DUT swapped per run).
   candidate, so a dropped part or an invented net can never shrink
   or reshape the denominator; parity differences are named
   machine-readably and judged before anything else.
-- **Progression** (`pcbqa/progression.py`): candidate advancement is
-  ordered correctness classes - NETLIST PARITY against the
-  authoritative contract first, then placement policy, critical
-  structures by POLICY-owned path/topology truth (net connectivity
-  is never sufficient), BOARD-required connectivity (the benchmark
-  inventory never stands in for it), hard fabrication geometry,
-  blocking gates, quality gates, usable electrical evidence - with
-  a lexicographic rank key no scalar can override. Three states
-  stay distinct: ready-for-next-stage, worth-comparing
-  (`accept_for_comparison`, kept loose so failed candidates still
-  teach), and permitted-to-win (`search_winner_eligible`): a
-  winner passes EVERY correctness class through the quality gates
-  AND every requirement-linked electrical assertion. Electrical
-  evidence AVAILABILITY and requirement OUTCOME are separate
-  classes: a trustworthy FAIL is valuable evidence and still a
-  design failure, an unresolved assertion stays unknown, and the
-  count of usable simulations is never rewarded without its
-  verdicts.
-- **Freshness** (`pcbqa/freshness.py`): derived artifacts carry a
-  deliberate producer closure (named code, inputs, schema digests);
-  consumers refuse stale or tampered artifacts and are told exactly
-  which dependency moved. Unrelated changes invalidate nothing.
-  Identities are canonical per kind - JSON by canonical
-  serialization, text and KiCad files by LF-normalized content,
-  binaries by raw bytes - so byte conventions never masquerade as
-  change; and freshness is TRANSITIVE: a downstream closure names
-  its upstream artifacts by canonical content, so a regenerated
-  gates artifact moves the decision, a regenerated decision moves
-  the search, link by link. No artifact may outrun its evidence.
+- **One evidence model** (`pcbqa/claim.py`): every producer of a
+  number - copper geometry, interconnect propagation, component
+  traversals, simulation coverage, simulated measurements - adapts
+  into one claim: phenomenon, scope, units, how well the number is
+  known (exact / lower bound / upper bound / interval /
+  approximate / unknown), evidence class, provenance,
+  applicability, assumptions, omissions, and an optional
+  requirement. One conservative verdict rule serves all of them: a
+  bound decides only in the direction it establishes, an interval
+  only when it decides entirely, an approximation and an unknown
+  never. There is deliberately NO universal quality ladder across
+  phenomena; where a ladder is meaningful it stays inside the
+  producer that can order it.
 - **Bound-classified verdicts** (`pcbqa/extract.py`,
   `pcbqa/sim/scenario.py`): a value produced under omitted positive
   physics is a BOUND, not a truth. Path-scoped resistance declares
@@ -202,7 +180,7 @@ floors (the authoritative project rules travel beside every
 artifact), a per-stage geometry DRC at those rules gates checkpoint
 advance, and connectivity obtained below a declared minimum is
 never stage success. Router heuristics that misclassify parts (e.g.
-BGA auto-detection walling a microphone's own clock pad) are
+BGA auto-detection walling a part's own clock pad) are
 disabled with the finding recorded.
 
 The critical-topology planner exists (`pcbqa/critical_topology.py`)
@@ -223,7 +201,7 @@ branch/tree generation (the declared cross-branch spread limits),
 length/time tuning mapped from electrical intent, and richer
 optimizer freedom beyond lock-and-repair.
 
-### Router identity and the seed-search shape (measured 2026-08-28)
+### Router identity, and what routing may be trusted for
 
 The router is evidence, not ambience: `pcbqa/krt.py` resolves ONE
 KiCadRoutingTools source by declared order (explicit override →
@@ -232,53 +210,27 @@ installation → refusal; a disabled installation never executes)
 and records the identity a run actually used — VERSION, git sha,
 dirty state, upstream base, the native grid_router binary's hash
 and self-reported version probed under the SAME interpreter, and
-that interpreter — with `identity_digest` for freshness closures.
-A different sha, dirty state or native hash is a different router
-and downstream routing-derived artifacts go stale with it. The
-invoking interpreter is the consumer's configured KiCad Python,
+that interpreter. A different sha, dirty state or native hash is a
+different router, and routing-derived artifacts go stale with it.
+The invoking interpreter is the consumer's configured KiCad Python,
 verified to import pcbnew, never the ambient one.
 
-The seed-search benchmark (frozen placements, same stage
-arguments, historical evidence labelled as such) established the
-durable shape and its measured caveats:
+Four properties hold for any board, and each is a constraint on how
+routing results may be used rather than a result itself:
 
-- Full routing is the scarce resource. Cheap filters in front of
-  it are worth their cost: a critical-net probe (one scoped
-  route.py call on the bare placement) ranked seven
-  known-outcome placements with directional agreement
-  (12 concordant pairs, 1 discordant, 8 ties), at ~1–2 minutes
-  against 17–73 minutes of historical full routing each — but
-  most of its resolution separates catastrophic placements from
-  the frontier, it compresses badly-different placements at the
-  bottom of its range, and it is blind to placement-fabrication
-  dooms, so the LEGALITY AND FABRICATION GATES ALWAYS RUN FIRST
-  and the probe is a filter, never a verdict.
-- Static proxies misrank. In a real portfolio slate the
-  crossings-best variant probe-routed worse than a
-  crossings-worse one; probe reordering, not proxy score,
-  chooses what graduates.
-- The router's own repair loop optimizes routability, not intent.
-  An external accept gate (the consumer's placement policy,
-  courtyard collisions, pad-accurate edge clearance) must hold
-  veto power: measured, four of five repair rounds "improved"
-  failures only by scattering a decoupling/functional-block
-  structure and were rejected and reverted. A router-side
-  improvement claim is confirmed only by the board-file
+- Full routing is the scarce resource, so cheap filters in front of
+  it earn their cost — but legality and fabrication gates always run
+  first, and a cheap probe is a filter, never a verdict.
+- A router's own repair loop optimizes routability, not intent. An
+  external accept gate — the consumer's placement policy, courtyard
+  collisions, pad-accurate edge clearance — holds veto power, and a
+  router-side improvement claim is confirmed only by the board-file
   connectivity arbiter, never by the router's own tally.
-- Externally produced placements (portfolio variants, repair
-  outputs) enter the pipeline only through an ingest path that
-  judges them exactly like generated ones — measured: a
-  portfolio "viable" winner violated the consumer's decoupling
-  proximity constraint and was refused before any routing was
-  spent, because the router's viability gates cannot see
-  consumer semantics.
-- Route outputs are not byte-deterministic run to run; identical
-  inputs reproduced the identical missing-net set (semantic
-  determinism) and that is the comparison the evidence uses.
-- Compute is a first-class artifact: `pcbqa/compute.py` keeps
-  spend in disjoint categories whose sum must equal the measured
-  total or the summary refuses, so "compute avoided" claims bind
-  to a ledger that adds up.
+- Externally produced placements enter the pipeline only through an
+  ingest path that judges them exactly like generated ones: a
+  router's viability gates cannot see consumer semantics.
+- Route outputs are not byte-deterministic run to run. Compare them
+  semantically — the missing-net set — not by digest.
 
 ## 5. Simulation strategy (durable, partially implemented)
 
@@ -299,18 +251,7 @@ Targeted EM (openEMS) stays the intended producer for
 geometry from the board), never whole-board full-wave. Nothing may
 claim SI coverage until that producer exists.
 
-## 6. The A/B benchmark (running)
-
-Board A — the frozen authoritative consumer board — against Board B
-candidates generated by the autonomous workflow under identical
-requirements, measured by the identical extractor under the
-identical resolved physical construction, compared only through the
-typed contract. Ranking is completeness-first: critical-path
-connectivity, overall connectivity, gates, then electrical and
-geometric quality — a candidate with partial routes never beats a
-complete one by carrying less copper.
-
-## 7. The loop (target invariant)
+## 6. The loop (target invariant)
 
 ```text
 candidate has proven electrical connectivity

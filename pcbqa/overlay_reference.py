@@ -103,7 +103,7 @@ from __future__ import annotations
 
 import math
 
-from .. import propagation
+from . import propagation
 
 #: The paper's fit constants, as printed.
 K1, K2, K3, K4 = 0.52, 0.241, 0.715, 0.446

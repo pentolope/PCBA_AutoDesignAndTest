@@ -104,8 +104,10 @@ def _copy_project_safely(destination):
     destination and every ancestor of it, so the copy terminates regardless of
     where the temporary directory landed.
     """
-    from pcbqa.core import copy_project
-    copy_project(_project(), destination)
+    import shutil
+    shutil.copytree(_project(), destination,
+                    ignore=shutil.ignore_patterns(
+                        ".git", "__pycache__", "out", "benchmark"))
     for unwanted in ("verification", "build", "candidates"):
         path = os.path.join(destination, unwanted)
         if os.path.isdir(path):
@@ -139,11 +141,6 @@ def _board_numbers_and_angles():
                 number = field.GetText().strip()
         out[fp.GetReference()] = (number, fp.GetOrientationDegrees())
     return out
-
-
-def _sha256_file(path):
-    from pcbqa.core import sha256_file
-    return sha256_file(path)
 
 
 def _run_gate(manifest_path, gate_id=GATE):
@@ -750,11 +747,10 @@ class TheEvidenceIsTheCommittedResponse(unittest.TestCase):
 class TheImplementationIsPinnedToo(unittest.TestCase):
     """An offset is derived, not read, so the deriving code is an input.
 
-    Pinning the evidence and leaving the program that reads it unpinned would
-    make the result reproducible only by accident. And hashing the code by
-    path would not do it either: what has to be recorded is the module that
-    was imported, because a stale copy at a tracked path is exactly the thing
-    that would go unnoticed.
+    Which toolkit code that is now comes from Git: the toolkit enters the
+    closure as its own commit and dirty state, and `release-check` refuses a
+    dirty or unpinned one. What Git cannot say anything about is the board's
+    own derivation script, so that is still checked by content.
     """
 
     def setUp(self):
@@ -764,66 +760,35 @@ class TheImplementationIsPinnedToo(unittest.TestCase):
         self.manifest = Manifest(_live())
         self.policy = canonical.AttributePolicy.load(
             self.manifest.resolve(self.manifest.get("fixture.attributes_file")))
-        self.required = _spec()["reproduction_inputs"]["required_modules"]
 
     def _closure(self):
         return self.closure_mod.source_closure(self.manifest, self.policy)
 
-    def test_every_required_module_is_in_the_closure(self):
+    def test_the_toolkit_that_judged_is_in_the_closure(self):
         closure = self._closure()
-        for name in self.required:
-            self.assertIn("<executed>" + name, closure)
+        self.assertIn("<toolkit>", closure)
+        commit, _, state = closure["<toolkit>"].partition("+")
+        self.assertEqual(len(commit), 40, closure["<toolkit>"])
+        self.assertIn(state, ("clean", "dirty"))
 
-    def test_the_recorded_digest_is_the_loaded_module(self):
-        import importlib
+    def test_the_derivation_script_travels_as_a_file(self):
+        """It is the board's code, so no toolkit commit describes it."""
         closure = self._closure()
-        for name in self.required:
-            module = importlib.import_module(name)
-            self.assertEqual(closure["<executed>" + name],
-                             _sha256_file(module.__file__), name)
+        script = [rel for rel in closure
+                  if rel.endswith("jlc_orientation.py")]
+        self.assertEqual(len(script), 1, script)
 
-    def test_modifying_an_implementation_file_changes_the_closure(self):
-        """Provenance must not survive an edit to the code it describes."""
-        import importlib
-        before = self.closure_mod.closure_digest(self._closure())
-        name = "pcbqa.orientation"
-        module = importlib.import_module(name)
-        original = module.__file__
-        work = _scratch("pcbqa_impl_")
-        edited = os.path.join(work, "orientation.py")
-        with open(original, "rb") as fh:
-            body = fh.read()
-        with open(edited, "wb") as fh:
-            fh.write(body + b"\n# one comment, and the release is a different one\n")
-        module.__file__ = edited
+    def test_an_unidentifiable_toolkit_is_a_refusal(self):
+        """Not a default. A result may not be bound to unknown code."""
+        from pcbqa import core
+        real = core.toolkit_identity
+        core.toolkit_identity = lambda: {"commit": None,
+                                         "detail": "injected for this test"}
         try:
-            after = self.closure_mod.closure_digest(self._closure())
+            with self.assertRaises(self.closure_mod.ClosureError):
+                self.closure_mod.implementation_identity()
         finally:
-            module.__file__ = original
-        self.assertNotEqual(before, after,
-                            "editing the orientation implementation left the "
-                            "source closure unchanged")
-
-    def test_removing_one_from_the_closure_fails_the_gate(self):
-        doc = _manifest_doc()
-        doc["reports"]["implementation_closure"] = [
-            name for name in doc["reports"]["implementation_closure"]
-            if name != "pcbqa.orientation"]
-        work = _scratch("pcbqa_impl_gate_")
-        doc["project_root"] = _project()
-        doc["fixture"] = {"attributes_file": os.path.join(_project(),
-                                                          ".gitattributes")}
-        path = os.path.join(work, "manifest.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(doc, fh, indent=2)
-        gate = _run_gate(path, "PROV.SOURCE_CLOSURE")
-        self.assertEqual(gate["status"], Status.FAIL)
-        self.assertTrue(any(f.get("module") == "pcbqa.orientation"
-                            for f in gate["findings"]), gate["findings"])
-
-    def test_a_module_that_cannot_be_imported_is_refused(self):
-        with self.assertRaises(Exception):
-            self.closure_mod.executed_implementation(["pcbqa.not_a_module"])
+            core.toolkit_identity = real
 
 
 # ---------------------------------------------------------------------------

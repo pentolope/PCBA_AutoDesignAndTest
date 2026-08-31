@@ -152,71 +152,97 @@ def utcnow():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-# ---------------------------------------------------------------------------
-# constraint manifest
-# ---------------------------------------------------------------------------
+#: The file kinds a KiCad tool must see to open a project. Fixed by KiCad,
+#: not by any board: the board and schematic carry their own footprints and
+#: symbols, but ERC resolves library assignments through the tables and the
+#: project-local libraries they name, so those travel too.
+DESIGN_SUFFIXES = (".kicad_pcb", ".kicad_sch", ".kicad_pro", ".kicad_prl",
+                   ".kicad_dru", ".kicad_sym", ".kicad_mod", ".kicad_wks")
+DESIGN_FILES = ("fp-lib-table", "sym-lib-table")
 
-# Directories that are never part of a design and must never be copied with
-# one. `.git` is enormous and irrelevant; the caches are caches; and the
-# vendored router is neither a design nor a release input - a clean-room
-# release runs ERC, DRC, the exports and the parity checks and never routes
-# anything, so copying KiCadRoutingTools into every attempt would add its
-# whole working tree twice per release, most of it machine-specific Rust
-# build output whose bytes differ between two builds on one machine. Which
-# router drew the copper is provenance, and `pcbqa.krt` records it where it
-# belongs: at routing time, against the routed candidate.
-NEVER_COPY = (".git", "__pycache__", ".mypy_cache", ".pytest_cache",
-              "KiCadRoutingTools")
+_KIPRJMOD = re.compile(r"\$\{KIPRJMOD\}/([^\"')\s]+)")
+_SHEETFILE = re.compile(r'"Sheetfile"\s+"([^"]+)"')
 
 
-# Anything a fabricator could accept as an order. A tool opening a project has
-# no use for its previously packaged output, and copying one costs megabytes.
-ORDERABLE_SUFFIXES = (".zip", ".7z", ".rar", ".tar", ".tgz", ".tar.gz",
-                      ".tar.bz2", ".tar.xz", ".gz")
+def design_inputs(manifest):
+    """Every file a KiCad tool needs, reached from the declared sources.
+
+    Reachability, not a directory listing: the sources the manifest selects,
+    the sibling settings KiCad opens beside them, the library tables, whatever
+    those tables name inside the project, and the sheets the schematic
+    references. A project root that also holds outputs, candidates or another
+    board's fixtures contributes none of it.
+
+    Returns paths relative to the project root, sorted.
+    """
+    root = manifest.resolve(".")
+    found, pending = set(), []
+
+    def take(rel):
+        rel = rel.replace("\\", "/").lstrip("/")
+        full = os.path.join(root, rel)
+        if os.path.isdir(full):
+            for base, _dirs, names in os.walk(full):
+                for name in names:
+                    if name.endswith(DESIGN_SUFFIXES):
+                        found.add(os.path.relpath(os.path.join(base, name),
+                                                  root).replace("\\", "/"))
+            return
+        if os.path.isfile(full) and rel not in found:
+            found.add(rel)
+            pending.append(rel)
+
+    for declared in sorted((manifest.get("sources") or {}).values()):
+        take(declared)
+    # KiCad opens these beside a project whether or not a manifest names them.
+    for rel in sorted(found):
+        stem = os.path.splitext(rel)[0]
+        for suffix in (".kicad_pro", ".kicad_prl", ".kicad_dru"):
+            take(stem + suffix)
+    for name in DESIGN_FILES:
+        take(name)
+
+    while pending:
+        rel = pending.pop()
+        if not rel.endswith((".kicad_sch", "-lib-table")) and \
+                os.path.basename(rel) not in DESIGN_FILES:
+            continue
+        try:
+            with open(os.path.join(root, rel), encoding="utf-8",
+                      errors="ignore") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        base = os.path.dirname(rel)
+        for hit in _KIPRJMOD.findall(text):
+            take(hit)
+        for hit in _SHEETFILE.findall(text):
+            take(os.path.join(base, hit) if base else hit)
+    return sorted(found)
 
 
-def copy_project(source, destination, skip_archives=False):
-    """Copy a project tree without copying the destination into itself.
+def stage_design(manifest, destination):
+    """Copy the design into `destination`, preserving relative paths.
 
-    A project root that contains the validator's own output directory - which
-    is exactly what happens when the manifest points at a repository root
-    rather than at a fixture - makes a naive copytree recurse into the copy it
-    is currently writing. It either runs out of stack or trips over a file it
-    has open. The destination and every directory on the way to it are skipped
-    here, so the copy terminates whatever the project root happens to contain.
+    KiCad writes into the directory it opens: every `kicad-cli` run drops
+    `~<project>.kicad_pro.lck` beside the project for its duration, and
+    `pcb drc --refill-zones --save-board` - which this validator requires,
+    because an export ships whatever fill is stored and a stale one ships an
+    empty plane - rewrites the board outright. So tools run against a staged
+    design and never against the authoritative one. What is staged is the
+    design, not the repository that holds it.
     """
     import shutil
 
-    target = os.path.realpath(destination)
-    # Every ancestor of the destination, so a parent on the path to it is not
-    # descended into and the copy cannot chase its own tail.
-    blocked = set()
-    walk = target
-    while True:
-        blocked.add(walk)
-        parent = os.path.dirname(walk)
-        if parent == walk:
-            break
-        walk = parent
-
-    def ignore(directory, names):
-        skipped = set()
-        for name in names:
-            if name in NEVER_COPY:
-                skipped.add(name)
-                continue
-            if skip_archives and name.lower().endswith(ORDERABLE_SUFFIXES):
-                skipped.add(name)
-                continue
-            full = os.path.realpath(os.path.join(directory, name))
-            if full == target or (full in blocked and os.path.isdir(full)):
-                skipped.add(name)
-        return skipped
-
-    if os.path.isdir(destination):
-        shutil.rmtree(destination)
-    shutil.copytree(source, destination, ignore=ignore)
-    return destination
+    root = manifest.resolve(".")
+    os.makedirs(destination, exist_ok=True)
+    staged = []
+    for rel in design_inputs(manifest):
+        target = os.path.join(destination, rel)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        shutil.copy2(os.path.join(root, rel), target)
+        staged.append(rel)
+    return staged
 
 
 class ManifestError(Exception):
@@ -226,9 +252,9 @@ class ManifestError(Exception):
 class Manifest:
     """The single canonical source of every threshold and policy.
 
-    `get("a.b.c")` walks the manifest and records the access so that
-    CFG.THRESHOLD_PARITY can prove each checker used a manifest value and did
-    not fall back to a literal. A miss is an error, never a default.
+    `get("a.b.c")` walks the manifest and records the access, so a report can
+    say which manifest values a run actually read. A miss is an error, never a
+    default.
     """
 
     def __init__(self, path):
@@ -311,7 +337,8 @@ class Manifest:
         return f"{os.path.basename(self.path)}#{key}@{self.sha256[:12]}"
 
     def constraint(self, key, units=None, cid=None):
-        """A typed constraint by stable ID. Missing keys raise; no defaults."""
+        """A typed constraint by stable ID. Missing keys and missing units
+        both raise; there are no defaults and no untyped limits."""
         value = self.get(key)
         return Constraint(cid or key, key, value, units,
                           os.path.basename(self.path), self.sha256)
@@ -342,49 +369,19 @@ def load_manifest(path):
 _REGISTRY = []
 
 
-def gate(gate_id, title, requires=(), order=100, derives=()):
+def gate(gate_id, title, requires=(), order=100):
     """Register a gate.
 
     `requires` lists manifest keys the gate needs; when any is absent the gate
     reports NOT_APPLICABLE with the reason instead of silently passing.
-
-    `derives` names the modules whose code *computes* what this gate reports,
-    as opposed to reading it off the board. It is the toolkit's own statement
-    about its own implementation, and it exists so that whether a board's
-    provenance covers the code behind a result can be checked against
-    something other than the board's own declaration of what that code is.
-    A board saying "these are my implementation dependencies" cannot be
-    validated by re-reading the same sentence.
-
-    A gate that only reports what the board already contains derives nothing
-    and declares nothing here. That is the common case and it is correct: if
-    the value would be the same whoever wrote the reader, the reader is not
-    part of the value's provenance.
     """
     def wrap(fn):
         _REGISTRY.append({
             "id": gate_id, "title": title, "requires": tuple(requires),
-            "fn": fn, "order": order, "derives": tuple(derives),
+            "fn": fn, "order": order,
         })
         return fn
     return wrap
-
-
-def derivation_modules(gate_ids=None):
-    """Every module the registered gates say derives a result.
-
-    `gate_ids` narrows it to a subset - normally the gates that actually ran
-    and reported something on the board in hand, because a gate that was never
-    applicable derived nothing that needs covering.
-    """
-    wanted = None if gate_ids is None else set(gate_ids)
-    out = {}
-    for entry in registered():
-        if wanted is not None and entry["id"] not in wanted:
-            continue
-        for name in entry.get("derives", ()):
-            out.setdefault(name, []).append(entry["id"])
-    return {name: sorted(gates) for name, gates in sorted(out.items())}
 
 
 def registered():
@@ -480,36 +477,23 @@ class Context:
             return pcbnew.LoadBoard(path)
         return self.cache("board", load)
 
-    def check_copy(self):
-        """A private copy of the project that tools may open.
+    def staged_design(self):
+        """A staged copy of the design that tools may open.
 
-        kicad-cli opens a project for *writing* even when only exporting: it
-        drops a `~<project>.kicad_pro.lck` beside the design for the duration
-        of the run, and `pcb drc --save-board` rewrites the board outright.
-        Pointing any of that at the design under test would mean the act of
-        verifying it modified it - and, when checks run concurrently, one
-        check would see another check's lock file and report the frozen
-        fixture as altered. It was.
-
-        Built once per context and shared by every gate that shells out.
+        KiCad writes into the directory it opens - a `~<project>.kicad_pro.lck`
+        for the duration of every run, and a rewritten board under
+        `drc --save-board` - so nothing is ever pointed at the authoritative
+        files. Built once per context and shared by every gate that shells out.
         """
         def build():
-            # Archives are skipped too: a tool opening a project has no use for
-            # its previously packaged output, and copying one would put a
-            # complete fabrication zip inside an attempt directory - the one
-            # thing an attempt is never allowed to contain.
-            return copy_project(self.manifest.resolve("."),
-                                os.path.join(self.workdir, "check_copy"),
-                                skip_archives=True)
-        return self.cache("check_copy", build)
+            destination = os.path.join(self.workdir, "design")
+            stage_design(self.manifest, destination)
+            return destination
+        return self.cache("staged_design", build)
 
     def check_path(self, relative):
-        """`relative` inside the private copy rather than the design."""
-        return os.path.join(self.check_copy(), relative)
-
-    def clean_copy(self, into):
-        """A pristine copy of the project, for runs that must not see stale output."""
-        return copy_project(self.manifest.resolve("."), into)
+        """`relative` inside the staged design rather than the design."""
+        return os.path.join(self.staged_design(), relative)
 
     def run_tool(self, args, timeout=1800):
         proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)

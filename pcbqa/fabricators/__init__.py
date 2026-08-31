@@ -1,67 +1,27 @@
-"""Fabricator knowledge: what a manufacturer can build, held to evidence.
+"""JLCPCB fabrication knowledge: acquisition, catalog, selection.
 
-A design tool that selects a fabrication process needs to know what the
-fabricator offers - layer counts, thicknesses, copper weights, stackups,
-materials, process limits. That knowledge has two properties that pull in
-opposite directions: it comes from the fabricator's own published sources,
-which change without notice, and it feeds design and validation decisions,
-which must be reproducible and must never change because a webpage did.
+JLCPCB is the only manufacturer this toolkit targets, and there is no adapter
+layer for hypothetical others. What is here is JLCPCB's published process
+data, the code that reads it, and the requirement-driven selection built on
+top of it.
 
-The resolution is two distinct states with an explicit door between them:
-
-    fabricator's official sources
-              |
-              |  acquisition (network, on request, never during validation)
-              v
-       OBSERVED snapshot          <- latest fetch; trusted for nothing
-              |
-              |  semantic comparison (normalized records, not raw bytes)
-              v
-       APPROVED snapshot          <- the only state design work may read
-              ^
-              |
-       explicit, audited promotion
-
-A refresh may discover that the fabricator changed something. It may never
-decide that the change is trustworthy: the approved snapshot is untouched
-until a person promotes a reviewed observation, and the promotion itself is
-recorded - what replaced what, when, on what evidence, with what semantic
-differences.
-
-Layout of the package:
-
-    model.py      the normalized, fabricator-neutral catalog schema
-    store.py      approved/observed storage, freshness, promotion
+    model.py      the normalized catalog schema and its record rules
+    store.py      the committed catalog, read-only
     diff.py       semantic comparison between normalized catalogs
-    acquire.py    fetching and snapshot assembly (the only networking code)
+    acquire.py    fetching and parsing (the only networking code)
     selection.py  requirement-driven fabrication profile selection
-    jlcpcb.py     the JLCPCB adapter: sources and parsers
+    jlcpcb.py     the sources and the parsers
     cli.py        the `fab` command group
 
-Nothing in `pcbqa.fabricators` is imported by validation gates' modules at
-import time, and nothing here runs during `validate` or `release`: ordinary
-verification is deterministic and offline by construction. Networking exists
-only behind `acquire`, which only the `fab refresh` command reaches.
+Manufacturer-independent physics does not live here: transmission-line closed
+forms are `pcbqa.transmission_line`, and the covered-microstrip reference
+transcription is `pcbqa.overlay_reference`.
 
-Adapters register here by name. An adapter owns its sources and its parsing;
-everything downstream of the normalized catalog is fabricator-neutral.
+Nothing in this package is imported by a gate, and nothing here runs during
+`validate` or `release-check`: ordinary verification is deterministic and
+offline by construction. Networking exists only behind `acquire`, which only
+`fab refresh` reaches. A refresh decides nothing - it shows what changed, and
+a person reviewing that diff and committing is what makes a change approved.
 """
 
 from __future__ import annotations
-
-
-def adapter(name):
-    """The adapter module for a fabricator, by registry name.
-
-    Imported lazily so that loading the package costs nothing and so that a
-    broken adapter cannot take down commands that never touch it.
-    """
-    if name == "jlcpcb":
-        from . import jlcpcb
-        return jlcpcb
-    raise KeyError(
-        "no fabricator adapter is registered under {!r}; this release has: "
-        "jlcpcb".format(name))
-
-
-FABRICATORS = ("jlcpcb",)

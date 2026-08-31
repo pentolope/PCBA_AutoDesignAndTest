@@ -135,87 +135,17 @@ class TheClosureCoversTheDesignAndNothingElse(unittest.TestCase):
                               "{} of {} is not in the closure".format(
                                   key, entry.get("part_number")))
 
-    def test_the_closure_carries_exactly_what_the_board_pinned(self):
-        """A mechanical property: the closure reflects the declaration.
-
-        Worth checking, and worth being clear about what it does *not* check.
-        Both sides come from `reports.implementation_closure`, so this cannot
-        notice a module that should have been declared and was not - delete an
-        entry and both sides shrink together. That omission is what
-        `test_the_toolkit_and_not_the_board_decides_what_must_be_pinned`
-        below is for.
-        """
+    def test_the_toolkit_that_judged_is_in_the_closure(self):
+        """One entry, from Git, instead of a list a board maintains by hand."""
         self.assertIn("<configuration>", self.closure)
-        declared = Manifest(_live()).get("reports.implementation_closure")
-        self.assertTrue(declared,
-                        "the consumer pins no implementation at all")
-        executed = sorted(k for k in self.closure
-                          if k.startswith("<executed>"))
-        self.assertEqual(executed,
-                         sorted("<executed>" + name for name in declared))
-        import importlib
-        for name in declared:
-            module = importlib.import_module(name)
-            self.assertTrue(os.path.isfile(getattr(module, "__file__", "")),
-                            "{} has no importable file".format(name))
+        self.assertIn("<toolkit>", self.closure)
+        commit, _, state = self.closure["<toolkit>"].partition("+")
+        self.assertEqual(len(commit), 40, self.closure["<toolkit>"])
+        self.assertIn(state, ("clean", "dirty"))
 
-    def test_the_toolkit_and_not_the_board_decides_what_must_be_pinned(self):
-        """The independent half, and the one that can actually fail.
-
-        Each gate states which modules compute what it reports. That statement
-        lives in the toolkit, so a board cannot satisfy it by editing its own
-        manifest - which is precisely the failure a declaration-versus-closure
-        comparison is blind to.
-        """
-        from pcbqa import core
-        from pcbqa.gates import (g_assembly, g_checks, g_contracts,   # noqa: F401
-                                 g_export_parity, g_fabrication, g_geometry,
-                                 g_orientation, g_provenance, g_timing)
-        manifest = Manifest(_live())
-        applicable = [entry["id"] for entry in core.registered()
-                      if all(manifest.has(key) for key in entry["requires"])]
-        needed = core.derivation_modules(applicable)
-        self.assertTrue(needed,
-                        "no applicable gate derives anything, so this board "
-                        "cannot demonstrate the property")
-        missing = sorted(module for module in needed
-                         if "<executed>" + module not in self.closure)
-        self.assertFalse(
-            missing,
-            "these modules compute results this board reports and are not in "
-            "its source closure: {}. Required by: {}".format(
-                missing, {m: needed[m] for m in missing}))
-
-    def test_dropping_a_required_module_is_detected(self):
-        """Prove the check above can fail, on a manifest that is consistent.
-
-        The manifest and the closure agree with each other throughout; only
-        the toolkit's own statement disagrees, which is the whole point.
-        """
-        from pcbqa import core
-        from pcbqa.gates import g_timing                              # noqa: F401
-        document = _doc()
-        pinned = list(document["reports"]["implementation_closure"])
-        applicable = [entry["id"] for entry in core.registered()
-                      if all(k in _flat(document) or
-                             Manifest(_live()).has(k)
-                             for k in entry["requires"])]
-        needed = core.derivation_modules(applicable)
-        droppable = sorted(set(needed) & set(pinned))
-        if not droppable:
-            self.skipTest("this consumer pins none of the modules the "
-                          "registry requires, so there is nothing to drop")
-        document["reports"]["implementation_closure"] = [
-            name for name in pinned if name != droppable[0]]
-        closure = closure_mod.source_closure(_manifest(document), _policy())
-        # Consistent: the reduced declaration and the closure still match.
-        executed = sorted(k[len("<executed>"):] for k in closure
-                          if k.startswith("<executed>"))
-        self.assertEqual(executed,
-                         sorted(document["reports"]["implementation_closure"]))
-        # And the toolkit still says the dropped module is load-bearing.
-        self.assertNotIn("<executed>" + droppable[0], closure)
-        self.assertIn(droppable[0], needed)
+    def test_no_module_is_hashed_individually_any_more(self):
+        stray = [key for key in self.closure if key.startswith("<executed>")]
+        self.assertEqual(stray, [], stray)
 
     def test_no_validator_fixture_or_output_leaks_in(self):
         """These exist on some machines and not others."""

@@ -21,6 +21,14 @@ class Constraint:
     __slots__ = ("id", "key", "value", "units", "manifest", "sha256", "kind")
 
     def __init__(self, cid, key, value, units, manifest_name, sha256, kind="policy"):
+        # Units are structural, not advisory: a limit reported without them
+        # cannot be compared to a measurement by anyone reading the result.
+        # Refusing here is why no later gate has to prove gates were written
+        # correctly.
+        if not units:
+            raise ConstraintError(
+                "constraint {!r} declares no units; a limit without units is "
+                "not a typed constraint".format(cid or key))
         self.id = cid
         self.key = key
         self.value = value

@@ -356,8 +356,8 @@ def identity_digest(record):
     actually is, VERSION, the router module's kind and hash, and
     the interpreter. Two different uncommitted edits at one HEAD
     are two different identities."""
-    from .freshness import canonical_json_digest
-    return canonical_json_digest({
+    from .canonical import json_digest
+    return json_digest({
         "sha": record["git"]["sha"],
         "dirty": record["git"]["dirty"],
         "dirty_divergence_sha256":

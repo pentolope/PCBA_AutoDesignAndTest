@@ -20,6 +20,10 @@ TEXT = "text"
 BINARY = "binary"
 
 
+class CanonicalError(Exception):
+    """Content that cannot be given a canonical identity."""
+
+
 class AttributePolicy:
     """The subset of .gitattributes this needs: is a path text or binary."""
 
@@ -81,14 +85,14 @@ def digest(path, kind):
     return hashlib.sha256(canonical_bytes(path, kind)).hexdigest()
 
 
-def digest_tree(root, policy, skip_dirs=frozenset()):
-    """{relpath: {"sha256":..., "kind":...}} for every file under root."""
-    out = {}
-    for base, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in skip_dirs]
-        for name in files:
-            path = os.path.join(base, name)
-            rel = os.path.relpath(path, root).replace("\\", "/")
-            kind = policy.classify(rel)
-            out[rel] = {"sha256": digest(path, kind), "kind": kind}
-    return dict(sorted(out.items()))
+def json_digest(content):
+    """The identity of JSON content, independent of the bytes storing it."""
+    import json
+    try:
+        serialized = json.dumps(content, sort_keys=True,
+                                separators=(",", ":"), ensure_ascii=False,
+                                allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise CanonicalError(
+            "content is not canonically JSON-serializable: {}".format(error))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

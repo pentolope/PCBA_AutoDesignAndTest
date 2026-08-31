@@ -40,7 +40,6 @@ tells you exactly what you have not yet opted into.
 | Manifest key | Gates it enables |
 |---|---|
 | `fixture.hash_file` | `PROV.FIXTURE_INTEGRITY` |
-| `source_authority` | `PROV.SOURCE_AUTHORITY` |
 | `reports` | `PROV.REPORT_FRESHNESS` |
 | `checks.erc` / `checks.drc` | `ERC.AUTHORITATIVE`, `DRC.AUTHORITATIVE` |
 | `checks.drc.forbidden_severities` | `DRC.NO_SUPPRESSED_RULES` |
@@ -55,10 +54,10 @@ tells you exactly what you have not yet opted into.
 | `artifacts.fabrication_manifest` | `ARCH.PROVENANCE` |
 | `fabrication_naming` | `FAB.LAYER_IDENTITY` |
 | `release_generation.cpl_orientation` | `CPL.ORIENTATION` |
-| `constraint_parity.rival_scan` | `CFG.NO_RIVAL_THRESHOLDS` |
 
-`CFG.THRESHOLD_PARITY` always runs last and proves that every limit any gate
-applied resolves to the manifest key it cited.
+Every limit a gate applies is a typed `Constraint` carrying its value, units
+and manifest provenance; the API refuses anything else, so there is nothing
+for your manifest to configure.
 
 ## 4. Express board rules as rule instances, not code
 
@@ -86,7 +85,7 @@ origin.
 |---|---|
 | A substantiated JLCPCB process limit | `profiles/jlcpcb/` in the toolkit, with source and date |
 | Your board's tighter design target | your manifest |
-| A threshold your own checker also uses | your manifest, with the checker reading it — `CFG.NO_RIVAL_THRESHOLDS` catches a second copy |
+| A threshold your own checker also uses | your manifest, read by the checker at import time rather than copied into it |
 | A finding you have reviewed and accepted | a waiver, bound to the exact objects and digests |
 | A gate whose finding you accept but want to keep measuring | `advisory_gates`, with a reason |
 

@@ -1,9 +1,10 @@
 """Generate the fabrication outputs a release commit carries.
 
-`build` runs KiCad against a private copy of the project and installs the
-result into the paths the manifest declares - ordinary files in the working
-tree, committed like any other source. Nothing here decides what a release is;
-it only produces the bytes a release commit contains.
+`build` runs KiCad against a staged copy of the design - the sources the
+manifest declares and what they reach, never the whole repository and never
+the authoritative files - and installs the result into the paths the manifest
+declares, as ordinary files in the working tree. Nothing here decides what a
+release is; it only produces the bytes a release commit contains.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import shutil
 import zipfile
 
 from . import artifacts, closure
-from .core import copy_project, sha256_file, toolkit_identity, utcnow
+from .core import sha256_file, stage_design, toolkit_identity, utcnow
 
 
 class BuildError(Exception):
@@ -46,21 +47,20 @@ class Build:
         self.blockers = []
         self.excluded_layers = []
 
-    # -- 1: a private copy no tool can lock or rewrite in place ------------
+    # -- 1: stage the design; tools never open the authoritative files -----
     def isolate(self):
-        locks = closure.find(self.origin, self.cfg["lock_file_globs"])
+        locks = closure.open_design_locks(self.manifest,
+                                          self.cfg["lock_file_globs"])
         if locks:
             self.blockers.append(
                 ("build:lock_files", "ERROR",
-                 "project tree contains {} lock file(s) ({}); close KiCad "
+                 "the design has {} lock file(s) beside it ({}); close KiCad "
                  "before building".format(len(locks), ", ".join(locks[:4]))))
-            raise BuildError("lock files present in the design tree")
-        copy_project(self.origin, self.project, skip_archives=True)
-        for rel in closure.find(self.project, self.cfg["lock_file_globs"]):
-            os.unlink(os.path.join(self.project, rel))
+            raise BuildError("lock files present beside the design")
+        staged = stage_design(self.manifest, self.project)
         for path in (self.export, self.staged, self.gerbers, self.reports):
             os.makedirs(path, exist_ok=True)
-        self.log.append({"step": "isolate", "copied_from": self.origin})
+        self.log.append({"step": "stage", "files": len(staged)})
 
     # -- 2: run every generation step -------------------------------------
     def generate(self):

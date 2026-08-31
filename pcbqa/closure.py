@@ -10,7 +10,7 @@ import json
 import os
 
 from . import canonical
-from .core import NEVER_COPY, sha256_file
+from .core import design_inputs
 
 
 class ClosureError(Exception):
@@ -24,21 +24,24 @@ def matches(rel, patterns):
                for p in patterns)
 
 
-def find(root, patterns):
-    """Files under `root` matching `patterns`, skipping non-design trees.
+def open_design_locks(manifest, patterns):
+    """Lock files sitting beside the design, meaning KiCad may have it open.
 
-    NEVER_COPY is pruned for the same reason `copy_project` refuses it: a lock
-    glob written for KiCad (`*-lock`) otherwise matches Rust's `.cargo-lock`
-    in the vendored router's build tree.
+    Scoped to the directories the design actually occupies rather than to the
+    repository that holds it: `*-lock` is a KiCad glob, and a repository-wide
+    scan also matches the `.cargo-lock` a Rust build leaves in a vendored
+    router - a file no KiCad ever touched.
     """
+    root = manifest.resolve(".")
+    directories = {os.path.dirname(os.path.join(root, rel))
+                   for rel in design_inputs(manifest)}
     hits = []
-    for dirpath, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in NEVER_COPY]
-        for name in files:
-            rel = os.path.relpath(os.path.join(dirpath, name),
-                                  root).replace("\\", "/")
-            if matches(rel, patterns):
-                hits.append(rel)
+    for directory in sorted(directories):
+        for name in sorted(os.listdir(directory) if os.path.isdir(directory)
+                           else []):
+            full = os.path.join(directory, name)
+            if os.path.isfile(full) and matches(name, patterns):
+                hits.append(os.path.relpath(full, root).replace("\\", "/"))
     return sorted(hits)
 
 
@@ -48,23 +51,30 @@ def closure_digest(entries):
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
-def executed_implementation(names):
-    """Digests of the code that is running, taken from the loaded modules.
+def implementation_identity():
+    """Which toolkit produced this result, from Git rather than from hashes.
 
-    Resolved through the import system and hashed at ``__file__``: hashing a
-    path proves nothing about what was imported.
+    The toolkit is consumed as a pinned submodule, and a release requires a
+    clean tree with submodules exactly at their gitlinks, so at the moment the
+    identity has to be right the commit determines the code completely.
+    Hashing each imported module said the same thing at greater length, and
+    said it about a list a board maintained by hand.
+
+    A dirty tree is recorded as dirty rather than pinned: it is a development
+    state, and `release-check` refuses it. Git being unable to answer is a
+    refusal, not a default - an unidentifiable implementation is not one a
+    result may be bound to.
     """
-    import importlib
-    entries = {}
-    for name in names:
-        module = importlib.import_module(name)
-        path = getattr(module, "__file__", None)
-        if not path or not os.path.isfile(path):
-            raise ClosureError(
-                "{} declares no importable file, so the implementation that "
-                "ran cannot be recorded".format(name))
-        entries["<executed>" + name] = sha256_file(path)
-    return entries
+    from .core import toolkit_identity
+    record = toolkit_identity()
+    commit = record.get("commit")
+    if not commit:
+        raise ClosureError(
+            "the toolkit's own commit cannot be read ({}), so no result can "
+            "be bound to the implementation that produced "
+            "it".format(record.get("detail")))
+    return {"<toolkit>": "{}+{}".format(
+        commit, "dirty" if record.get("working_tree_dirty") else "clean")}
 
 
 #: The one leaf that is location rather than content. Every other path in a
@@ -89,8 +99,8 @@ def source_closure(manifest, policy):
     """Canonical digests of every input a check result depends on.
 
     Glob-matched project files minus an explicit exclusion list, the declared
-    `sources` by name, the modules that derive rather than read (by import
-    name), and the manifest's configuration identity.
+    `sources` by name, the toolkit that judged them, and the manifest's
+    configuration identity.
     """
     root = manifest.resolve(".")
     excluded = manifest.get("reports.source_closure_exclude", [])
@@ -114,8 +124,7 @@ def source_closure(manifest, policy):
         rel = os.path.relpath(path, root).replace("\\", "/")
         entries[rel] = canonical.digest(path, policy.classify(rel))
 
-    entries.update(executed_implementation(
-        manifest.get("reports.implementation_closure", [])))
+    entries.update(implementation_identity())
     entries["<configuration>"] = configuration_identity(manifest)
     return entries
 

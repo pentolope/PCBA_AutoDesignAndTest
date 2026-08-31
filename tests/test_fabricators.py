@@ -1,19 +1,13 @@
-"""Fabricator knowledge: acquisition, comparison, promotion, selection.
+"""JLCPCB knowledge: acquisition, comparison, selection.
 
-Everything here runs offline against fixtures. The fixtures are minimized
-excerpts of the real official JLCPCB pages - the structure and every value
-are verbatim - so the parser is exercised against what the fabricator
-actually publishes, without any test depending on the fabricator's website
-being up, unchanged, or reachable.
+The committed catalog is the only thing design work may trust, and a Git
+commit is what makes it committed. There is no observed/latest pair, no
+promotion and no ledger: a refresh fetches into scratch and shows a semantic
+diff, and a person reviewing that diff and committing is the approval.
 
-The properties under test are the trust rules, and each is checked from the
-outside rather than by mirroring the implementation: a restyled page must
-not demand review, one changed thickness must, a failed fetch must leave
-the approved state untouched while superseding any older observation as
-"latest", raw evidence must be load-bearing, unknown capability must never
-read as supported, a selected stackup must describe the same process
-configuration as the selected options, and promotion must be the only door
-through which observation becomes trust.
+So the load path is where the refusals live. A catalog whose evidence is
+missing, altered, or describes an acquisition that never completed must refuse
+to load rather than reach a caller with values it cannot prove.
 """
 
 from __future__ import annotations
@@ -87,13 +81,12 @@ def tearDownModule():
 
 
 def _approved_store(tag):
-    """A store with the fixture catalog observed and promoted as baseline."""
+    """A store whose catalog is committed, the way a repository holds one."""
     root = _root(tag)
-    snapshot, problem = acquire.acquire("jlcpcb", root, fetcher=_fetcher())
+    result, problem = acquire.acquire(fetcher=_fetcher())
     assert problem is None, problem
-    store = CatalogStore(root, "jlcpcb")
-    store.promote(snapshot["normalized_sha256"][:12], [], initial=True)
-    return store
+    store_module.write_catalog(root, result, result["raw"])
+    return CatalogStore(root)
 
 
 def _rewrite_json(path, mutate):
@@ -354,386 +347,6 @@ class PresentationIsNotFabrication(unittest.TestCase):
         observed["stackups"]["JLC04161H-7628"]["applicability"][
             "thickness_basis"] = "reworded provenance prose"
         self.assertEqual(diff.semantic_diff(original, observed), [])
-
-
-# ---------------------------------------------------------------------------
-# the store: trust moves only through promotion
-# ---------------------------------------------------------------------------
-
-class TrustMovesOnlyThroughPromotion(unittest.TestCase):
-
-    def test_a_failed_fetch_preserves_the_approved_state(self):
-        store = _approved_store("keep")
-        before = store.approved()["normalized_sha256"]
-        snapshot, problem = acquire.acquire(
-            "jlcpcb", store.root, fetcher=_fetcher(fail=("impedance",)))
-        self.assertIn("incomplete", problem)
-        self.assertEqual(snapshot["outcome"], "incomplete")
-        self.assertEqual(store.approved()["normalized_sha256"], before)
-
-    def test_an_incomplete_observation_cannot_be_promoted(self):
-        store = _approved_store("incomplete")
-        acquire.acquire(
-            "jlcpcb", store.root, fetcher=_fetcher(fail=("capabilities",)))
-        with self.assertRaises(StoreError) as caught:
-            store.promote("0" * 12, [], allow_older=True)
-        self.assertIn("incomplete", str(caught.exception))
-
-    def test_a_newer_parse_failure_supersedes_an_older_success(self):
-        """approved A, successful refresh B, then a newer fetch C that the
-        parser cannot understand: C is now the latest known source state.
-        B survives as history but can no longer be promoted as current -
-        the newest established fact is 'the live source is unreadable'."""
-        store = _approved_store("chronology")
-        good, problem = acquire.acquire("jlcpcb", store.root,
-                                        fetcher=_fetcher())
-        self.assertIsNone(problem)
-        raw = _raw_sources()
-        raw["capabilities"] = b"<html>redesigned beyond recognition</html>"
-        failed, problem = acquire.acquire("jlcpcb", store.root,
-                                          fetcher=_fetcher(raw=raw))
-        self.assertIn("parse failed", problem)
-        latest = store.observed()
-        self.assertEqual(latest["outcome"], "parse-failed")
-        self.assertIsNone(latest["normalized"])
-        # B is not promotable: promotion sees only the newest attempt.
-        with self.assertRaises(StoreError) as caught:
-            store.promote(good["normalized_sha256"][:12], [],
-                          allow_older=True)
-        self.assertIn("parse-failed", str(caught.exception))
-        # B is retained - explicitly as displaced history, not as latest.
-        previous = store.previous_observed()
-        self.assertEqual(previous["normalized_sha256"],
-                         good["normalized_sha256"])
-        # The failure's own evidence is preserved for reproduction.
-        names = os.listdir(store.observed_evidence)
-        self.assertTrue(any("capabilities" in name for name in names))
-        # And the failure is visible wherever freshness is consulted.
-        attention = store.freshness()["attention"]
-        self.assertTrue(any("could not be parsed" in item
-                            for item in attention), attention)
-
-    def test_deleted_observed_evidence_blocks_promotion(self):
-        store = _approved_store("delev")
-        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
-                                             fetcher=_fetcher())
-        target = [source for source in snapshot["sources"]
-                  if source["id"] == "impedance"][0]
-        os.unlink(os.path.join(
-            store.observed_evidence,
-            "impedance-{}.raw".format(target["sha256_raw"][:12])))
-        with self.assertRaises(StoreError) as caught:
-            store.promote(snapshot["normalized_sha256"][:12], [])
-        self.assertIn("evidence", str(caught.exception))
-
-    def test_altered_observed_evidence_blocks_promotion(self):
-        store = _approved_store("altev")
-        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
-                                             fetcher=_fetcher())
-        target = [source for source in snapshot["sources"]
-                  if source["id"] == "capabilities"][0]
-        path = os.path.join(
-            store.observed_evidence,
-            "capabilities-{}.raw".format(target["sha256_raw"][:12]))
-        with open(path, "ab") as handle:
-            handle.write(b"<!-- tampered -->")
-        with self.assertRaises(StoreError) as caught:
-            store.promote(snapshot["normalized_sha256"][:12], [])
-        self.assertIn("not the bytes", str(caught.exception).replace(
-            "are not the bytes", "not the bytes"))
-
-    def test_wrong_evidence_under_the_right_name_is_detected(self):
-        store = _approved_store("wrongev")
-        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
-                                             fetcher=_fetcher())
-        sources = {source["id"]: source for source in snapshot["sources"]}
-        name = "impedance-{}.raw".format(
-            sources["impedance"]["sha256_raw"][:12])
-        other = "capabilities-{}.raw".format(
-            sources["capabilities"]["sha256_raw"][:12])
-        shutil.copyfile(os.path.join(store.observed_evidence, other),
-                        os.path.join(store.observed_evidence, name))
-        with self.assertRaises(StoreError):
-            store.observed()
-
-    def test_missing_approved_evidence_is_detected(self):
-        store = _approved_store("apprev")
-        victim = os.listdir(store.approved_evidence)[0]
-        os.unlink(os.path.join(store.approved_evidence, victim))
-        with self.assertRaises(StoreError) as caught:
-            store.approved()
-        self.assertIn("proof does not", str(caught.exception))
-        self.assertEqual(store.freshness()["state"], "unusable")
-
-    def test_a_corrupt_observation_cannot_become_approved(self):
-        store = _approved_store("corrupt")
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
-        snapshot = _rewrite_json(
-            store.observed_path,
-            lambda d: d["normalized"]["materials"].__setitem__(
-                "core", dict(d["normalized"]["materials"]["core"], dk=99.0)))
-        with self.assertRaises(StoreError) as caught:
-            store.observed()
-        self.assertIn("altered or corrupted", str(caught.exception))
-        with self.assertRaises(StoreError):
-            store.promote(snapshot["normalized_sha256"][:12], [])
-
-    def test_an_unsupported_snapshot_schema_refuses(self):
-        store = _approved_store("schema")
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
-        _rewrite_json(store.observed_path,
-                      lambda d: d.__setitem__("schema_version", 99))
-        with self.assertRaises(StoreError) as caught:
-            store.observed()
-        self.assertIn("schema_version", str(caught.exception))
-
-    def test_a_schema_1_snapshot_is_still_understood(self):
-        """The previous release wrote schema 1 with a `complete` boolean;
-        history written under the old rules must stay readable."""
-        store = _approved_store("compat")
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
-
-        def downgrade(document):
-            document["schema_version"] = 1
-            document["complete"] = True
-            del document["outcome"]
-        _rewrite_json(store.observed_path, downgrade)
-        observed = store.observed()
-        self.assertEqual(observed["outcome"], "complete")
-
-    def test_an_unsupported_catalog_schema_refuses(self):
-        catalog = jlcpcb.parse(_raw_sources())
-        catalog["schema_version"] = 99
-        with self.assertRaises(model.CatalogError):
-            model.validate_catalog(catalog)
-
-    def test_promotion_must_name_what_was_reviewed(self):
-        store = _approved_store("named")
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
-        with self.assertRaises(StoreError):
-            store.promote("abc", [])
-        with self.assertRaises(StoreError):
-            store.promote("0" * 12, [])
-
-    def test_the_first_baseline_is_a_distinct_deliberate_act(self):
-        root = _root("initial")
-        snapshot, _problem = acquire.acquire("jlcpcb", root,
-                                             fetcher=_fetcher())
-        store = CatalogStore(root, "jlcpcb")
-        with self.assertRaises(StoreError) as caught:
-            store.promote(snapshot["normalized_sha256"][:12], [])
-        self.assertIn("initial", str(caught.exception))
-        store.promote(snapshot["normalized_sha256"][:12], [], initial=True)
-        with self.assertRaises(StoreError):
-            store.promote(snapshot["normalized_sha256"][:12], [],
-                          initial=True, allow_older=True)
-
-    def test_promoting_an_observation_older_than_approved_needs_saying_so(
-            self):
-        store = _approved_store("older")
-        snapshot = _rewrite_json(
-            store.observed_path,
-            lambda d: d.__setitem__("retrieved_utc",
-                                    "2020-01-01T00:00:00+00:00"))
-        with self.assertRaises(StoreError) as caught:
-            store.promote(snapshot["normalized_sha256"][:12], [])
-        self.assertIn("backwards in time", str(caught.exception))
-        store.promote(snapshot["normalized_sha256"][:12], [],
-                      allow_older=True)
-
-    def test_promotion_is_audited(self):
-        store = _approved_store("audit")
-        with open(store.promotions_path, encoding="utf-8") as handle:
-            log = json.load(handle)
-        self.assertEqual(len(log), 1)
-        record = log[0]
-        self.assertTrue(record["initial"])
-        self.assertIsNone(record["from_normalized_sha256"])
-        self.assertEqual(record["to_normalized_sha256"],
-                         store.approved()["normalized_sha256"])
-        self.assertTrue(record["sources"][0].get("sha256_raw"))
-
-    def test_the_parser_identity_travels_with_every_snapshot(self):
-        store = _approved_store("parserid")
-        approved = store.approved()
-        self.assertEqual(approved["parser"]["version"],
-                         jlcpcb.PARSER_VERSION)
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
-        _rewrite_json(
-            store.observed_path,
-            lambda d: d["parser"].__setitem__("version",
-                                              "999-experimental"))
-        attention = store.freshness()["attention"]
-        self.assertTrue(any("parser identity differs" in item
-                            for item in attention), attention)
-
-
-# ---------------------------------------------------------------------------
-# freshness: verified-current versus approved-version
-# ---------------------------------------------------------------------------
-
-class FreshnessIsVerificationAge(unittest.TestCase):
-
-    @staticmethod
-    def _age_approved(store, days):
-        when = (datetime.datetime.now(datetime.timezone.utc)
-                - datetime.timedelta(days=days)).isoformat()
-        _rewrite_json(store.approved_path,
-                      lambda d: d.__setitem__("retrieved_utc", when))
-
-    def test_an_identical_refresh_renews_freshness_without_promotion(self):
-        store = _approved_store("renew")
-        digest_before = store.approved()["normalized_sha256"]
-        self._age_approved(store, 40)
-        self.assertEqual(store.freshness()["state"], "stale")
-        snapshot, problem = acquire.acquire("jlcpcb", store.root,
-                                            fetcher=_fetcher())
-        self.assertIsNone(problem)
-        store.record_verification(snapshot)
-        after = store.freshness()
-        self.assertEqual(after["state"], "current")
-        self.assertIn("renewed_by_verification_utc", after)
-        # The approved semantic version did not move one bit.
-        self.assertEqual(store.approved()["normalized_sha256"],
-                         digest_before)
-
-    def test_a_differing_observation_cannot_be_recorded_as_verification(
-            self):
-        store = _approved_store("noverify")
-        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
-                                             fetcher=_fetcher())
-        changed = copy.deepcopy(snapshot["normalized"])
-        changed["materials"]["core"]["dk"] = 5.0
-        forged = dict(snapshot, normalized=changed,
-                      normalized_sha256=model.normalized_digest(changed))
-        with self.assertRaises(StoreError) as caught:
-            store.record_verification(forged)
-        self.assertIn("reviewed and promoted", str(caught.exception))
-
-    def test_a_verification_of_a_previous_approval_does_not_carry_over(
-            self):
-        """Promote a new baseline: verifications recorded against the old
-        digest no longer vouch for anything."""
-        store = _approved_store("carry")
-        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
-                                             fetcher=_fetcher())
-        store.record_verification(snapshot)
-        _rewrite_json(
-            store.verification_path,
-            lambda d: d.__setitem__("approved_normalized_sha256",
-                                    "not-the-current-approved-digest"))
-        freshness = store.freshness()
-        self.assertNotIn("renewed_by_verification_utc", freshness)
-
-    def test_stale_plus_failed_refresh_stays_stale_and_says_why(self):
-        store = _approved_store("stalefail")
-        self._age_approved(store, 45)
-        acquire.acquire("jlcpcb", store.root,
-                        fetcher=_fetcher(fail=("impedance",)))
-        freshness = store.freshness()
-        self.assertEqual(freshness["state"], "stale")
-        self.assertTrue(any("could not fetch" in item
-                            for item in freshness["attention"]))
-
-    def test_a_pending_differing_observation_is_visible(self):
-        store = _approved_store("pending")
-        raw = _raw_sources()
-        raw["impedance"] = raw["impedance"].replace(
-            b">1.065mm<", b">1.075mm<", 1)
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher(raw=raw))
-        attention = store.freshness()["attention"]
-        self.assertTrue(any("awaits review" in item for item in attention),
-                        attention)
-
-    def test_a_future_dated_verification_is_anomalous(self):
-        store = _approved_store("clock")
-        now = datetime.datetime.now(datetime.timezone.utc)
-        earlier = now - datetime.timedelta(days=1)
-        self.assertEqual(store.freshness(now=earlier)["state"], "anomalous")
-
-    def test_fresh_and_unchanged_reads_current(self):
-        store = _approved_store("fresh")
-        freshness = store.freshness()
-        self.assertEqual(freshness["state"], "current")
-        self.assertEqual(freshness["attention"], [])
-
-
-# ---------------------------------------------------------------------------
-# concurrency: the store under simultaneous writers
-# ---------------------------------------------------------------------------
-
-class TheStoreSurvivesConcurrency(unittest.TestCase):
-
-    def test_concurrent_refreshes_cannot_corrupt_the_observed_store(self):
-        root = _root("simref")
-        failures = []
-
-        def worker():
-            try:
-                acquire.acquire("jlcpcb", root, fetcher=_fetcher())
-            except Exception as exc:                  # noqa: BLE001 - record
-                failures.append(exc)
-        threads = [threading.Thread(target=worker) for _ in range(6)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        self.assertEqual(failures, [])
-        store = CatalogStore(root, "jlcpcb")
-        observed = store.observed()
-        self.assertEqual(observed["outcome"], "complete")
-        # No stray partial temp files survive the stampede.
-        stray = [name for name in os.listdir(
-            os.path.dirname(store.observed_path))
-            if name.startswith(".partial-")]
-        self.assertEqual(stray, [])
-
-    def test_concurrent_promotions_cannot_double_approve(self):
-        root = _root("simprom")
-        snapshot, _problem = acquire.acquire("jlcpcb", root,
-                                             fetcher=_fetcher())
-        store = CatalogStore(root, "jlcpcb")
-        outcomes = []
-
-        def worker():
-            local = CatalogStore(root, "jlcpcb")
-            try:
-                local.promote(snapshot["normalized_sha256"][:12], [],
-                              initial=True)
-                outcomes.append("promoted")
-            except StoreError as exc:
-                outcomes.append(str(exc))
-        threads = [threading.Thread(target=worker) for _ in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        self.assertEqual(sorted(o[:8] for o in outcomes),
-                         ["an appro", "promoted"], outcomes)
-        with open(store.promotions_path, encoding="utf-8") as handle:
-            self.assertEqual(len(json.load(handle)), 1)
-        self.assertEqual(store.approved()["normalized_sha256"],
-                         snapshot["normalized_sha256"])
-
-    def test_a_promotion_promotes_what_was_reviewed_or_refuses(self):
-        """A refresh landing between review and promotion must not swap in
-        different content under the reviewed digest prefix."""
-        store = _approved_store("swap")
-        raw = _raw_sources()
-        raw["impedance"] = raw["impedance"].replace(
-            b">1.065mm<", b">1.075mm<", 1)
-        changed, _problem = acquire.acquire("jlcpcb", store.root,
-                                            fetcher=_fetcher(raw=raw))
-        # The reviewer reviewed the ORIGINAL digest; a newer differing
-        # observation has since replaced latest. Promotion refuses.
-        with self.assertRaises(StoreError) as caught:
-            store.promote(store.approved()["normalized_sha256"][:12], [],
-                          allow_older=True)
-        self.assertIn("promote exactly what was reviewed",
-                      str(caught.exception))
-        # Promoting the digest that IS the newest observation works.
-        store.promote(changed["normalized_sha256"][:12], [],
-                      allow_older=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1299,11 +912,57 @@ class ValuesKeepTheirScopes(unittest.TestCase):
 # the evidence universe cannot shrink quietly
 # ---------------------------------------------------------------------------
 
+class TheCommittedCatalogRefusesWhatItCannotProve(unittest.TestCase):
+    """Evidence integrity and fail-closed parsing, on the load path.
+
+    Promotion used to be the gate that refused these. With promotion gone -
+    a commit is the approval now - the loader is the only thing between a
+    damaged catalog and design work that would consume it.
+    """
+
+    def _damaged(self, mutate, tag):
+        store = _approved_store(tag)
+        mutate(store)
+        with self.assertRaises(StoreError) as caught:
+            store.approved()
+        return str(caught.exception)
+
+    def test_missing_evidence_is_detected(self):
+        def drop(store):
+            name = sorted(os.listdir(store.approved_evidence))[0]
+            os.unlink(os.path.join(store.approved_evidence, name))
+        self.assertIn("evidence", self._damaged(drop, "ev_missing"))
+
+    def test_altered_evidence_under_the_right_name_is_detected(self):
+        def tamper(store):
+            name = sorted(os.listdir(store.approved_evidence))[0]
+            with open(os.path.join(store.approved_evidence, name),
+                      "ab") as handle:
+                handle.write(b"one byte too many")
+        self.assertIn("evidence", self._damaged(tamper, "ev_altered"))
+
+    def test_an_unsupported_snapshot_schema_refuses(self):
+        def bump(store):
+            _rewrite_json(store.approved_path,
+                          lambda d: d.__setitem__("schema_version", 99))
+        self.assertIn("schema_version", self._damaged(bump, "ev_schema"))
+
+    def test_an_acquisition_that_did_not_complete_is_not_a_catalog(self):
+        """A `parse-failed` file committed by accident must not load."""
+        def spoil(store):
+            def mutate(document):
+                document["outcome"] = "parse-failed"
+                document["normalized"] = None
+            _rewrite_json(store.approved_path, mutate)
+        detail = self._damaged(spoil, "ev_incomplete")
+        self.assertIn("parse-failed", detail)
+        self.assertIn("complete", detail)
+
+
 class TheSourceSetIsComplete(unittest.TestCase):
 
     def test_a_record_citing_a_vanished_source_refuses(self):
         store = _approved_store("vanish")
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
 
         def drop(document):
             document["sources"] = [s for s in document["sources"]
@@ -1311,151 +970,33 @@ class TheSourceSetIsComplete(unittest.TestCase):
             document["declared_source_ids"] = [
                 i for i in document["declared_source_ids"]
                 if i != "impedance"]
-        _rewrite_json(store.observed_path, drop)
+        _rewrite_json(store.approved_path, drop)
         with self.assertRaises(StoreError) as caught:
-            store.observed()
+            store.approved()
         self.assertIn("vanished", str(caught.exception))
 
     def test_a_complete_snapshot_missing_a_declared_source_refuses(self):
         store = _approved_store("declared")
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
 
         def drop(document):
             document["sources"] = [s for s in document["sources"]
                                    if s["id"] != "copper-weight"]
-        _rewrite_json(store.observed_path, drop)
+        _rewrite_json(store.approved_path, drop)
         with self.assertRaises(StoreError) as caught:
-            store.observed()
+            store.approved()
         self.assertIn("evidence universe", str(caught.exception))
 
     def test_a_duplicated_source_id_refuses(self):
         store = _approved_store("dupe")
-        acquire.acquire("jlcpcb", store.root, fetcher=_fetcher())
 
         def duplicate(document):
             document["sources"].append(dict(document["sources"][0]))
             document["declared_source_ids"].append(
                 document["sources"][0]["id"])
-        _rewrite_json(store.observed_path, duplicate)
+        _rewrite_json(store.approved_path, duplicate)
         with self.assertRaises(StoreError) as caught:
-            store.observed()
+            store.approved()
         self.assertIn("twice", str(caught.exception))
-
-
-# ---------------------------------------------------------------------------
-# the verification ledger earns nothing when malformed
-# ---------------------------------------------------------------------------
-
-class TheLedgerFailsSafe(unittest.TestCase):
-
-    @staticmethod
-    def _renewed(store):
-        return "renewed_by_verification_utc" in store.freshness()
-
-    def _verified_store(self, tag):
-        store = _approved_store(tag)
-        FreshnessIsVerificationAge._age_approved(store, 40)
-        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
-                                             fetcher=_fetcher())
-        store.record_verification(snapshot)
-        assert store.freshness()["state"] == "current"
-        return store
-
-    def test_corrupt_ledger_json_falls_back_to_evidence_age(self):
-        store = self._verified_store("corruptled")
-        with open(store.verification_path, "w", encoding="utf-8") as handle:
-            handle.write("{ not json")
-        freshness = store.freshness()
-        self.assertEqual(freshness["state"], "stale")
-        self.assertNotIn("renewed_by_verification_utc", freshness)
-
-    def test_unknown_ledger_schema_falls_back(self):
-        store = self._verified_store("schemaled")
-        _rewrite_json(store.verification_path,
-                      lambda d: d.__setitem__("schema_version", 99))
-        self.assertEqual(store.freshness()["state"], "stale")
-
-    def test_a_ledger_for_another_digest_earns_nothing(self):
-        store = self._verified_store("otherled")
-        _rewrite_json(store.verification_path,
-                      lambda d: d.__setitem__("approved_normalized_sha256",
-                                              "0" * 64))
-        self.assertEqual(store.freshness()["state"], "stale")
-
-    def test_a_verification_predating_its_acquisition_is_impossible(self):
-        store = self._verified_store("timeled")
-        _rewrite_json(store.verification_path,
-                      lambda d: d.__setitem__(
-                          "verified_utc", "2001-01-01T00:00:00+00:00"))
-        self.assertEqual(store.freshness()["state"], "stale")
-
-    def test_a_malformed_parser_identity_earns_nothing(self):
-        store = self._verified_store("parserled")
-        _rewrite_json(store.verification_path,
-                      lambda d: d.__setitem__("parser", "not-a-dict"))
-        self.assertEqual(store.freshness()["state"], "stale")
-
-    def test_a_tampered_ledger_cannot_make_ensure_skip_the_network(self):
-        """`fab ensure` trusts freshness(); a ledger that fails
-        validation must leave the state stale so ensure refreshes."""
-        store = self._verified_store("ensureled")
-        _rewrite_json(store.verification_path,
-                      lambda d: d.__setitem__("observed_retrieved_utc",
-                                              "not a timestamp"))
-        freshness = store.freshness()
-        self.assertEqual(freshness["state"], "stale")
-
-
-# ---------------------------------------------------------------------------
-# crashes leave a describable state
-# ---------------------------------------------------------------------------
-
-class InterruptedTransitionsAreRecoverable(unittest.TestCase):
-
-    def test_a_crash_between_rotate_and_write_keeps_the_last_acquisition(
-            self):
-        """Simulated: latest was renamed to previous and the process died
-        before the new latest was written. The store answers honestly -
-        no latest, the last completed acquisition intact as history - and
-        the next refresh rebuilds the normal state."""
-        store = _approved_store("crashrot")
-        good, _problem = acquire.acquire("jlcpcb", store.root,
-                                         fetcher=_fetcher())
-        os.replace(store.observed_path, store.previous_path)
-        self.assertIsNone(store.observed())
-        previous = store.previous_observed()
-        self.assertEqual(previous["normalized_sha256"],
-                         good["normalized_sha256"])
-        again, problem = acquire.acquire("jlcpcb", store.root,
-                                         fetcher=_fetcher())
-        self.assertIsNone(problem)
-        self.assertEqual(store.observed()["normalized_sha256"],
-                         again["normalized_sha256"])
-
-    def test_an_interrupted_promotion_is_self_describing(self):
-        """Simulated: approved.json was replaced and the process died
-        before the audit entry landed. The approved snapshot itself
-        carries its promotion identity, so the store keeps working and
-        the missing audit entry is reconstructible from the file."""
-        store = _approved_store("crashprom")
-        raw = _raw_sources()
-        raw["impedance"] = raw["impedance"].replace(
-            b">1.065mm<", b">1.075mm<", 1)
-        changed, _problem = acquire.acquire("jlcpcb", store.root,
-                                            fetcher=_fetcher(raw=raw))
-        before = store.approved()["normalized_sha256"]
-        store.promote(changed["normalized_sha256"][:12], [],
-                      allow_older=True)
-        # Undo the audit append, as a crash there would have left it.
-        with open(store.promotions_path, encoding="utf-8") as handle:
-            log = json.load(handle)
-        with open(store.promotions_path, "w", encoding="utf-8") as handle:
-            json.dump(log[:-1], handle)
-        approved = store.approved()
-        self.assertEqual(approved["normalized_sha256"],
-                         changed["normalized_sha256"])
-        self.assertEqual(approved["replaced_normalized_sha256"], before)
-        self.assertTrue(approved["approved_utc"])
 
 
 # ---------------------------------------------------------------------------
@@ -1713,58 +1254,6 @@ class RequirementsFailClosedAtTheBoundary(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# a verification is only worth the acquisition it can prove
-# ---------------------------------------------------------------------------
-
-class VerificationIsBoundToARealAcquisition(unittest.TestCase):
-
-    def _verified_store(self, tag):
-        store = _approved_store(tag)
-        FreshnessIsVerificationAge._age_approved(store, 40)
-        snapshot, _problem = acquire.acquire("jlcpcb", store.root,
-                                             fetcher=_fetcher())
-        store.record_verification(snapshot)
-        assert store.freshness()["state"] == "current"
-        return store
-
-    def test_a_real_matching_verification_still_renews(self):
-        store = self._verified_store("realver")
-        self.assertEqual(store.freshness()["state"], "current")
-
-    def test_a_well_formed_forged_ledger_earns_nothing(self):
-        """Right digest, today's dates, plausible shape - but no complete
-        acquisition with that retrieval time exists, so it proves
-        nothing."""
-        store = self._verified_store("forge")
-        _rewrite_json(store.verification_path, lambda d: (
-            d.__setitem__("observed_retrieved_utc",
-                          "2026-08-25T00:00:00+00:00"),
-            d.__setitem__("verified_utc", "2026-08-25T00:00:01+00:00")))
-        self.assertEqual(store.freshness()["state"], "stale")
-
-    def test_an_altered_source_hash_earns_nothing(self):
-        store = self._verified_store("altver")
-
-        def corrupt(document):
-            document["sources"][0]["sha256_raw"] = "0" * 64
-        _rewrite_json(store.verification_path, corrupt)
-        self.assertEqual(store.freshness()["state"], "stale")
-
-    def test_a_vanished_backing_observation_earns_nothing(self):
-        store = self._verified_store("vanver")
-        os.unlink(store.observed_path)
-        if os.path.isfile(store.previous_path):
-            os.unlink(store.previous_path)
-        self.assertEqual(store.freshness()["state"], "stale")
-
-    def test_a_changed_parser_identity_earns_nothing(self):
-        store = self._verified_store("parver")
-        _rewrite_json(store.verification_path, lambda d: d["parser"]
-                      .__setitem__("version", "999"))
-        self.assertEqual(store.freshness()["state"], "stale")
-
-
-# ---------------------------------------------------------------------------
 # validation stays offline
 # ---------------------------------------------------------------------------
 
@@ -1812,8 +1301,7 @@ class ValidationPerformsNoNetworkAccess(unittest.TestCase):
         """The committed baseline a clean checkout works from, verified the
         same way the store verifies any snapshot - digests, evidence
         bytes and all."""
-        store = CatalogStore(os.path.join(HERE, "profiles", "jlcpcb"),
-                             "jlcpcb")
+        store = CatalogStore(os.path.join(HERE, "profiles", "jlcpcb"))
         approved = store.approved()
         self.assertIsNotNone(approved, "no committed approved baseline")
         self.assertTrue(approved["normalized"]["stackups"])

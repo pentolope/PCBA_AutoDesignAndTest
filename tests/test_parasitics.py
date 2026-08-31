@@ -154,21 +154,18 @@ class ComparisonsRefuseUnmatchedFidelity(unittest.TestCase):
                           "units": "ohm"})))
 
     def test_mismatches_refuse_by_name(self):
-        with self.assertRaisesRegex(ParasiticsError,
-                                    "model.fidelity"):
+        with self.assertRaisesRegex(ParasiticsError, "evidence_class"):
             parasitics.require_comparable(_metric(), _metric(
                 model={"name": "traversal-series-dc",
                        "fidelity": "field-solved"}))
-        with self.assertRaisesRegex(ParasiticsError,
-                                    "quantity.semantics"):
+        with self.assertRaisesRegex(ParasiticsError, "knowledge"):
             parasitics.require_comparable(_metric(), _metric(
                 quantity={"semantics": "bound", "value": None,
                           "bound": {"direction": "lower",
                                     "value": 0.01},
                           "interval": None, "units": "ohm"},
                 omitted_contributions=["via barrels"]))
-        with self.assertRaisesRegex(ParasiticsError,
-                                    "quantity.units"):
+        with self.assertRaisesRegex(ParasiticsError, "units"):
             parasitics.require_comparable(_metric(), _metric(
                 quantity={"semantics": "exact", "value": 12.5,
                           "bound": None, "interval": None,

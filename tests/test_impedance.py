@@ -22,7 +22,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from pcbqa.fabricators import impedance, jlcpcb, model, selection  # noqa: E402
-from pcbqa.fabricators import overlay_reference                     # noqa: E402
+from pcbqa import overlay_reference, transmission_line                                  # noqa: E402
 from pcbqa import propagation                                       # noqa: E402
 from tests.test_fabricators import _raw_sources                     # noqa: E402
 
@@ -1952,7 +1952,7 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
         the phrases that would ("internal erratum", "the erratum",
         "erratum remains") are banned outright, and the scoped
         statement must be present verbatim."""
-        for module in (overlay_reference, impedance):
+        for module in (overlay_reference, impedance, transmission_line):
             source = inspect.getsource(module)
             for banned in ("internal erratum", "documented erratum",
                            "the erratum", "erratum remains",
@@ -1961,9 +1961,9 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
         doc = " ".join(overlay_reference.__doc__.split())
         self.assertIn("printed-vs-figure inconsistency", doc)
         self.assertIn("candidate", doc.lower())
-        impedance_doc = " ".join(
-            inspect.getsource(impedance).split())
-        self.assertIn("no erratum is established", impedance_doc)
+        # The scoped statement travels with the closed form it qualifies.
+        forms = " ".join(inspect.getsource(transmission_line).split())
+        self.assertIn("no erratum is established", forms)
 
     def test_reference_and_production_versions_are_separate(self):
         """Production MODEL_VERSION moves only when the production
