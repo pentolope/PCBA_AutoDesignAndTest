@@ -10,6 +10,12 @@ applicability or PASS/FAIL/UNKNOWN.
 Evidence classes remain phenomenon-specific.  This module never ranks an RTL
 model against a propagation estimate or a measurement against geometry.  A
 producer that has a meaningful local ordering may keep that ordering.
+
+An ASSUMED knowledge basis is an explicit premise, not numeric exactness.
+Consequently EXACT + ASSUMED is invalid: an exact value may be direct or
+derived, while a value resting on an assumption states the weaker knowledge
+shape that the premise actually supports.  Bounded and approximate knowledge
+always state the basis that qualifies them.
 """
 
 from __future__ import annotations
@@ -167,15 +173,26 @@ def validate_knowledge_basis(record):
     return record
 
 
+def _validate_basis_for_knowledge(kind, basis):
+    validate_knowledge_basis(basis)
+    if kind in (LOWER_BOUND, UPPER_BOUND, INTERVAL, APPROXIMATE) and \
+            basis is None:
+        raise ClaimError(
+            "bounded and approximate knowledge states the basis that "
+            "qualifies it")
+    if kind == EXACT and basis is not None and basis["kind"] == ASSUMED:
+        raise ClaimError(
+            "exact knowledge cannot have an assumed basis; state the weaker "
+            "knowledge shape supported by the assumption")
+
+
 def knowledge_declaration(kind, basis=None):
     """Declare numeric knowledge before a producer has supplied its value."""
     if kind not in KNOWLEDGE:
         raise ClaimError("knowledge {!r} is not one of {}".format(
             kind, list(KNOWLEDGE)))
     basis = copy.deepcopy(basis)
-    validate_knowledge_basis(basis)
-    if kind in (LOWER_BOUND, UPPER_BOUND, INTERVAL) and basis is None:
-        raise ClaimError("bounded knowledge states whether it is derived or assumed")
+    _validate_basis_for_knowledge(kind, basis)
     return {"kind": kind, "basis": basis}
 
 
@@ -262,10 +279,7 @@ def validate(record):
     status = record["evidence"]["applicability"]["status"]
     if status != APPLICABLE and knowledge != UNKNOWN:
         raise ClaimError("unsupported or not-applicable evidence knows no number")
-    validate_knowledge_basis(record["knowledge_basis"])
-    if knowledge in (LOWER_BOUND, UPPER_BOUND, INTERVAL) and \
-            record["knowledge_basis"] is None:
-        raise ClaimError("bounded knowledge states whether it is derived or assumed")
+    _validate_basis_for_knowledge(knowledge, record["knowledge_basis"])
     omissions = record["evidence"]["omitted_contributions"]
     assumptions = record["evidence"]["assumptions"]
     if knowledge == EXACT and omissions:

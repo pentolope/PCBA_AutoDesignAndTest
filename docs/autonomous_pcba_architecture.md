@@ -38,7 +38,7 @@ root or staging root; traversal, absolute and symlink escapes refuse.
 - evidence class and provenance;
 - applicability: applicable, unsupported or not applicable;
 - assumptions and omitted contributions;
-- a derived or assumed knowledge basis when the distinction matters;
+- a stated basis for bounded and approximate knowledge;
 - an optional requirement.
 
 One conservative verdict evaluates linked requirements as PASS, FAIL or
@@ -46,6 +46,11 @@ UNKNOWN. It records whether a conclusion is exact or bound-derived. A one-sided
 bound decides only in the direction it establishes, an interval only when the
 whole interval decides, and approximate or unknown knowledge cannot silently
 pass.
+
+An exact value may be direct or derived, but cannot have an assumed numeric
+basis: an assumed premise declares the weaker knowledge shape it actually
+supports. A simulated measurement with an assumed basis remains visible in the
+top-level assumption policy and is not usable for an autonomous design decision.
 
 The following producers emit this contract directly:
 

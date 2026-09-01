@@ -32,7 +32,8 @@ def _claim(knowledge=claim.EXACT, quantity=None, requirement=None,
     if quantity is None:
         quantity = {} if knowledge == claim.UNKNOWN else {"value": 5.0}
     if basis is None and knowledge in (
-            claim.LOWER_BOUND, claim.UPPER_BOUND, claim.INTERVAL):
+            claim.LOWER_BOUND, claim.UPPER_BOUND, claim.INTERVAL,
+            claim.APPROXIMATE):
         basis = claim.knowledge_basis(
             claim.DERIVED, "the test derives this bound mechanically")
     return claim.claim(
@@ -134,7 +135,18 @@ class ClaimsRefuseOverstatement(unittest.TestCase):
 
     def test_approximate_must_state_what_qualifies_it(self):
         with self.assertRaises(ClaimError):
-            _claim(claim.APPROXIMATE, {"value": 1})
+            claim.claim(
+                "path", "CLK/U1", "ps", claim.APPROXIMATE, {"value": 1},
+                _evidence(assumptions=["declared approximation"]), "test",
+                knowledge_basis=None)
+
+    def test_exact_knowledge_cannot_rest_on_an_assumption(self):
+        assumed = claim.knowledge_basis(
+            claim.ASSUMED, "the value is only a design premise")
+        with self.assertRaises(ClaimError):
+            claim.knowledge_declaration(claim.EXACT, assumed)
+        with self.assertRaises(ClaimError):
+            _claim(claim.EXACT, {"value": 1}, basis=assumed)
 
     def test_bounded_knowledge_states_derived_or_assumed_justification(self):
         with self.assertRaises(ClaimError):

@@ -538,13 +538,28 @@ def assumption_dependencies(scenario):
     whether the assumption is accepted for a design decision) or
     UNDECLARED - and an undeclared or unaccepted assumption makes
     the result unusable for the requested decision, structurally.
+    A measurement whose shared knowledge basis is ASSUMED is also an
+    assumption dependency. The knowledge declaration has no independent
+    design-acceptance field, so it remains visible and blocks top-level
+    design usability rather than silently borrowing acceptance from an
+    ideal element or model.
     """
     validate_scenario(scenario)
     declared = scenario.get("assumptions") or {}
     per_measurement = {}
+    measurement_knowledge_assumptions = {}
     all_accepted = True
     any_ideal = False
     for measurement in scenario["measurements"]:
+        knowledge = measurement.get("knowledge")
+        basis = None if knowledge is None else knowledge["basis"]
+        if basis is not None and basis["kind"] == claim.ASSUMED:
+            measurement_knowledge_assumptions[measurement["name"]] = {
+                "knowledge": knowledge["kind"],
+                "detail": basis["detail"],
+                "accepted_for_design_decision": False,
+            }
+            all_accepted = False
         contributors = measurement_contributors(scenario,
                                                 measurement)
         entries = {}
@@ -576,14 +591,19 @@ def assumption_dependencies(scenario):
         per_measurement[measurement["name"]] = entries
     return {
         "per_measurement": per_measurement,
-        "assumption_dependent": any_ideal,
+        "measurement_knowledge_assumptions":
+            measurement_knowledge_assumptions,
+        "assumption_dependent":
+            any_ideal or bool(measurement_knowledge_assumptions),
         "all_assumptions_accepted_for_design_decision":
-            all_accepted if any_ideal else True,
+            all_accepted,
         "meaning": "results built on ideal primitives are usable "
                    "for a design decision only when every such "
                    "primitive's assumption is declared and "
                    "accepted; usable-under-assumption is never "
-                   "evidence about the real source or load",
+                   "evidence about the real source or load. A "
+                   "measurement with an ASSUMED numeric basis is "
+                   "reported here and blocks design usability",
     }
 
 

@@ -619,6 +619,8 @@ def _attach_result_policy(result, coverage):
         "result_applicable_to_requested_conditions": applicable,
         "assumption_dependent":
             assumptions["assumption_dependent"],
+        "measurement_knowledge_assumptions":
+            assumptions["measurement_knowledge_assumptions"],
         "assumptions_accepted_for_design_decision": assumptions_ok,
         "usable_for_design_decision": bool(
             ran and coverage["satisfied"] is True
@@ -629,7 +631,8 @@ def _attach_result_policy(result, coverage):
                    "a declared and satisfied coverage requirement, "
                    "models representing the requested operating "
                    "conditions, and every contributing ideal "
-                   "primitive declared and accepted as an assumption; a "
+                   "primitive declared and accepted as an assumption, and "
+                   "no measurement relying on an ASSUMED numeric basis; a "
                    "shared claim verdict never overrides "
                    "any of those. assertions_claimable is the "
                    "actionable assertion truth: True only when "

@@ -192,15 +192,6 @@ comparisons that bypass those methods. Intrinsic mathematical and algorithmic
 constants use `implementation_constant(value, rationale)`. This audit is a
 toolkit development check, not a consumer validation gate.
 
-## Do not reserve architecture
-
-An abstraction earns its place when a second implementation exists. Do not add
-dispatch, availability probing or fallback for a solver that is not
-implemented, and do not maintain a list of recognised-but-unimplemented names
-to settle future spelling - an unimplemented name refuses either way. Research
-and roadmap documents are welcome; production machinery pretending an
-implementation exists is not.
-
 ## Fixtures
 
 `tests/fixtures/` holds the toolkit's own test material. Fixture integrity is

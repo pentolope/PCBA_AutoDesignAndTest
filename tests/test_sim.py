@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
@@ -389,6 +390,9 @@ class BoundedSimulationValuesFailClosed(unittest.TestCase):
     def test_measurement_knowledge_validates_exactly(self):
         for invalid in (
                 {"kind": claim.UPPER_BOUND, "basis": None},
+                {"kind": claim.APPROXIMATE, "basis": None},
+                {"kind": claim.EXACT,
+                 "basis": claim.knowledge_basis(claim.ASSUMED, "test")},
                 {"kind": "sideways", "basis": claim.knowledge_basis(
                     claim.ASSUMED, "test")},
                 {"kind": claim.UPPER_BOUND,
@@ -414,6 +418,17 @@ class BoundedSimulationValuesFailClosed(unittest.TestCase):
                 claim.UPPER_BOUND,
                 claim.knowledge_basis(claim.ASSUMED, "owner bound"))
         scenario.validate_scenario(good)
+
+    def test_unqualified_approximate_refuses_before_backend_discovery(self):
+        bad = _rc_scenario()
+        bad["measurements"][0]["knowledge"] = {
+            "kind": claim.APPROXIMATE, "basis": None}
+        with mock.patch.object(ngspice, "backend_identity") as backend:
+            with self.assertRaises(SimulationError):
+                ngspice.run_scenario(
+                    model_registry.ModelRegistry([]), bad,
+                    "unused-workdir")
+        backend.assert_not_called()
 
     def test_unresolved_verdict_is_not_claimable(self):
         declared = _rc_scenario()
@@ -968,10 +983,19 @@ class ResultsCarryAUsabilityPolicy(unittest.TestCase):
         "kind": "fixed-reference", "value": 20.0, "units": "C",
         "source": "IEC 60028 reference temperature"}}
 
-    def _run(self, temperature):
+    def _run(self, temperature, assumed_measurement=False):
         registry = model_registry.ModelRegistry([
             _interconnect("link-model",
                           conditions=self._FIXED_20C)])
+        measurement = {"name": "vout", "kind": "op_voltage",
+                       "node": "out",
+                       "assertion": {"op": ">=", "value": 4.9}}
+        if assumed_measurement:
+            measurement["knowledge"] = claim.knowledge_declaration(
+                claim.LOWER_BOUND,
+                claim.knowledge_basis(
+                    claim.ASSUMED,
+                    "the lower voltage bound is a design premise"))
         sim_scenario = {
             "name": "usability-check",
             "elements": [
@@ -983,10 +1007,7 @@ class ResultsCarryAUsabilityPolicy(unittest.TestCase):
                  "nodes": ["out", "0"], "value": 50.0},
             ],
             "analyses": [{"kind": "op"}],
-            "measurements": [
-                {"name": "vout", "kind": "op_voltage",
-                 "node": "out",
-                 "assertion": {"op": ">=", "value": 4.9}}],
+            "measurements": [measurement],
             "operating_conditions": {"temperature_c": temperature},
             "required_coverage": {
                 "interconnect_dc": ["geometry-derived"]},
@@ -1021,6 +1042,16 @@ class ResultsCarryAUsabilityPolicy(unittest.TestCase):
             self.assertIs(policy["usable_for_design_decision"],
                           True)
         self.assertIs(policy["usable_for_release"], False)
+
+    def test_assumed_measurement_knowledge_blocks_design_usability(self):
+        result = self._run(20.0, assumed_measurement=True)
+        policy = result["result_policy"]
+        self.assertIs(policy["assumption_dependent"], True)
+        self.assertEqual(
+            sorted(policy["measurement_knowledge_assumptions"]), ["vout"])
+        self.assertIs(
+            policy["assumptions_accepted_for_design_decision"], False)
+        self.assertIs(policy["usable_for_design_decision"], False)
 
 
 class IdealAssumptionsAreStructural(unittest.TestCase):
