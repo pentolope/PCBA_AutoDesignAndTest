@@ -175,22 +175,74 @@ def design_inputs(manifest):
 
     Returns paths relative to the project root, sorted.
     """
-    root = manifest.resolve(".")
+    root = os.path.realpath(manifest.resolve("."))
     found, pending = set(), []
 
-    def take(rel):
-        rel = rel.replace("\\", "/").lstrip("/")
-        full = os.path.join(root, rel)
-        if os.path.isdir(full):
-            for base, _dirs, names in os.walk(full):
-                for name in names:
-                    if name.endswith(DESIGN_SUFFIXES):
-                        found.add(os.path.relpath(os.path.join(base, name),
-                                                  root).replace("\\", "/"))
-            return
-        if os.path.isfile(full) and rel not in found:
+    def contained(candidate, authority, label):
+        resolved = os.path.realpath(candidate)
+        try:
+            inside = os.path.commonpath((authority, resolved)) == authority
+        except ValueError:
+            inside = False
+        if not inside:
+            raise ManifestError(
+                "{} resolves outside the declared project root: {} -> {}"
+                .format(label, candidate, resolved))
+        return resolved
+
+    def relative_path(value):
+        if not isinstance(value, str) or not value.strip():
+            raise ManifestError("a design input path must be a non-empty string")
+        value = value.replace("\\", "/")
+        if value.startswith("/") or re.match(r"^[A-Za-z]:/", value):
+            raise ManifestError(
+                "design input paths are project-relative, not absolute: {}"
+                .format(value))
+        return os.path.normpath(value).replace("\\", "/")
+
+    def remember(rel):
+        if rel not in found:
             found.add(rel)
             pending.append(rel)
+
+    def take(rel):
+        rel = relative_path(rel)
+        lexical = os.path.join(root, rel)
+        full = contained(lexical, root, "design input {!r}".format(rel))
+        if os.path.isdir(full):
+            visited = set()
+            # Walk the lexical spelling so an allowed in-project symlink keeps
+            # the relative path KiCad's table names. Every directory and file
+            # is still authorized by its resolved spelling before use.
+            for base, dirs, names in os.walk(lexical, followlinks=True):
+                base_real = contained(
+                    base, root, "design directory {!r}".format(rel))
+                if base_real in visited:
+                    dirs[:] = []
+                    continue
+                visited.add(base_real)
+                safe_dirs = []
+                for name in dirs:
+                    directory = os.path.join(base, name)
+                    directory_real = contained(
+                        directory, root,
+                        "design directory {!r}".format(
+                            os.path.relpath(directory, root)))
+                    if directory_real not in visited:
+                        safe_dirs.append(name)
+                dirs[:] = safe_dirs
+                for name in names:
+                    if name.endswith(DESIGN_SUFFIXES):
+                        source = os.path.join(base, name)
+                        contained(
+                            source, root,
+                            "design file {!r}".format(
+                                os.path.relpath(source, root)))
+                        remember(os.path.relpath(source, root)
+                                 .replace("\\", "/"))
+            return
+        if os.path.isfile(full):
+            remember(rel)
 
     for declared in sorted((manifest.get("sources") or {}).values()):
         take(declared)
@@ -224,9 +276,7 @@ def design_inputs(manifest):
 def stage_design(manifest, destination):
     """Copy the design into `destination`, preserving relative paths.
 
-    KiCad writes into the directory it opens: every `kicad-cli` run drops
-    `~<project>.kicad_pro.lck` beside the project for its duration, and
-    `pcb drc --refill-zones --save-board` - which this validator requires,
+    KiCad's `pcb drc --refill-zones --save-board` - which this validator requires,
     because an export ships whatever fill is stored and a stale one ships an
     empty plane - rewrites the board outright. So tools run against a staged
     design and never against the authoritative one. What is staged is the
@@ -234,13 +284,34 @@ def stage_design(manifest, destination):
     """
     import shutil
 
-    root = manifest.resolve(".")
+    root = os.path.realpath(manifest.resolve("."))
+    destination = os.path.abspath(destination)
     os.makedirs(destination, exist_ok=True)
+    staging_root = os.path.realpath(destination)
+
+    def require_inside(candidate, authority, label):
+        resolved = os.path.realpath(candidate)
+        try:
+            inside = os.path.commonpath((authority, resolved)) == authority
+        except ValueError:
+            inside = False
+        if not inside:
+            raise ManifestError(
+                "{} resolves outside its authority root: {} -> {}".format(
+                    label, candidate, resolved))
+        return resolved
+
     staged = []
     for rel in design_inputs(manifest):
+        source = os.path.join(root, rel)
+        require_inside(source, root, "staged source {!r}".format(rel))
         target = os.path.join(destination, rel)
+        require_inside(target, staging_root,
+                       "staging destination {!r}".format(rel))
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        shutil.copy2(os.path.join(root, rel), target)
+        require_inside(os.path.dirname(target), staging_root,
+                       "staging parent {!r}".format(rel))
+        shutil.copy2(source, target)
         staged.append(rel)
     return staged
 
@@ -480,10 +551,9 @@ class Context:
     def staged_design(self):
         """A staged copy of the design that tools may open.
 
-        KiCad writes into the directory it opens - a `~<project>.kicad_pro.lck`
-        for the duration of every run, and a rewritten board under
-        `drc --save-board` - so nothing is ever pointed at the authoritative
-        files. Built once per context and shared by every gate that shells out.
+        KiCad can rewrite the board under `drc --save-board`, so nothing is
+        pointed at the authoritative files. Built once per context and shared
+        by every gate that shells out.
         """
         def build():
             destination = os.path.join(self.workdir, "design")

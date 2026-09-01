@@ -22,11 +22,11 @@ Three separately cached layers, because they fail for separate reasons
                  material data, no model and no solver, so it answers "does
                  this path exist" whether or not anything else is available.
 ``stackup``      the physical stack, and which of its layers are planes.
-``propagation``  the backend, the model, and a delay per path.
+``propagation``  the model and a delay claim per path.
 
 They were one cache, which made a question about connectivity unanswerable
-whenever a field solver was missing - precisely backwards, since connectivity
-is the question that never needed the solver.
+whenever propagation data was insufficient - precisely backwards, since
+connectivity is the question that never needed a delay model.
 
 Every threshold, path, endpoint group, model choice and material figure comes
 from the board's manifest. Nothing in this module names a net, a designator, an
@@ -39,9 +39,13 @@ import os
 import re
 
 from ..core import gate
-from .. import electrical_path, geom, propagation, stackup_physical
+from .. import claim, electrical_path, geom, propagation, stackup_physical
+from ..constraints import implementation_constant
 from ..electrical_path import PathError
 from ..stackup_physical import StackupError
+
+MINIMUM_SPREAD_MEMBERS = implementation_constant(
+    2, "a spread requires two distinct members")
 
 # ---------------------------------------------------------------------------
 # layer 1: geometry
@@ -265,17 +269,15 @@ def stackup(ctx):
 # ---------------------------------------------------------------------------
 
 class PropagationAnalysis:
-    """The backend, the model, and one delay record per resolved path.
+    """The model and one delay record per resolved path.
 
     `error` is set instead of raising when the board's declared propagation
-    policy cannot be honoured - an unimplemented model name, a required
-    backend that is not installed. Carrying the failure rather than raising it
-    is what lets the gates that need propagation block while the gate that
-    only needs geometry carries on.
+    policy cannot be honoured. Carrying the failure rather than raising it is
+    what lets the gates that need propagation block while the gate that only
+    needs geometry carries on.
     """
 
-    def __init__(self, backend=None, model=None, delays=None, error=None):
-        self.backend = backend
+    def __init__(self, model=None, delays=None, error=None):
         self.model = model
         self.delays = delays or {}
         self.error = error
@@ -290,22 +292,12 @@ def propagation_analysis(ctx):
         spec = ctx.manifest.get("timing.propagation", {}) or {}
         shape = stackup(ctx)
         paths = geometry(ctx)
-        requested = spec.get("backend", propagation.ANALYTIC)
         try:
-            if requested != propagation.ANALYTIC:
-                # One evaluation exists. A board naming another is refused by
-                # name rather than quietly given this one: a result attributed
-                # to a solver that did not run is worse than no result.
-                raise propagation.PropagationError(
-                    "this release evaluates propagation only with the {!r} "
-                    "backend, and this board selects {!r}".format(
-                        propagation.ANALYTIC, requested))
             model = propagation.PropagationModel(
                 shape.stackup, shape.reference_layers,
                 model=spec.get("model", propagation.HAMMERSTAD),
                 via_model=spec.get("via_delay_model"),
                 declared_layers=spec.get("declared_layers"),
-                backend=requested,
                 discontinuity=spec.get("reference_discontinuity"),
                 unfilled_reference_layers=paths.unfilled_layers)
         except propagation.PropagationError as exc:
@@ -314,7 +306,7 @@ def propagation_analysis(ctx):
         delays = {}
         for _name, record in paths.all_paths():
             delays[paths.key(record)] = model.evaluate(record["resolved"])
-        return PropagationAnalysis(requested, model, delays)
+        return PropagationAnalysis(model, delays)
     return ctx.cache("timing_propagation", build)
 
 
@@ -338,10 +330,9 @@ def path_integrity(ctx, res):
     """Does the board contain the paths the timing policy describes?
 
     Geometry and connectivity only. It reads no material figure, builds no
-    propagation model and asks no backend whether it is installed, so a board
-    with neither stackup data nor a solver still gets a real answer to a real
-    question: does this declared path physically exist, and does it cross what
-    it says it crosses.
+    propagation model, so a board with no usable stackup still gets a real
+    answer to a real question: does this declared path physically exist, and
+    does it cross what it says it crosses.
     """
     state = geometry(ctx)
     problems = list(state.all_problems())
@@ -446,7 +437,7 @@ def path_integrity(ctx, res):
                 "limit_mm": limit.value})
             continue
         offenders = {path: value for path, value in measured.items()
-                     if value > limit.value}
+                     if limit.violated_maximum(value)}
         for path_name, value in sorted(offenders.items()):
             problems.append({
                 "interface": name, "path": path_name,
@@ -599,14 +590,15 @@ def interconnect_delay(ctx, res):
             "so no delay was evaluated: {}".format(state.error))
 
     paths = geometry(ctx)
-    res.measurements["backend"] = state.backend
     rows, problems, unresolved = [], [], []
     limited = 0
-    fidelities = set()
+    evidence_classes = set()
     for name, record in paths.all_paths():
         delay = state.delays[paths.key(record)]
         rows.append(_delay_row(name, delay))
-        fidelities.add(delay["fidelity"])
+        evidence_class = delay["claim"]["evidence"]["evidence_class"]
+        if evidence_class:
+            evidence_classes.add(evidence_class)
         if delay["insufficient"]:
             unresolved.append({"interface": name, "path": delay["path"],
                                "destination": delay["destination"]["pad"],
@@ -615,21 +607,20 @@ def interconnect_delay(ctx, res):
         if limit is None:
             continue
         limited += 1
-        problem = _compare_maximum(delay["delay_ps"], limit.value,
+        problem = _maximum_problem(delay["claim"], limit,
                                    delay["insufficient"],
-                                   lower=delay.get("delay_lower_ps"),
-                                   upper=delay.get("delay_upper_ps"))
+                                   delay["modelled_delay_ps"])
         if problem:
             problems.append({"interface": name, "path": delay["path"],
                              **problem})
     res.measurements["paths"] = rows
-    res.measurements["fidelity"] = sorted(fidelities)
+    res.measurements["evidence_classes"] = sorted(evidence_classes)
     res.measurements["physical_stackup_source"] = state.model.stackup.source
     res.measurements["propagation_model"] = state.model.model
     res.measurements["via_delay_model"] = state.model.via_model
     res.measurements["paths_without_derivable_delay"] = len(unresolved)
-    res.measurements["paths_with_lower_bound_delay"] = sum(
-        1 for r in rows if r["delay_is_lower_bound"])
+    res.measurements["paths_with_bounded_or_incomplete_delay"] = sum(
+        1 for r in rows if r["claim"]["knowledge"] != claim.EXACT)
     for entry in unresolved[:20]:
         res.finding(**entry)
     for problem in problems[:40]:
@@ -646,42 +637,31 @@ def interconnect_delay(ctx, res):
             "measurements are recorded".format(len(rows)))
     return res.passed(
         "all {} path(s) with a declared delay limit are within it, from {} at "
-        "fidelity {}, backend {}".format(
-            limited, state.model.stackup.source, ", ".join(sorted(fidelities)),
-            state.backend))
+        "evidence {}, model {}".format(
+            limited, state.model.stackup.source,
+            ", ".join(sorted(evidence_classes)),
+            state.model.model))
 
 
-def _compare_maximum(value, limit, insufficient, lower=None, upper=None):
-    """Compare a measurement against a maximum, deciding on its interval.
-
-    `value` is the nominal figure and is reported; the decision is made on
-    `[lower, upper]`, the bracket the toolkit can actually stand behind.
-    Three outcomes, decided by the numbers rather than by how confidently
-    anything was described:
-
-      * `lower` exceeds the limit: every point in the interval does, so the
-        violation is proven and it fails;
-      * `upper` exists and is within the limit: every point complies, so the
-        requirement is proven met;
-      * anything else - the limit falls inside the interval, or the interval
-        has no upper end - is undecidable, and an undecided requirement is
-        not a satisfied one.
-
-    The nominal is deliberately never grounds for a FAIL on its own: with an
-    interval in play the nominal exceeding the limit proves nothing, because
-    the truth may sit below it.
-    """
-    if value is None:
+def _maximum_problem(numeric_claim, limit, insufficient, modelled):
+    """Format a maximum-requirement problem from the shared verdict."""
+    linked = claim.with_requirement(
+        numeric_claim,
+        claim.requirement(limit.id, limit.provenance,
+                          {"op": "<=", "value": limit.value}))
+    decision = claim.verdict(linked)
+    if decision["result"] == claim.PASS:
+        return None
+    lower, upper = claim.bounds(linked)
+    if numeric_claim["knowledge"] == claim.UNKNOWN:
         return {"issue": "a limit is declared but the value could not be "
                          "derived; the requirement is unevaluated, not met",
                 "insufficient": list(insufficient)[:3]}
-    lower = value if lower is None else lower
-    if lower > limit:
+    if decision["result"] == claim.FAIL:
         return {"issue": "the measured value exceeds the declared limit over "
                          "the whole of its uncertainty interval",
-                "measured": value, "lower_bound": lower, "limit": limit}
-    if upper is not None and upper <= limit:
-        return None
+                "modelled": modelled, "lower_bound": lower,
+                "limit": limit.value, "verdict": decision}
     if upper is None:
         return {"issue": "the value has no upper bound, because some portion "
                          "contributes an unmodelled amount of unstated size. "
@@ -689,16 +669,18 @@ def _compare_maximum(value, limit, insufficient, lower=None, upper=None):
                          "maximum is met: model the portion, state a bound "
                          "with provenance for what was omitted, or drop the "
                          "limit",
-                "measured": value, "lower_bound": lower, "limit": limit}
+                "modelled": modelled, "lower_bound": lower,
+                "limit": limit.value, "verdict": decision}
     return {"issue": "the limit falls inside the uncertainty interval: the "
                      "requirement is met at the interval's lower end and "
                      "violated at its upper end, so it is undecided rather "
                      "than met",
-            "measured": value, "lower_bound": lower, "upper_bound": upper,
-            "limit": limit}
+            "modelled": modelled, "lower_bound": lower, "upper_bound": upper,
+            "limit": limit.value, "verdict": decision}
 
 
 def _delay_row(interface, delay):
+    lower, upper = claim.bounds(delay["claim"])
     return {
         "interface": interface,
         "path": delay["path"],
@@ -706,14 +688,14 @@ def _delay_row(interface, delay):
         "destination": delay["destination"]["pad"],
         "copper_length_mm": delay["copper_length_mm"],
         "length_by_layer_mm": delay["length_by_layer_mm"],
-        "delay_ps": delay["delay_ps"],
-        "delay_lower_ps": delay.get("delay_lower_ps"),
-        "delay_upper_ps": delay.get("delay_upper_ps"),
+        "modelled_delay_ps": delay["modelled_delay_ps"],
+        "claim": delay["claim"],
+        "delay_lower_ps": lower,
+        "delay_upper_ps": upper,
         "geometric_uncertainty_ps": delay.get("geometric_uncertainty_ps"),
         "length_uncertainty_mm": delay.get("length_uncertainty_mm"),
-        "delay_is_lower_bound": delay.get("delay_is_lower_bound", False),
-        "assumptions": delay.get("assumptions") or [],
-        "fidelity": delay["fidelity"],
+        "assumptions": delay["claim"]["evidence"]["assumptions"],
+        "evidence_class": delay["claim"]["evidence"]["evidence_class"],
         "crosses": [t["reference"] for t in delay["component_traversals"]],
         "component_traversals": delay["component_traversals"],
         "vias": len(delay["vias"]),
@@ -746,7 +728,6 @@ def interconnect_skew(ctx, res):
         return res.errored(
             "this board's declared propagation policy could not be honoured, "
             "so no spread was evaluated: {}".format(state.error))
-    res.measurements["backend"] = state.backend
 
     groups, problems = [], []
     limited = 0
@@ -775,18 +756,9 @@ def interconnect_skew(ctx, res):
                         name, group_name, key), units=units,
                     cid="timing.{}.{}.{}".format(name, group_name, key)))
                 limited += 1
-                # A spread built from lower bounds is not itself a lower
-                # bound - the unknown amounts may differ per path in either
-                # direction - so it cannot be compared at all.
-                if field == "skew_ps":
-                    lower = record["skew_lower_ps"]
-                    upper = record["skew_upper_ps"]
-                else:
-                    lower = record["length_spread_lower_mm"]
-                    upper = record["length_spread_upper_mm"]
-                problem = _compare_maximum(record[field], limit.value,
-                                           record["insufficient"],
-                                           lower=lower, upper=upper)
+                problem = _maximum_problem(
+                    record["claims"][field], limit, record["insufficient"],
+                    record[field])
                 if problem:
                     problems.append({"interface": name, "group": group_name,
                                      "units": units,
@@ -839,7 +811,7 @@ def _spread_upper(los, his):
     against brute-force enumeration over random interval sets.
     """
     n = len(los)
-    if n < 2:
+    if n < MINIMUM_SPREAD_MEMBERS:
         return 0.0
     best = None
     for i in range(n):
@@ -880,8 +852,8 @@ def _group_record(interface, name, group, members, delays, paths):
     """
     endpoints, nominals, lows, highs, insufficient = [], [], [], [], []
     length_lows, length_highs, lengths = [], [], []
-    any_bound = False
     assumptions = 0
+    evidence_assumptions, omitted_contributions = [], []
     for record in members:
         delay = delays.get(paths.key(record))
         resolved = record["resolved"]
@@ -892,23 +864,26 @@ def _group_record(interface, name, group, members, delays, paths):
                  "source": resolved.source.label,
                  "copper_length_mm": length,
                  "length_uncertainty_mm": u_mm,
-                 "delay_ps": None if delay is None else delay["delay_ps"]}
+                 "modelled_delay_ps": (None if delay is None else
+                                        delay["modelled_delay_ps"])}
         if delay is not None:
-            entry["delay_lower_ps"] = delay.get("delay_lower_ps")
-            entry["delay_upper_ps"] = delay.get("delay_upper_ps")
-            entry["delay_is_lower_bound"] = delay.get("delay_is_lower_bound",
-                                                      False)
-            any_bound = any_bound or entry["delay_is_lower_bound"]
-            assumptions += len(delay.get("assumptions") or [])
-            if delay["delay_ps"] is None:
+            entry["claim"] = delay["claim"]
+            lower, upper = claim.bounds(delay["claim"])
+            entry["delay_lower_ps"] = lower
+            entry["delay_upper_ps"] = upper
+            path_evidence = delay["claim"]["evidence"]
+            evidence_assumptions.extend(path_evidence["assumptions"])
+            omitted_contributions.extend(
+                path_evidence["omitted_contributions"])
+            assumptions += len(path_evidence["assumptions"])
+            if delay["modelled_delay_ps"] is None:
                 insufficient.extend(delay["insufficient"][:2])
             else:
-                nominals.append((delay["delay_ps"],
+                nominals.append((delay["modelled_delay_ps"],
                                  resolved.destination.label))
-                lows.append((delay.get("delay_lower_ps",
-                                       delay["delay_ps"]),
+                lows.append((lower,
                              resolved.destination.label))
-                highs.append(delay.get("delay_upper_ps"))
+                highs.append(upper)
         endpoints.append(entry)
         lengths.append((length, resolved.destination.label))
         length_lows.append(length - u_mm)
@@ -936,24 +911,63 @@ def _group_record(interface, name, group, members, delays, paths):
         spread_upper = round(_spread_upper(length_lows, length_highs), 6)
 
     ordered = nominals if have_all else lengths
+    skew_claim = _spread_claim(
+        "{}:{}:skew".format(interface, name), "ps", skew_nominal,
+        skew_lower, skew_upper, insufficient, "derived-path-delay-intervals",
+        "propagation_delay", evidence_assumptions, omitted_contributions)
+    length_claim = _spread_claim(
+        "{}:{}:length-spread".format(interface, name), "mm", spread_nominal,
+        spread_lower, spread_upper, insufficient, "board-geometry",
+        "interconnect_geometry", [], [])
     return {
         "interface": interface, "group": name,
         "description": group.get("description"),
         "members": len(members),
         "endpoints": endpoints,
         "skew_ps": skew_nominal,
-        "skew_lower_ps": skew_lower,
-        "skew_upper_ps": skew_upper,
         "length_spread_mm": spread_nominal,
-        "length_spread_lower_mm": spread_lower,
-        "length_spread_upper_mm": spread_upper,
+        "claims": {"skew_ps": skew_claim,
+                   "length_spread_mm": length_claim},
         "earliest": min(ordered)[1] if ordered else None,
         "latest": max(ordered)[1] if ordered else None,
         "insufficient": insufficient,
-        "any_lower_bound": any_bound,
         "assumptions_relied_on": assumptions,
         "measured_in": "ps" if have_all else "mm",
     }
+
+
+def _spread_claim(identity, units, modelled, lower, upper, insufficient,
+                  evidence_class, phenomenon, assumptions, omissions):
+    if modelled is None or lower is None:
+        return claim.claim(
+            "group", identity, units, claim.UNKNOWN, {},
+            claim.evidence(
+                phenomenon, None,
+                {"source": "pcbqa.gates.g_timing interval arithmetic"},
+                applicability={
+                    "status": claim.UNSUPPORTED,
+                    "detail": "the contributing path claims do not establish "
+                              "this spread"}),
+            "no group-spread conclusion is available")
+    if upper is None:
+        knowledge, quantity = claim.LOWER_BOUND, {"value": lower}
+    elif lower == upper:
+        knowledge, quantity = claim.EXACT, {"value": lower}
+    else:
+        knowledge, quantity = claim.INTERVAL, {
+            "lower": lower, "upper": upper}
+    return claim.claim(
+        "group", identity, units, knowledge, quantity,
+        claim.evidence(
+            phenomenon, evidence_class,
+            {"source": "pcbqa.gates.g_timing interval arithmetic"},
+            assumptions=assumptions,
+            omitted_contributions=([] if knowledge == claim.EXACT else
+                                   omissions)),
+        "arrival spread across the declared endpoint group",
+        knowledge_basis=claim.knowledge_basis(
+            claim.DERIVED,
+            "group bounds are mechanically derived from member intervals"))
 
 
 def _limit_for(ctx, res, interface, key, units):

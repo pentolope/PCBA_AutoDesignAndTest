@@ -9,10 +9,7 @@ framework that can make them.
 
 On Linux one package satisfies both ends of that pairing. `kicad` installs
 `pcbnew.py` into this interpreter's `dist-packages` and `kicad-cli` onto PATH,
-built together, so the interpreter you already have is the supported one. There
-is no separate bundled interpreter to hunt for - and the old heuristic that
-looked for "kicad" in the interpreter's path reported the *working* setup as
-suspicious, which is why it is gone.
+built together, so the system interpreter is the supported one.
 
 Run everything as:
 

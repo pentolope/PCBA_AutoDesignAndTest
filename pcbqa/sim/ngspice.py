@@ -41,7 +41,8 @@ import re
 import subprocess
 import sys
 
-from .fidelity import SimulationError
+from .. import claim as claim_module
+from .model_registry import SimulationError
 from . import scenario as scenario_module
 
 NGSPICE_BINARY = "ngspice"
@@ -300,10 +301,13 @@ def generate_deck(registry, sim_scenario):
             raise SimulationError(
                 "model {!r} carries no spice text; it cannot be "
                 "instantiated by this backend".format(name))
-        lines.append("* model {} coverage={} source={}".format(
-            name, ",".join("{}:{}".format(k, v) for k, v in
-                           sorted(model["coverage"].items())),
-            model["provenance"]["source"]))
+        facts = sorted(model["evidence"], key=lambda fact: fact["phenomenon"])
+        lines.append("* model {} evidence={} source={}".format(
+            name, ",".join("{}:{}".format(
+                fact["phenomenon"], fact["evidence_class"] or
+                fact["applicability"]["status"]) for fact in facts),
+            ",".join(sorted({str(fact["provenance"]["source"])
+                             for fact in facts}))))
         lines.extend(line.rstrip() for line in spice.splitlines())
     for element in sim_scenario["elements"]:
         kind = element["kind"]
@@ -409,7 +413,7 @@ def _read_last_column_value(path):
 
 
 def _assemble_measurements(sim_scenario, value_of):
-    """Measurement records from a value lookup; None value refuses."""
+    """Shared measurement claims from a value lookup; missing values refuse."""
     measurements = {}
     for measurement in sim_scenario["measurements"]:
         value = value_of(measurement)
@@ -419,18 +423,38 @@ def _assemble_measurements(sim_scenario, value_of):
                 "measurement {!r}; a missing result is a failure, "
                 "never a default".format(measurement["name"]))
         assertion = measurement.get("assertion")
-        bound = measurement.get("value_bound")
+        declared = measurement.get("knowledge") or \
+            claim_module.knowledge_declaration(claim_module.EXACT)
+        knowledge = declared["kind"]
+        quantity = ({} if knowledge == claim_module.UNKNOWN else
+                    {"value": value})
+        basis = declared["basis"]
+        assumptions = ([basis["detail"]]
+                       if basis and basis["kind"] == claim_module.ASSUMED
+                       else [])
+        omissions = ([{"detail": basis["detail"]}]
+                     if basis and knowledge in (
+                         claim_module.LOWER_BOUND,
+                         claim_module.UPPER_BOUND,
+                         claim_module.APPROXIMATE) else [])
+        required = (None if assertion is None else claim_module.requirement(
+            "scenario measurement " + measurement["name"],
+            "scenario declaration", assertion))
+        numeric_claim = claim_module.claim(
+            "measurement", measurement["name"], "V", knowledge, quantity,
+            claim_module.evidence(
+                "node_voltage", "circuit-simulation",
+                {"source": "ngspice execution",
+                 "measurement_kind": measurement["kind"],
+                 "node": measurement["node"]},
+                assumptions=assumptions,
+                omitted_contributions=omissions),
+            "node voltage under the scenario's model evidence, conditions "
+            "and declared ideal assumptions",
+            knowledge_basis=basis, requirement=required)
         measurements[measurement["name"]] = {
-            "value": value,
-            "assertion": assertion,
-            "value_bound": bound,
-            "bound_establishment": (
-                None if bound is None
-                else bound["established_by"]),
-            "passed": scenario_module.check_assertion(assertion,
-                                                      value),
-            "verdict": scenario_module.classify_assertion(
-                assertion, value, bound),
+            "claim": numeric_claim,
+            "verdict": claim_module.verdict(numeric_claim),
         }
     return measurements
 
@@ -455,8 +479,8 @@ def run_scenario(registry, sim_scenario, workdir):
                                                     sim_scenario)
     assumptions = scenario_module.assumption_dependencies(
         sim_scenario)
-    _refuse_undeclared_bounds(registry, sim_scenario)
-    _verify_derived_bounds(registry, sim_scenario)
+    _refuse_undeclared_knowledge(registry, sim_scenario)
+    _verify_derived_knowledge(registry, sim_scenario)
     deck = generate_deck(registry, sim_scenario)
     backend = backend_identity()
     result = {
@@ -496,46 +520,47 @@ def run_scenario(registry, sim_scenario, workdir):
     return _attach_result_policy(result, coverage)
 
 
-def _verify_derived_bounds(registry, sim_scenario):
-    """A value_bound claiming 'derived' is a theorem claim: the
+def _verify_derived_knowledge(registry, sim_scenario):
+    """Derived knowledge is a theorem claim: the
     deriver must reproduce it mechanically right now, or the run
     refuses. An unsupported circuit cannot smuggle theorem-level
     provenance through prose - it declares 'assumed' instead."""
     for measurement in sim_scenario["measurements"]:
-        bound = measurement.get("value_bound")
-        if bound is None or bound["established_by"] != "derived":
+        declared = measurement.get("knowledge")
+        if declared is None or declared["basis"] is None or \
+                declared["basis"]["kind"] != claim_module.DERIVED:
             continue
-        derived = scenario_module.derive_value_bound(
+        derived = scenario_module.derive_measurement_knowledge(
             sim_scenario, measurement, registry)
         if derived is None:
             raise SimulationError(
-                "measurement {!r} declares a DERIVED value_bound "
+                "measurement {!r} declares DERIVED knowledge "
                 "but the circuit matches no supported monotonic "
-                "template; declare established_by='assumed' with "
-                "its reason, or restructure the scenario - "
+                "template; declare an assumed knowledge basis or restructure "
+                "the scenario - "
                 "unsupported circuits never receive theorem-level "
                 "provenance".format(measurement["name"]))
-        if derived["direction"] != bound["direction"]:
+        if derived["kind"] != declared["kind"]:
             raise SimulationError(
-                "measurement {!r} declares a DERIVED value_bound "
-                "direction {!r} but the mechanical derivation "
+                "measurement {!r} declares DERIVED knowledge "
+                "kind {!r} but the mechanical derivation "
                 "gives {!r}; a wrong theorem claim refuses rather "
                 "than classifying".format(
-                    measurement["name"], bound["direction"],
-                    derived["direction"]))
+                    measurement["name"], declared["kind"],
+                    derived["kind"]))
 
 
-def _refuse_undeclared_bounds(registry, sim_scenario):
+def _refuse_undeclared_knowledge(registry, sim_scenario):
     """A model that declares its value a BOUND poisons every
-    assertion downstream of it: without a declared value_bound the
+    assertion downstream of it: without declared measurement knowledge the
     verdict would default to the STRONGEST claim (exact). Silence
     therefore refuses before any simulator runs - the scenario
-    author must translate the model's bound into the measurement's
+    author must translate the model's knowledge into the measurement's
     direction, or drop the assertion."""
     for measurement in sim_scenario["measurements"]:
         if measurement.get("assertion") is None:
             continue
-        if measurement.get("value_bound") is not None:
+        if measurement.get("knowledge") is not None:
             continue
         contributors = scenario_module.measurement_contributors(
             sim_scenario, measurement)
@@ -543,21 +568,20 @@ def _refuse_undeclared_bounds(registry, sim_scenario):
             if element.get("kind") != "model_instance":
                 continue
             record = registry.get(element["model"])
-            derivation = record.get("derivation") or {}
-            declared = (derivation.get("path")
-                        or {}).get("resistance_bound") \
-                or derivation.get("resistance_bound")
-            if declared not in (None, "exact"):
+            resistance_claim = (record.get("derivation") or {}).get(
+                "resistance_claim")
+            if resistance_claim is not None and \
+                    resistance_claim["knowledge"] != claim_module.EXACT:
                 raise SimulationError(
                     "measurement {!r} asserts on a value fed by "
                     "model {!r}, whose record declares "
-                    "resistance_bound={!r}; declare the "
-                    "measurement's value_bound (its direction "
+                    "non-exact resistance knowledge {!r}; declare the "
+                    "measurement's knowledge (its direction "
                     "follows from the circuit) or remove the "
                     "assertion - silence never defaults to an "
                     "exact claim".format(
                         measurement["name"], element["model"],
-                        declared))
+                        resistance_claim["knowledge"]))
 
 
 def _attach_result_policy(result, coverage):
@@ -574,21 +598,16 @@ def _attach_result_policy(result, coverage):
     layer.
     """
     ran = result.get("status") == "ran"
-    assertions = None
     claimable = None
     if ran:
-        assertions = all(
-            measurement["passed"] is not False
-            for measurement in result["measurements"].values())
         asserted = [measurement for measurement
                     in result["measurements"].values()
-                    if measurement.get("assertion") is not None]
+                    if measurement["claim"]["requirement"] is not None]
         # A run with NO declared assertions has nothing to claim:
         # None, never a vacuous True - absence of assertions must
         # not read as more confident than an unresolved verdict.
         claimable = None if not asserted else all(
-            measurement.get("verdict") in ("exact-PASS",
-                                           "conservative-PASS")
+            measurement["verdict"]["result"] == claim_module.PASS
             for measurement in asserted)
     fully_covered = result["condition_coverage"]["fully_covered"]
     applicable = None if fully_covered is None else fully_covered
@@ -596,11 +615,12 @@ def _attach_result_policy(result, coverage):
     assumptions_ok = assumptions[
         "all_assumptions_accepted_for_design_decision"]
     result["result_policy"] = {
-        "numerical_assertions_passed": assertions,
         "assertions_claimable": claimable,
         "result_applicable_to_requested_conditions": applicable,
         "assumption_dependent":
             assumptions["assumption_dependent"],
+        "measurement_knowledge_assumptions":
+            assumptions["measurement_knowledge_assumptions"],
         "assumptions_accepted_for_design_decision": assumptions_ok,
         "usable_for_design_decision": bool(
             ran and coverage["satisfied"] is True
@@ -611,17 +631,14 @@ def _attach_result_policy(result, coverage):
                    "a declared and satisfied coverage requirement, "
                    "models representing the requested operating "
                    "conditions, and every contributing ideal "
-                   "primitive declared and accepted as an "
-                   "assumption; a numerical pass never overrides "
+                   "primitive declared and accepted as an assumption, and "
+                   "no measurement relying on an ASSUMED numeric basis; a "
+                   "shared claim verdict never overrides "
                    "any of those. assertions_claimable is the "
                    "actionable assertion truth: True only when "
                    "every declared assertion's VERDICT is a PASS "
                    "class, None when nothing was asserted (absence "
-                   "of assertions is never a claim) - "
-                   "numerical_assertions_passed is the raw numeric "
-                   "fact and must never be acted on alone, because "
-                   "a bounded value can pass numerically while its "
-                   "claim is unresolved",
+                   "of assertions is never a claim)",
     }
     return result
 

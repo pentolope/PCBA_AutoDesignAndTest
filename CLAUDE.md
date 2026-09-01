@@ -73,11 +73,9 @@ work.)
 - **release gates** = engineering proof that the tagged state is acceptable
 
 Git supplies immutable history, branches, diffs, rollback and exact source
-identity. Do not reimplement any of it here. There is no attempt directory, no
-published directory, no release id, no `latest.json`, no sealed or unsealed
-state, and no receipt: those existed to make a filesystem directory behave like
-version control, and version control is what Git is. `tests/test_release_readiness.py`
-fails if any of them comes back.
+identity. Active alternatives belong on branches, history in commits, and
+release identity in tags. The toolkit owns the engineering validity of the
+state a tag names.
 
 What the toolkit owns instead is engineering correctness:
 
@@ -106,23 +104,16 @@ the reason for any change beside the fixture.
 
 ## JLCPCB is the only manufacturer target
 
-Do not build a multi-manufacturer abstraction, provider plug-in layer, or
-additional manufacturer profiles for hypothetical future use. `profiles/jlcpcb/`
-is organisation, not indirection. `pcbqa/fabricators/` holds JLCPCB's sources,
-parsers and catalog: there is no adapter registry, no `FABRICATORS`, and
-nothing takes a `fabricator` argument. The package and one or two of its
-identifiers still read as generic; that is a name, not a seam.
+`profiles/jlcpcb/` holds the one supported manufacturer's sources, parser and
+catalog. Manufacturer-independent physics remains in generic modules such as
+`pcbqa/transmission_line.py` and `pcbqa/overlay_reference.py`.
 
-Manufacturer-independent physics does not live there. Transmission-line closed
-forms are `pcbqa/transmission_line.py` and the covered-microstrip reference
-transcription is `pcbqa/overlay_reference.py`; both are physics that would be
-true of any fabricator's stackup.
-
-The catalog is committed data, not a state machine. `fab refresh` fetches,
-parses and shows a semantic diff into a scratch directory; adopting a change
-means committing the new catalog and its evidence. The commit is the approval
-and `git log` is the promotion record. There is no observed/previous pair, no
-promotion ledger, no verification ledger and no lock file.
+The catalog is committed data. `fab refresh` fetches, parses and shows a
+semantic diff in a scratch directory. Adoption replaces
+`profiles/jlcpcb/catalog` as one exact catalog/evidence set before commit; a
+directory merge is incorrect because it can retain orphan evidence. The loader
+requires every referenced evidence file to exist and hash correctly and refuses
+every unreferenced entry. The commit is the approval and Git is the history.
 
 Every value promoted to a JLCPCB-wide requirement must record: the
 authoritative source, a URL or document identifier, the retrieval or effective
@@ -152,9 +143,6 @@ copies it, because a build stages only the design reached from the declared
 sources and the router is not one of them. Which router drew the copper stays
 provenance, recorded at routing time by `krt.provenance`.
 
-The superseded external autorouter and its Specctra DSN/SES exchange have been
-removed, and neither is to be reintroduced.
-
 Every routing attempt records: source board digest; project and configuration digests;
 KiCad and KiCad-Python versions; the router's package identity, resolved path
 and source digest; the exact plan and its hash; stage net selections; the
@@ -176,7 +164,7 @@ to accept or reject.
   router is not bit-reproducible, compare candidates semantically and record
   the differences.
 
-## One evidence model, partly adopted
+## One evidence model
 
 `pcbqa/claim.py` is the shared shape a producer of a number states its claim
 in: phenomenon, scope, units, how well it is known (exact / lower bound /
@@ -184,24 +172,25 @@ upper bound / interval / approximate / unknown), evidence class, provenance,
 applicability, assumptions, omissions, optional requirement - and the
 conservative verdict rule that decides from it.
 
-**Only `pcbqa/parasitics.py` has been migrated.** `propagation.py`,
-`component_models.py`, `sim/fidelity.py` and `sim/scenario.py` still carry
-their own vocabularies, and `sim/scenario.classify_assertion` is a second
-conservative-verdict machine. Finishing the migration means changing the
-timing and simulation plumbing, and is not done.
+Propagation paths and vias, component traversals, extracted DC resistance,
+geometry-only coupling and simulated measurements produce this shape directly.
+Simulation model records use the same evidence facts through
+`pcbqa/sim/model_registry.py`; scenario measurements declare shared knowledge,
+and ngspice assertions use the shared verdict. A verdict records whether a PASS
+was exact or conservatively derived from a bound, and whether a bound was
+derived or assumed.
 
-Move a producer INTO this model rather than growing another vocabulary beside
-it, and write its adapter as part of migrating it - not before. Do not invent
-a universal quality ladder across unrelated phenomena.
+Evidence classes may remain phenomenon-specific. Propagation has a local
+ordering for propagation-delay evidence; simulation coverage accepts explicit
+sets per phenomenon. There is no quality ranking across unrelated phenomena.
 
-## Do not reserve architecture
+## Constraint policy
 
-An abstraction earns its place when a second implementation exists. Do not add
-dispatch, availability probing or fallback for a solver that is not
-implemented, and do not maintain a list of recognised-but-unimplemented names
-to settle future spelling - an unimplemented name refuses either way. Research
-and roadmap documents are welcome; production machinery pretending an
-implementation exists is not.
+Engineering policy comparisons use typed `Constraint` methods. The selftest
+runs a focused AST audit over gate modules to catch policy-looking numeric
+comparisons that bypass those methods. Intrinsic mathematical and algorithmic
+constants use `implementation_constant(value, rationale)`. This audit is a
+toolkit development check, not a consumer validation gate.
 
 ## Fixtures
 
@@ -233,10 +222,6 @@ No commit, push or tag without explicit authorisation from the user.
   materially different JLCPCB-targeted board works **without modifying toolkit
   production code**.
 - `GenericSourceHygiene` passes with no board name on its allowlist.
-- The working tree names no superseded autorouter. The only permitted mentions
-  of removed tooling are the curation records inside a fixture — `HASHES.json`,
-  `PRE_NORMALIZATION_HASHES.json` and the fixture README — which exist to say
-  what was taken out and why.
 
 ## Headless discipline
 

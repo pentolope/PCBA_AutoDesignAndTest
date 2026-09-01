@@ -23,6 +23,7 @@ import os
 
 from ..core import Status, gate, sha256_file, utcnow
 from .. import canonical, reports
+from ..constraints import implementation_constant
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +153,8 @@ REQUIRED_SEVERITIES = ("error", "warning", "exclusion")
 
 # Documented by KiCad for `--exit-code-violations`: the check ran and found
 # something. Any other nonzero status means the check did not complete.
-VIOLATIONS_EXIT_CODE = 5
+VIOLATIONS_EXIT_CODE = implementation_constant(
+    5, "KiCad CLI's documented exit status for completed checks with findings")
 
 # A waiver names the whole violation, not a corner of it: every affected item
 # and where each one is. Waiving "the clearance error at these two places" is a

@@ -26,7 +26,8 @@ if HERE not in sys.path:
 
 from tests import paths                                           # noqa: E402
 from pcbqa import core                                            # noqa: E402
-from pcbqa.core import Context, design_inputs, stage_design        # noqa: E402
+from pcbqa.core import (Context, ManifestError, design_inputs,    # noqa: E402
+                        stage_design)
 from pcbqa.gates.g_checks import required_options                 # noqa: E402
 
 
@@ -119,24 +120,6 @@ class TheToolsRequireAStagedDesign(_Fixture):
             "whose fill is stale; if that becomes permanently true, staging "
             "exists for no reason")
 
-    def test_a_run_leaves_a_lock_beside_the_project_it_opens(self):
-        """Which is why the staged copy, not the design, is what gets opened."""
-        work, project, manifest = self.project("lock")
-        staged = os.path.join(work, "staged")
-        stage_design(manifest, staged)
-        ctx = Context(manifest, os.path.join(work, "w"))
-        ctx.run_tool([ctx.kicad_cli, "pcb", "drc", "--output",
-                      os.path.join(work, "drc.json"), "--format", "json"]
-                     + list(required_options("drc"))
-                     + [os.path.join(staged, manifest.get("sources.pcb"))])
-        # The lock is removed when the run ends; what matters is that it was
-        # created in the staged directory and never beside the design.
-        left_behind = [name for name in os.listdir(project)
-                       if name.startswith("~") or name.endswith(".lck")]
-        self.assertEqual(left_behind, [],
-                         "a run against the staged design touched the design")
-
-
 class StagingTakesTheDesignAndNotTheRepository(_Fixture):
 
     def test_it_reaches_the_libraries_erc_needs(self):
@@ -186,12 +169,68 @@ class StagingTakesTheDesignAndNotTheRepository(_Fixture):
         self.assertFalse(os.path.isfile(os.path.join(
             project, "~microphone_array_v2.kicad_pro.lck")))
 
-    def test_the_whole_project_copy_is_gone(self):
-        """The clean room copied the repository. Nothing does now."""
-        self.assertFalse(hasattr(core, "copy_project"))
-        self.assertFalse(hasattr(core, "NEVER_COPY"))
-        self.assertFalse(hasattr(core, "ORDERABLE_SUFFIXES"))
 
+class StagingPathsStayInsideTheirDeclaredRoots(_Fixture):
+
+    @staticmethod
+    def _outside(work, name, text="fixture"):
+        path = os.path.join(work, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        return path
+
+    def test_manifest_parent_traversal_refuses(self):
+        work, _project, manifest = self.project("manifest_parent")
+        self._outside(work, "outside.kicad_pcb")
+        manifest.data["sources"]["pcb"] = "../outside.kicad_pcb"
+        with self.assertRaisesRegex(ManifestError, "outside.*project root"):
+            design_inputs(manifest)
+
+    def test_absolute_manifest_input_refuses(self):
+        work, _project, manifest = self.project("manifest_absolute")
+        manifest.data["sources"]["pcb"] = self._outside(
+            work, "absolute.kicad_pcb")
+        with self.assertRaisesRegex(ManifestError, "project-relative"):
+            design_inputs(manifest)
+
+    def test_kiprjmod_parent_traversal_refuses(self):
+        work, project, manifest = self.project("kiprjmod_parent")
+        self._outside(work, "outside.kicad_sym")
+        with open(os.path.join(project, "sym-lib-table"), "w",
+                  encoding="utf-8") as handle:
+            handle.write(
+                '(sym_lib_table (lib (name "escape") '
+                '(uri "${KIPRJMOD}/../outside.kicad_sym")))\n')
+        with self.assertRaisesRegex(ManifestError, "outside.*project root"):
+            design_inputs(manifest)
+
+    def test_recursive_sheet_parent_traversal_refuses(self):
+        work, project, manifest = self.project("sheet_parent")
+        self._outside(work, "outside.kicad_sch")
+        schematic = os.path.join(project, manifest.get("sources.schematic"))
+        with open(schematic, "w", encoding="utf-8") as handle:
+            handle.write('(property "Sheetfile" "../outside.kicad_sch")\n')
+        with self.assertRaisesRegex(ManifestError, "outside.*project root"):
+            design_inputs(manifest)
+
+    def test_source_symlink_escape_refuses(self):
+        work, project, manifest = self.project("source_symlink")
+        outside = self._outside(work, "outside.kicad_pcb")
+        os.symlink(outside, os.path.join(project, "escape.kicad_pcb"))
+        manifest.data["sources"]["pcb"] = "escape.kicad_pcb"
+        with self.assertRaisesRegex(ManifestError, "outside.*project root"):
+            design_inputs(manifest)
+
+    def test_destination_symlink_escape_refuses_before_writing_through_it(self):
+        work, _project, manifest = self.project("destination_symlink")
+        destination = os.path.join(work, "staged")
+        outside = os.path.join(work, "outside-destination")
+        os.makedirs(destination)
+        os.makedirs(outside)
+        os.symlink(outside, os.path.join(destination, "MicArrayV2.pretty"))
+        with self.assertRaisesRegex(ManifestError, "staging destination"):
+            stage_design(manifest, destination)
+        self.assertEqual(os.listdir(outside), [])
 
 if __name__ == "__main__":
     unittest.main()

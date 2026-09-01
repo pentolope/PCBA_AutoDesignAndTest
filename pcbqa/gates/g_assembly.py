@@ -318,11 +318,11 @@ def cpl_parity(ctx, res):
         return res.errored("packaged CPL not found: {}".format(path))
     res.evidence_file(path)
     fields = ctx.manifest.get("artifacts.cpl_fields")
-    tol = res.limit(ctx.manifest.constraint(
+    tolerance = res.limit(ctx.manifest.constraint(
         "artifacts.position_tolerance_mm", units="mm",
-        cid="artifacts.position_tolerance_mm")).value
-    rot_tol = res.limit(ctx.manifest.geometry_profile()
-                        .tolerance("rotation_match_deg")).value
+        cid="artifacts.position_tolerance_mm"))
+    rotation_tolerance = res.limit(ctx.manifest.geometry_profile()
+                                   .tolerance("rotation_match_deg"))
     origin = res.limit(ctx.manifest.constraint(
         "artifacts.cpl_origin", units="frame", cid="artifacts.cpl_origin")).value
     # A packaged rotation is not required to equal the board's. Where the
@@ -389,7 +389,7 @@ def cpl_parity(ctx, res):
                                  "issue": "unparseable {}".format(key)})
                 continue
             delta = abs(got - (want[axis] + shift))
-            if delta > tol:
+            if tolerance.violated_maximum(delta):
                 problems.append({"reference": ref,
                                  "issue": "{} mismatch".format(key),
                                  "board_mm": want[axis], "packaged": got,
@@ -401,7 +401,8 @@ def cpl_parity(ctx, res):
         else:
             offset = offsets.get(lcsc_of.get(ref), 0.0)
             want_rot = (want["rotation_deg"] + offset) % 360.0
-            if abs(((got - want_rot + 180) % 360) - 180) > rot_tol:
+            angular_difference = abs(((got - want_rot + 180) % 360) - 180)
+            if rotation_tolerance.violated_maximum(angular_difference):
                 problems.append({"reference": ref, "issue": "rotation mismatch",
                                  "board_deg": want["rotation_deg"],
                                  "library_zero_offset_deg": offset,

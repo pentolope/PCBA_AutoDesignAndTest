@@ -59,8 +59,9 @@ python3 run.py fab refresh | select | impedance | export-stackup
 
 `fab refresh` is the only command that may touch the network. It writes its
 acquisition into a scratch directory in the committed catalog layout and
-prints the semantic diff; adopting a change is a Git commit, and `git log` is
-the promotion record.
+prints the semantic diff. After review, replace
+`profiles/jlcpcb/catalog` with that scratch catalog as one exact set; do not
+merge evidence directories. The commit is the approval and Git is the history.
 
 `<manifest.json>` is a path. For this repository's own fixtures a bare name also
 works — `portability`, `clean`, or a negative fixture's directory name.
@@ -76,16 +77,16 @@ develop on a branch
         ↓  git tag -a            the release exists
 ```
 
-There is no "published but unsealed release candidate". A branch is the
-work-in-progress mechanism; a tag is the release.
+A branch carries work in progress; a tag over a valid committed state is the
+release.
 
 `build` stages the design — the sources the manifest declares, the library
 tables, and whatever those name inside the project — and runs KiCad against
-that, never against the authoritative files. It has to: every `kicad-cli` run
-drops a lock file beside the project it opens, and `pcb drc --refill-zones
+that, never against the authoritative files. `pcb drc --refill-zones
 --save-board`, which this validator requires because an export ships whatever
-zone fill is stored, rewrites the board. `tests/test_design_staging.py`
-reproduces both. Outputs are installed into the paths the manifest declares,
+zone fill is stored, demonstrably rewrites the board. Every recursively
+discovered project input must resolve inside the declared project root before
+it can be staged. Outputs are installed into the paths the manifest declares,
 all or nothing, together with `fabrication.json`: the digest of every artifact
 and the source closure it came from.
 
@@ -118,6 +119,7 @@ durable is kept there.
 | `pcbqa/canonical.py` | checkout-independent digests, driven by `.gitattributes` |
 | `pcbqa/closure.py` | the source closure: what a result depends on |
 | `pcbqa/claim.py` | one evidence model, and the conservative verdict rule |
+| `pcbqa/sim/model_registry.py` | per-phenomenon simulation model evidence and coverage |
 | `pcbqa/transmission_line.py` | manufacturer-independent closed forms |
 | `pcbqa/build.py` | generating the fabrication outputs and installing them |
 | `pcbqa/artifacts.py` | which committed files are the release artifact set |
@@ -147,6 +149,9 @@ choice) and `via_mask.process.limit_mm` (a substantiated JLCPCB limit) is the
 pattern to follow.
 
 No live network lookup may change a validation or release result.
+The committed `approved.json` and `catalog/evidence/` form an exact inventory:
+every referenced file must exist and hash correctly, and any unreferenced entry
+refuses catalog loading.
 
 ## Onboarding another board
 
@@ -171,9 +176,11 @@ That alone runs the geometry-only gates. Every other gate stays
 never a silent pass, and the gate still appears in the matrix.
 
 Every limit a gate applies is a typed `Constraint` carrying its value, units
-and manifest provenance — `GateResult.limit` refuses anything else, and a
-`Constraint` refuses to exist without units, so a board needs no configuration
-to police that. `tests/test_gate_limits.py` audits it across every gate.
+and manifest provenance. Gates compare through the constraint API; the toolkit
+selftest performs a focused static audit of gate modules for policy-looking
+literal comparisons that bypass it. Numeric constants intrinsic to algorithms
+are marked with a rationale. This is repository-development enforcement, not a
+consumer-board runtime gate.
 
 ## The generic/board split is enforced, not documented
 

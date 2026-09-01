@@ -33,9 +33,15 @@ import json
 import os
 
 from ..core import gate
+from ..constraints import implementation_constant
 from ..orientation import Registry
 
-ANGLE_MATCH_DEG = 1e-3
+ANGLE_MATCH_DEG = implementation_constant(
+    1e-3, "floating-point agreement after CPL angle normalization")
+EVIDENCE_ANGLE_MATCH_DEG = implementation_constant(
+    1.0, "frozen-library image inference resolves offsets to whole degrees")
+ANGLE_GRID_EPSILON = implementation_constant(
+    1e-9, "floating-point remainder tolerance for the 45-degree grid")
 
 #: The derivation script the last CPL.ORIENTATION run actually executed, so
 #: provenance can check the file that ran rather than the import cache.
@@ -141,9 +147,10 @@ def cpl_orientation(ctx, res):
         return res.errored("packaged CPL not found: " + path)
     res.evidence_file(path)
     fields = ctx.manifest.get("artifacts.cpl_fields")
-    low, high = res.limit(ctx.manifest.constraint(
+    normalize_range = res.limit(ctx.manifest.constraint(
         "release_generation.cpl_orientation.normalize_range_deg",
-        units="degrees", cid="cpl_orientation.normalize_range_deg")).value
+        units="degrees", cid="cpl_orientation.normalize_range_deg"))
+    low, high = normalize_range.value
 
     registry = Registry(spec)
     problems = list(registry.defects())
@@ -183,7 +190,8 @@ def cpl_orientation(ctx, res):
                     "margin_deg": evidence["margin_deg"]})
             declared = float(row["offset_deg"])
             got = float(evidence["best_offset_deg"])
-            if abs(((declared - got + 180.0) % 360.0) - 180.0) > 1.0:
+            if abs(((declared - got + 180.0) % 360.0) - 180.0) > \
+                    EVIDENCE_ANGLE_MATCH_DEG:
                 problems.append({
                     "lcsc": lcsc, "issue": "the registry disagrees with the "
                                            "library evidence",
@@ -241,7 +249,7 @@ def cpl_orientation(ctx, res):
         # comparing two angles that should agree; applied to the range it
         # would make 360 a shippable value for a file that says it never
         # writes one, and -0.0001 a shippable negative.
-        if not low <= shipped < high:
+        if not normalize_range.contains(shipped):
             outside.append({"reference": ref, "rotation": shipped,
                             "issue": "rotation is outside [{}, {}); the range "
                                      "is half-open, so {} is not a placement "
@@ -292,7 +300,7 @@ def cpl_orientation(ctx, res):
         if registry.covers(board.get(ref, ("", None))[0])
         and registry.offset(board[ref][0])}
     off_grid = sorted(ref for ref, angle in shipped_angle.items()
-                      if angle % 45.0 > 1e-9)
+                      if angle % 45.0 > ANGLE_GRID_EPSILON)
     res.measurements["fractional_placements"] = len(off_grid)
     res.measurements["fractional_placements_preserved"] = (
         off_grid == sorted(ref for ref, (_n, rot) in board.items()

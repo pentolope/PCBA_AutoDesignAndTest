@@ -1,49 +1,35 @@
-"""Model registry with phenomenon-aware coverage. No universal ladder.
+"""Simulation-model registry using the shared evidence contract.
 
 A model describes SOME phenomena and is silent about the rest, and the
 registry never lets strength in one domain stand in for another: RTL
 says nothing about pin electrical behavior, IBIS says nothing about
 internal logic, a full-wave interconnect extraction says nothing about
 device function, and a DC-resistance extraction is not a transmission
-line. Coverage is therefore a mapping
-
-    phenomenon -> evidence class
-
-and a scenario requirement names, per phenomenon, the SET of evidence
+line. Each model therefore carries shared ``pcbqa.claim`` evidence facts, and
+a scenario requirement names, per phenomenon, the SET of evidence
 classes it accepts. Satisfaction is computed per phenomenon; a model
 with no entry for a phenomenon never satisfies it, whatever else it
 covers. There is deliberately NO ordering across phenomena and no
 default acceptability within one: the requirement spells out what it
 accepts, so acceptability is reviewable instead of implied.
 
-Every model still carries provenance (a source at minimum), because an
-evidence class without an origin is not evidence.
+There is no simulation-local spelling of provenance, applicability,
+assumptions, omissions, unsupported or not-applicable.
 """
 
 from __future__ import annotations
+
+from .. import claim
 
 
 class SimulationError(Exception):
     """The simulation subsystem cannot proceed as asked. Always blocks."""
 
 
-#: The phenomena this subsystem currently distinguishes - the set
-#: needed by ngspice, Verilator, IBIS and extracted interconnect
-#: models. Deliberately small; a new phenomenon is added when a model
-#: class genuinely introduces one.
-PHENOMENA = (
-    "functional_behavior",
-    "device_electrical",
-    "digital_io",
-    "interconnect_dc",
-    "interconnect_si",
-    "power_integrity",
-)
-
-#: Evidence classes a coverage entry may carry. A vocabulary, not a
+#: Evidence classes a simulation model may carry. A vocabulary, not a
 #: ladder: no cross-phenomenon comparison exists, and within one
 #: phenomenon a requirement lists exactly the classes it accepts.
-EVIDENCE_CLASSES = (
+MODEL_EVIDENCE_CLASSES = (
     "measured",
     "vendor-spice",
     "vendor-ibis",
@@ -57,19 +43,9 @@ EVIDENCE_CLASSES = (
     "assumed-behavioral",
 )
 
-#: Phenomenon dispositions a coverage entry may carry INSTEAD of an
-#: evidence class. ``not-applicable`` is an explicit statement that
-#: the phenomenon does not arise for this model (a resistor model has
-#: no functional behavior); ``unsupported`` states the phenomenon IS
-#: applicable but this model carries no evidence for it. Silence -
-#: no entry at all - is neither: contributor-scoped coverage treats
-#: an unaccounted required phenomenon as a refusal, never as
-#: irrelevance.
-DISPOSITIONS = ("not-applicable", "unsupported")
-
-_REQUIRED_MODEL_KEYS = {"identity", "kind", "coverage", "provenance"}
+_REQUIRED_MODEL_KEYS = {"identity", "kind", "evidence"}
 _KNOWN_MODEL_KEYS = _REQUIRED_MODEL_KEYS | {"ports", "spice", "notes",
-                                            "omissions", "conditions",
+                                            "conditions",
                                             "derivation"}
 
 #: Operating conditions the subsystem understands today. Deliberately
@@ -155,25 +131,29 @@ def validate_conditions(conditions):
     return conditions
 
 
-def validate_coverage(coverage):
-    """A coverage mapping: known phenomena, known evidence classes."""
-    if not isinstance(coverage, dict) or not coverage:
-        raise SimulationError(
-            "coverage must be a nonempty dict of "
-            "phenomenon -> evidence class")
-    for phenomenon, evidence in coverage.items():
-        if phenomenon not in PHENOMENA:
+def validate_model_evidence(records):
+    """A nonempty, one-fact-per-phenomenon evidence set."""
+    if not isinstance(records, list) or not records:
+        raise SimulationError("model evidence must be a nonempty list")
+    seen = set()
+    for record in records:
+        try:
+            claim.validate_evidence(record)
+        except claim.ClaimError as exc:
+            raise SimulationError(str(exc)) from exc
+        phenomenon = record["phenomenon"]
+        if phenomenon in seen:
             raise SimulationError(
-                "phenomenon {!r} is not one of {}".format(
-                    phenomenon, list(PHENOMENA)))
-        if evidence not in EVIDENCE_CLASSES \
-                and evidence not in DISPOSITIONS:
+                "model evidence names phenomenon {!r} twice".format(
+                    phenomenon))
+        seen.add(phenomenon)
+        evidence_class = record["evidence_class"]
+        if evidence_class is not None and \
+                evidence_class not in MODEL_EVIDENCE_CLASSES:
             raise SimulationError(
-                "coverage value {!r} is neither an evidence class "
-                "{} nor a disposition {}".format(
-                    evidence, list(EVIDENCE_CLASSES),
-                    list(DISPOSITIONS)))
-    return coverage
+                "model evidence class {!r} is not one of {}".format(
+                    evidence_class, list(MODEL_EVIDENCE_CLASSES)))
+    return records
 
 
 def validate_requirement(requirement):
@@ -183,19 +163,19 @@ def validate_requirement(requirement):
             "required_coverage must be a nonempty dict of "
             "phenomenon -> accepted evidence classes")
     for phenomenon, accepted in requirement.items():
-        if phenomenon not in PHENOMENA:
+        if phenomenon not in claim.PHENOMENA:
             raise SimulationError(
                 "required phenomenon {!r} is not one of {}".format(
-                    phenomenon, list(PHENOMENA)))
+                    phenomenon, list(claim.PHENOMENA)))
         if not isinstance(accepted, list) or not accepted:
             raise SimulationError(
                 "requirement for {!r} must list at least one accepted "
                 "evidence class".format(phenomenon))
         for evidence in accepted:
-            if evidence not in EVIDENCE_CLASSES:
+            if evidence not in MODEL_EVIDENCE_CLASSES:
                 raise SimulationError(
                     "accepted class {!r} is not one of {}".format(
-                        evidence, list(EVIDENCE_CLASSES)))
+                    evidence, list(MODEL_EVIDENCE_CLASSES)))
     return requirement
 
 
@@ -216,22 +196,11 @@ def validate_model(record):
             "model record is missing required key(s) {}".format(missing))
     if not isinstance(record["identity"], str) or not record["identity"]:
         raise SimulationError("model identity must be a nonempty string")
-    validate_coverage(record["coverage"])
-    provenance = record["provenance"]
-    if not isinstance(provenance, dict) or not provenance.get("source"):
-        raise SimulationError(
-            "model {!r} declares no provenance source; a model whose "
-            "origin is unstated is not usable evidence".format(
-                record["identity"]))
+    validate_model_evidence(record["evidence"])
     if "spice" in record and not isinstance(record["spice"], str):
         raise SimulationError(
             "model {!r} spice text must be a string".format(
                 record["identity"]))
-    if "omissions" in record and not isinstance(record["omissions"],
-                                                list):
-        raise SimulationError(
-            "model {!r} omissions must be a list of stated "
-            "gaps".format(record["identity"]))
     if "conditions" in record:
         validate_conditions(record["conditions"])
     if "derivation" in record and \
@@ -285,10 +254,8 @@ class ModelRegistry:
         models = {name: self.get(name) for name in identities}
         summary = {
             name: {"kind": model["kind"],
-                   "coverage": dict(sorted(
-                       model["coverage"].items())),
-                   "provenance": model["provenance"],
-                   "omissions": model.get("omissions", [])}
+                   "evidence": sorted(model["evidence"],
+                                      key=lambda e: e["phenomenon"])}
             for name, model in sorted(models.items())
         }
         report = {"models": summary, "requirement": None,
@@ -299,13 +266,16 @@ class ModelRegistry:
         per_phenomenon = {}
         satisfied = True
         for phenomenon, accepted in sorted(requirement.items()):
+            facts = {name: _evidence_by_phenomenon(model).get(phenomenon)
+                     for name, model in models.items()}
             satisfying = sorted(
-                name for name, model in models.items()
-                if model["coverage"].get(phenomenon) in accepted)
+                name for name, fact in facts.items()
+                if fact is not None
+                and fact["applicability"]["status"] == claim.APPLICABLE
+                and fact["evidence_class"] in accepted)
             covering_unaccepted = sorted(
-                name for name, model in models.items()
-                if phenomenon in model["coverage"]
-                and model["coverage"][phenomenon] not in accepted)
+                name for name, fact in facts.items()
+                if fact is not None and name not in satisfying)
             met = bool(satisfying)
             satisfied = satisfied and met
             per_phenomenon[phenomenon] = {
@@ -318,3 +288,7 @@ class ModelRegistry:
                        "satisfied": satisfied,
                        "per_phenomenon": per_phenomenon})
         return report
+
+
+def _evidence_by_phenomenon(model):
+    return {record["phenomenon"]: record for record in model["evidence"]}

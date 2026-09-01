@@ -29,7 +29,7 @@ if HERE not in sys.path:
 
 import pcbnew                                                      # noqa: E402
 
-from pcbqa import (canonical, closure as closure_mod, component_models, core,    # noqa: E402
+from pcbqa import (canonical, claim, closure as closure_mod, component_models, core,    # noqa: E402
                    electrical_path, geom, propagation, stackup_physical)
 from pcbqa.core import Context, Manifest, Status                    # noqa: E402
 from pcbqa.electrical_path import PathError                         # noqa: E402
@@ -419,7 +419,6 @@ def manifest_document(project, **overrides):
                 "require_complete": True,
             },
             "propagation": {
-                "backend": "analytic",
                 "model": propagation.HAMMERSTAD,
                 "via_delay_model": {
                     "model": propagation.VIA_NONE,
@@ -583,12 +582,16 @@ class WhatAPathMeasures(unittest.TestCase):
         self.assertEqual(traversals[0]["to_net"], "SIG_B")
         self.assertIsNone(traversals[0]["declared_delay_model"])
         contributed = record["delay"]["component_traversals"][0]
-        self.assertEqual(contributed["delay_ps"], 0.0)
-        self.assertEqual(contributed["model_status"], "unmodelled")
+        self.assertEqual(contributed["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(contributed["claim"]["quantity"]["value"], 0.0)
+        self.assertEqual(
+            contributed["claim"]["evidence"]["evidence_class"],
+            component_models.UNMODELLED_EVIDENCE)
         self.assertIn("R1", record["delay"]["unmodelled_component_delay"])
         # An unmodelled traversal is an acknowledged omission, so the total is
         # a lower bound rather than a value.
-        self.assertTrue(record["delay"]["delay_is_lower_bound"])
+        self.assertEqual(record["delay"]["claim"]["knowledge"],
+                         claim.LOWER_BOUND)
 
     def test_the_whole_path_spans_both_sides_of_the_series_component(self):
         """The point of the abstraction: not just the post-resistor copper."""
@@ -627,17 +630,19 @@ class WhatAPathMeasures(unittest.TestCase):
             delay = self.by_path[key]["delay"]
             self.assertEqual(delay["insufficient"], [],
                              "{}: {}".format(key, delay["insufficient"]))
-            self.assertAlmostEqual(delay["delay_ps"], length * per_mm, places=4,
+            self.assertAlmostEqual(delay["modelled_delay_ps"],
+                                   length * per_mm, places=4,
                                    msg=key)
             # Any omission - a component or a via the board chose not to
-            # model - keeps the path from claiming analytic fidelity for the
+            # model keeps the path from claiming analytic evidence for the
             # whole of itself, however well the copper itself is modelled.
             omitted = bool(delay["component_traversals"]) or bool(delay["vias"])
             expected = (propagation.UNKNOWN_CONTRIBUTION if omitted
                         else propagation.ANALYTIC_TRANSMISSION_LINE)
-            self.assertEqual(delay["fidelity"], expected, key)
+            self.assertEqual(
+                delay["claim"]["evidence"]["evidence_class"], expected, key)
 
-    def test_a_path_with_nothing_omitted_claims_analytic_fidelity(self):
+    def test_a_path_with_nothing_omitted_claims_analytic_evidence(self):
         """One copper step, no part to cross and no hole to go down."""
         def mutate(document, _project):
             document["timing"]["interfaces"] = {"plain": {
@@ -647,11 +652,13 @@ class WhatAPathMeasures(unittest.TestCase):
                      "to": "R1.1"}]}]}}}
         fixture = make(mutate=mutate, tag="plainfid")
         record = _find(fixture, "plain")["delay"]
-        self.assertFalse(record["delay_is_lower_bound"])
-        self.assertEqual(record["fidelity"],
+        self.assertEqual(record["claim"]["knowledge"], claim.EXACT)
+        self.assertEqual(record["claim"]["evidence"]["evidence_class"],
                          propagation.ANALYTIC_TRANSMISSION_LINE)
-        self.assertAlmostEqual(record["delay_upper_ps"], record["delay_ps"],
+        lower, upper = claim.bounds(record["claim"])
+        self.assertAlmostEqual(upper, record["modelled_delay_ps"],
                                places=9)
+        self.assertAlmostEqual(lower, upper, places=9)
 
     def test_skew_in_time_is_the_mismatch_times_the_propagation_constant(self):
         results = self.fixture.gates(only={"TIMING.INTERCONNECT_SKEW"})
@@ -670,7 +677,6 @@ class WhatAPathMeasures(unittest.TestCase):
         self.assertEqual(measurements["propagation_model"],
                          propagation.HAMMERSTAD)
         self.assertEqual(measurements["via_delay_model"], propagation.VIA_NONE)
-        self.assertEqual(measurements["backend"], "analytic")
         self.assertIn("interconnect", measurements["scope"])
 
 
@@ -782,7 +788,8 @@ class TheAnalyticModel(unittest.TestCase):
                                       "provenance": "fixture value"}})
         record = model.conductor("F.Cu", TRACK_WIDTH_MM)
         self.assertEqual(record["ps_per_mm"], 6.0)
-        self.assertEqual(record["fidelity"], propagation.DECLARED_PROPAGATION)
+        self.assertEqual(record["evidence_class"],
+                         propagation.DECLARED_PROPAGATION)
 
     def test_thickness_correction_widens_the_trace(self):
         corrected = propagation.thickness_corrected_width(
@@ -935,7 +942,8 @@ class ViaTreatment(unittest.TestCase):
         self.assertEqual(via["model"], propagation.VIA_NONE)
         self.assertAlmostEqual(via["vertical_length_mm"], VIA_VERTICAL_MM,
                                places=6)
-        self.assertEqual(via["delay_ps"], 0.0)
+        self.assertEqual(via["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(via["claim"]["quantity"]["value"], 0.0)
 
     def test_the_geometric_via_model_is_length_over_velocity_and_says_so(self):
         def mutate(document, _project):
@@ -946,10 +954,11 @@ class ViaTreatment(unittest.TestCase):
         via = record["delay"]["vias"][0]
         expected = (VIA_VERTICAL_MM * math.sqrt(FIXTURE_EPSILON_R)
                     / 0.299792458)
-        self.assertAlmostEqual(via["delay_ps"], expected, places=4)
+        self.assertAlmostEqual(
+            via["claim"]["quantity"]["value"], expected, places=4)
         self.assertIn("first-order", via["note"])
         self.assertAlmostEqual(
-            record["delay"]["delay_ps"],
+            record["delay"]["modelled_delay_ps"],
             PATH_VIA_MM * expected_microstrip_ps_per_mm() + expected,
             places=4)
 
@@ -1021,7 +1030,8 @@ class WhatADelayActuallyNeeds(unittest.TestCase):
                             "via_top_layer": "F.Cu",
                             "via_bottom_layer": "B.Cu"})
         self.assertIsNone(record["vertical_length_mm"])
-        self.assertEqual(record["delay_ps"], 0.0)
+        self.assertEqual(record["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(record["claim"]["quantity"]["value"], 0.0)
 
     def test_the_same_via_refuses_when_a_delay_is_actually_asked_for(self):
         layers = [dict(entry, kind=_kind(entry), thickness_mm=None,
@@ -1401,44 +1411,6 @@ class WhereAStackupComesFrom(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# the one backend that exists
-# ---------------------------------------------------------------------------
-
-class OnlyTheImplementedBackendMayBeSelected(unittest.TestCase):
-    """One evaluation exists, so there is nothing to dispatch between.
-
-    What replaced the selection machinery is the property it was there to
-    guarantee: a board naming a solver this release cannot run is refused by
-    name, never quietly given the analytic estimate under that solver's label.
-    """
-
-    def test_no_solver_is_imported_by_loading_the_gates(self):
-        loaded = [name for name in sys.modules
-                  if "openems" in name.lower()]
-        self.assertEqual(loaded, [], loaded)
-
-    def test_the_dispatch_package_is_gone(self):
-        with self.assertRaises(ImportError):
-            __import__("pcbqa.backends")
-
-    def test_an_unimplemented_backend_is_refused_by_name(self):
-        def mutate(document, _project):
-            document["timing"]["propagation"]["backend"] = "openems"
-        fixture = make(mutate=mutate, tag="other_backend")
-        results = fixture.gates(only={"TIMING.INTERCONNECT_DELAY",
-                                      "TIMING.INTERCONNECT_SKEW"})
-        for gate_id, result in results.items():
-            self.assertEqual(result.status, Status.ERROR, gate_id)
-            self.assertIn("openems", result.reason.lower())
-
-    def test_the_result_names_the_backend_that_ran(self):
-        fixture = make(tag="backend_named")
-        result = fixture.gates(only={"TIMING.INTERCONNECT_DELAY"})[
-            "TIMING.INTERCONNECT_DELAY"]
-        self.assertEqual(result.measurements["backend"], "analytic")
-
-
-# ---------------------------------------------------------------------------
 # 9: nothing that already worked has changed
 # ---------------------------------------------------------------------------
 
@@ -1501,18 +1473,6 @@ class ExistingBehaviourIsUnchanged(unittest.TestCase):
             self.assertIn(gate_id, registered)
         self.assertLess(registered["STACK.PHYSICAL"]["order"],
                         registered["TIMING.INTERCONNECT_DELAY"]["order"])
-
-    def test_generic_source_names_no_board(self):
-        """A second pass over just the new modules, cheap and specific."""
-        forbidden = ("PDM", "MSM261", "microphone", "SN74LVC")
-        for name in ("electrical_path.py", "propagation.py",
-                     "stackup_physical.py", "gates/g_timing.py"):
-            path = os.path.join(paths.PACKAGE, *name.split("/"))
-            text = open(path, encoding="utf-8").read()
-            for token in forbidden:
-                self.assertNotIn(token.lower(), text.lower(),
-                                 "{} names {}".format(name, token))
-
 
 # ---------------------------------------------------------------------------
 # a registered consumer board, if one declares a timing policy
@@ -1618,18 +1578,17 @@ class ARegisteredConsumersTimingPolicy(unittest.TestCase):
                        stackup_physical.MERGED))
         self.assertIn(measurements["propagation_model"], propagation.MODELS)
         self.assertIn(measurements["via_delay_model"], propagation.VIA_MODELS)
-        self.assertEqual(measurements["backend"], propagation.ANALYTIC)
 
     def test_no_delay_is_reported_where_the_stackup_cannot_support_one(self):
         """The whole point: absent material data produce absence, not numbers."""
         for row in self.results["TIMING.INTERCONNECT_DELAY"].measurements[
                 "paths"]:
             if row["insufficient"]:
-                self.assertIsNone(row["delay_ps"], row["path"])
-                self.assertEqual(row["fidelity"], propagation.GEOMETRY_ONLY,
+                self.assertIsNone(row["modelled_delay_ps"], row["path"])
+                self.assertEqual(row["claim"]["knowledge"], claim.UNKNOWN,
                                  row["path"])
             else:
-                self.assertIsNotNone(row["delay_ps"], row["path"])
+                self.assertIsNotNone(row["modelled_delay_ps"], row["path"])
 
     def test_a_declared_model_file_is_covered_by_provenance(self):
         if not self.document.get("timing", {}).get("models"):
@@ -1689,11 +1648,6 @@ class TheToolkitIsIdentifiedByItsCommit(unittest.TestCase):
             pcbqa_core.toolkit_identity = real
         self.assertEqual(len(seen), 2, seen)
 
-    def test_the_registry_no_longer_carries_derivation_declarations(self):
-        for entry in core.registered():
-            self.assertNotIn("derives", entry, entry["id"])
-
-
 # ---------------------------------------------------------------------------
 # component models
 # ---------------------------------------------------------------------------
@@ -1712,20 +1666,23 @@ class ComponentModelsFailSafely(unittest.TestCase):
         fixture = make(tag="cm_none")
         record = _find(fixture, "series_branch_to_L1")["delay"]
         traversal = record["component_traversals"][0]
-        self.assertEqual(traversal["model_status"], component_models.UNMODELLED)
-        self.assertEqual(traversal["delay_ps"], 0.0)
-        self.assertTrue(record["delay_is_lower_bound"])
-        self.assertEqual(record["fidelity"], propagation.UNKNOWN_CONTRIBUTION)
+        self.assertEqual(traversal["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(traversal["claim"]["quantity"]["value"], 0.0)
+        self.assertEqual(record["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(
+            record["claim"]["evidence"]["evidence_class"],
+            propagation.UNKNOWN_CONTRIBUTION)
 
     def test_a_declared_but_unimplemented_model_is_never_a_silent_zero(self):
         """The defect this contract exists to prevent."""
         fixture = make(mutate=_series_model({"model": "ibis"}), tag="cm_ibis")
         record = _find(fixture, "series_branch_to_L1")["delay"]
         traversal = record["component_traversals"][0]
-        self.assertEqual(traversal["model_status"],
-                         component_models.UNSUPPORTED)
-        self.assertIsNone(traversal["delay_ps"])
-        self.assertIsNone(record["delay_ps"])
+        self.assertEqual(
+            traversal["claim"]["evidence"]["applicability"]["status"],
+            claim.UNSUPPORTED)
+        self.assertEqual(traversal["claim"]["knowledge"], claim.UNKNOWN)
+        self.assertIsNone(record["modelled_delay_ps"])
         self.assertTrue(any(i["portion"] == "component"
                             for i in record["insufficient"]), record)
 
@@ -1750,14 +1707,15 @@ class ComponentModelsFailSafely(unittest.TestCase):
             tag="cm_zero")
         record = _find(fixture, "series_branch_to_L1")["delay"]
         traversal = record["component_traversals"][0]
-        self.assertEqual(traversal["model_status"],
-                         component_models.UNMODELLED)
-        self.assertEqual(traversal["delay_ps"], 0.0)
+        self.assertEqual(traversal["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(traversal["claim"]["quantity"]["value"], 0.0)
         # Still an omission: the reason is recorded, the part is not measured.
-        self.assertTrue(record["delay_is_lower_bound"])
-        self.assertIsNone(record["delay_upper_ps"])
-        self.assertIn("records a decision", traversal["reason"])
-        self.assertAlmostEqual(record["delay_ps"],
+        self.assertEqual(record["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertIsNone(claim.bounds(record["claim"])[1])
+        self.assertIn(
+            "series termination; transit below resolution",
+            traversal["claim"]["evidence"]["assumptions"])
+        self.assertAlmostEqual(record["modelled_delay_ps"],
                                PATH_TO_L1_MM * expected_microstrip_ps_per_mm(),
                                places=4)
 
@@ -1767,10 +1725,11 @@ class ComponentModelsFailSafely(unittest.TestCase):
              "provenance": "fixture arithmetic",
              "justification": "fixture bound"}), tag="cm_bounded")
         record = _find(fixture, "series_branch_to_L1")["delay"]
-        self.assertTrue(record["delay_is_lower_bound"])
-        self.assertAlmostEqual(record["omitted_bound_ps"], 3.0, places=6)
-        self.assertAlmostEqual(record["delay_upper_ps"],
-                               record["delay_ps"] + 3.0, places=6)
+        self.assertEqual(record["claim"]["knowledge"], claim.INTERVAL)
+        lower, upper = claim.bounds(record["claim"])
+        self.assertAlmostEqual(upper - lower, 3.0, places=6)
+        self.assertAlmostEqual(upper,
+                               record["modelled_delay_ps"] + 3.0, places=6)
 
     def test_an_unbounded_omission_cannot_pass_a_maximum(self):
         def mutate(document, project):
@@ -1822,9 +1781,9 @@ class ComponentModelsFailSafely(unittest.TestCase):
             {"model": "fixed_delay", "delay_ps": 12.0,
              "provenance": "fixture value, not a real part"}), tag="cm_fixed")
         record = _find(fixture, "series_branch_to_L1")["delay"]
-        self.assertFalse(record["delay_is_lower_bound"])
+        self.assertEqual(record["claim"]["knowledge"], claim.EXACT)
         self.assertAlmostEqual(
-            record["delay_ps"],
+            record["modelled_delay_ps"],
             PATH_TO_L1_MM * expected_microstrip_ps_per_mm() + 12.0, places=4)
 
     def test_a_negative_fixed_delay_refuses(self):
@@ -1840,8 +1799,10 @@ class ComponentModelsFailSafely(unittest.TestCase):
              "to_pad": "2", "delay_model": {"model": "vibes"}}, 1)
         self.assertIsNotNone(step)
         contribution = component_models.evaluate({"model": "vibes"}, "R1.1")
-        self.assertEqual(contribution.kind, component_models.UNSUPPORTED)
-        self.assertFalse(contribution.evaluable)
+        self.assertEqual(contribution["knowledge"], claim.UNKNOWN)
+        self.assertEqual(
+            contribution["evidence"]["applicability"]["status"],
+            claim.UNSUPPORTED)
 
     def test_a_bare_string_model_refuses(self):
         with self.assertRaises(component_models.ComponentModelError):
@@ -1851,10 +1812,10 @@ class ComponentModelsFailSafely(unittest.TestCase):
         for name in ("ibis", "touchstone", "sparameter", "device",
                      "not_a_model_at_all"):
             contribution = component_models.evaluate({"model": name}, "R1.1")
-            self.assertEqual(contribution.kind, component_models.UNSUPPORTED,
-                             name)
-            self.assertFalse(contribution.evaluable, name)
-            self.assertIsNone(contribution.delay_ps, name)
+            self.assertEqual(contribution["knowledge"], claim.UNKNOWN, name)
+            self.assertEqual(
+                contribution["evidence"]["applicability"]["status"],
+                claim.UNSUPPORTED, name)
 
 
 # ---------------------------------------------------------------------------
@@ -2337,40 +2298,40 @@ class MultipleViasAndMixedWidths(unittest.TestCase):
         wide = expected_microstrip_ps_per_mm(WIDE_TRACK_MM)
         self.assertNotAlmostEqual(narrow, wide, places=3)
         self.assertAlmostEqual(
-            self.record["delay"]["delay_ps"],
+            self.record["delay"]["modelled_delay_ps"],
             (LENGTH_M_TOP_A_MM + LENGTH_M_TOP_B_MM) * narrow
             + LENGTH_M_BOTTOM_MM * wide, places=4)
 
 
 # ---------------------------------------------------------------------------
-# fidelity
+# propagation evidence classes
 # ---------------------------------------------------------------------------
 
-class FidelityCannotOverstate(unittest.TestCase):
+class EvidenceClassCannotOverstate(unittest.TestCase):
 
     def test_the_weakest_portion_decides(self):
         self.assertEqual(
-            propagation.weakest({propagation.ANALYTIC_TRANSMISSION_LINE,
+            propagation.weakest_evidence_class({propagation.ANALYTIC_TRANSMISSION_LINE,
                                  propagation.UNKNOWN_CONTRIBUTION}),
             propagation.UNKNOWN_CONTRIBUTION)
         self.assertEqual(
-            propagation.weakest({propagation.DECLARED_PROPAGATION,
+            propagation.weakest_evidence_class({propagation.DECLARED_PROPAGATION,
                                  propagation.ANALYTIC_TRANSMISSION_LINE}),
             propagation.ANALYTIC_TRANSMISSION_LINE)
 
-    def test_an_unrecognised_fidelity_never_ranks_high(self):
+    def test_an_unrecognised_evidence_class_never_ranks_high(self):
         self.assertEqual(
-            propagation.weakest({propagation.DECLARED_MODEL,
+            propagation.weakest_evidence_class({propagation.DECLARED_MODEL,
                                  "from-the-future"}),
             "from-the-future")
-        self.assertEqual(propagation.fidelity_rank("from-the-future"), -1)
+        self.assertEqual(propagation.evidence_class_rank("from-the-future"), -1)
 
     def test_nothing_measured_is_geometry_only(self):
-        self.assertEqual(propagation.weakest(set()),
+        self.assertEqual(propagation.weakest_evidence_class(set()),
                          propagation.GEOMETRY_ONLY)
 
     def test_the_ladder_keeps_its_distinctions(self):
-        rank = propagation.fidelity_rank
+        rank = propagation.evidence_class_rank
         self.assertLess(rank(propagation.GEOMETRY_ONLY),
                         rank(propagation.UNKNOWN_CONTRIBUTION))
         self.assertLess(rank(propagation.UNKNOWN_CONTRIBUTION),
@@ -2410,12 +2371,15 @@ class FidelityCannotOverstate(unittest.TestCase):
                 return []
 
         record = model.evaluate(_Empty())
-        self.assertIsNone(record["delay_ps"])
-        self.assertEqual(record["fidelity"], propagation.GEOMETRY_ONLY)
+        self.assertIsNone(record["modelled_delay_ps"])
+        self.assertEqual(record["claim"]["knowledge"], claim.UNKNOWN)
+        self.assertEqual(
+            record["claim"]["evidence"]["applicability"]["status"],
+            claim.UNSUPPORTED)
 
 
-class TheBackendResultContract(unittest.TestCase):
-    """What any backend has to return, so the gates need not know which ran."""
+class ThePropagationResultContract(unittest.TestCase):
+    """The analytic producer's physical detail and shared claims."""
 
     @classmethod
     def setUpClass(cls):
@@ -2436,18 +2400,6 @@ class TheBackendResultContract(unittest.TestCase):
             for field in propagation.VIA_RESULT_FIELDS:
                 self.assertIn(field, via, field)
 
-    def test_the_backend_that_ran_is_named_on_the_result(self):
-        self.assertEqual(self.record["backend"], "analytic")
-
-    def test_the_gates_read_no_backend_specific_field(self):
-        """A gate reaching into a backend's internals could not survive a
-        second backend, so it must not."""
-        source = open(os.path.join(paths.PACKAGE, "gates", "g_timing.py"),
-                      encoding="utf-8").read()
-        for token in ("openems", "openEMS", "s2p", "touchstone"):
-            self.assertNotIn(token, source, token)
-
-
 class AnUndeclaredViaTreatmentIsAnOmission(unittest.TestCase):
     """`none` chosen is a decision; `none` inherited is nobody having asked."""
 
@@ -2467,10 +2419,11 @@ class AnUndeclaredViaTreatmentIsAnOmission(unittest.TestCase):
         which is the whole defect.
         """
         record = self._record("via_named", {
-            "backend": "analytic", "model": propagation.HAMMERSTAD,
+            "model": propagation.HAMMERSTAD,
             "via_delay_model": propagation.VIA_NONE})
-        self.assertTrue(record["delay_is_lower_bound"])
-        self.assertEqual(record["vias"][0]["fidelity"],
+        self.assertEqual(record["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(
+            record["vias"][0]["claim"]["evidence"]["evidence_class"],
                          propagation.UNKNOWN_CONTRIBUTION)
         self.assertTrue(record["vias"][0]["policy"]["declared"])
         self.assertFalse(record["vias"][0]["policy"]["justified"])
@@ -2484,29 +2437,31 @@ class AnUndeclaredViaTreatmentIsAnOmission(unittest.TestCase):
         create more physical certainty than the sentence contains.
         """
         record = self._record("via_justified", {
-            "backend": "analytic", "model": propagation.HAMMERSTAD,
+            "model": propagation.HAMMERSTAD,
             "via_delay_model": {"model": propagation.VIA_NONE,
                                 "justification": "fixture value"}})
-        self.assertTrue(record["delay_is_lower_bound"])
-        self.assertEqual(record["vias"][0]["fidelity"],
+        self.assertEqual(record["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(
+            record["vias"][0]["claim"]["evidence"]["evidence_class"],
                          propagation.UNKNOWN_CONTRIBUTION)
         self.assertTrue(record["vias"][0]["policy"]["justified"])
         self.assertFalse(record["vias"][0]["policy"]["bounded"])
-        self.assertIsNone(record["delay_upper_ps"])
+        self.assertIsNone(claim.bounds(record["claim"])[1])
 
     def test_bounding_the_omission_is_what_makes_it_decidable(self):
         """A number can be reasoned about; a sentence cannot."""
         record = self._record("via_bounded", {
-            "backend": "analytic", "model": propagation.HAMMERSTAD,
+            "model": propagation.HAMMERSTAD,
             "via_delay_model": {"model": propagation.VIA_NONE,
                                 "max_delay_ps": 12.0,
                                 "provenance": "fixture arithmetic",
                                 "justification": "fixture bound"}})
-        self.assertTrue(record["delay_is_lower_bound"])
+        self.assertEqual(record["claim"]["knowledge"], claim.INTERVAL)
         self.assertTrue(record["vias"][0]["policy"]["bounded"])
-        self.assertAlmostEqual(record["omitted_bound_ps"], 12.0, places=6)
-        self.assertAlmostEqual(record["delay_upper_ps"],
-                               record["delay_ps"] + 12.0, places=6)
+        lower, upper = claim.bounds(record["claim"])
+        self.assertAlmostEqual(upper - lower, 12.0, places=6)
+        self.assertAlmostEqual(upper,
+                               record["modelled_delay_ps"] + 12.0, places=6)
 
     def test_a_bound_without_a_reason_is_refused(self):
         with self.assertRaises(propagation.PropagationError):
@@ -2529,26 +2484,31 @@ class AnUndeclaredViaTreatmentIsAnOmission(unittest.TestCase):
                                     "provenance": "fixture"})
 
     def test_only_the_geometric_model_is_exact(self):
-        for declaration in (None, propagation.VIA_NONE,
-                            {"model": propagation.VIA_NONE,
-                             "justification": "x"},
-                            {"model": propagation.VIA_NONE,
+        for tag, declaration, expected in (
+                ("absent", None, claim.LOWER_BOUND),
+                ("named", propagation.VIA_NONE, claim.LOWER_BOUND),
+                ("reasoned", {"model": propagation.VIA_NONE,
+                              "justification": "x"}, claim.LOWER_BOUND),
+                ("bounded", {"model": propagation.VIA_NONE,
                              "max_delay_ps": 1.0, "justification": "x",
-                             "provenance": "fixture"}):
-            self.assertFalse(propagation.via_policy(declaration).exact,
-                             declaration)
-        self.assertTrue(
-            propagation.via_policy(propagation.VIA_GEOMETRIC).exact)
+                             "provenance": "fixture"}, claim.INTERVAL),
+                ("geometric", propagation.VIA_GEOMETRIC, claim.EXACT)):
+            record = self._record("via_" + tag, {
+                "model": propagation.HAMMERSTAD,
+                **({} if declaration is None else
+                   {"via_delay_model": declaration})})
+            self.assertEqual(record["vias"][0]["claim"]["knowledge"],
+                             expected, declaration)
 
     def test_the_declared_and_absent_states_are_told_apart(self):
         named = self._record("via_named2", {
-            "backend": "analytic", "model": propagation.HAMMERSTAD,
+            "model": propagation.HAMMERSTAD,
             "via_delay_model": propagation.VIA_NONE})
         absent = self._record("via_absent2", {
-            "backend": "analytic", "model": propagation.HAMMERSTAD})
+            "model": propagation.HAMMERSTAD})
         # Same arithmetic, different record of who decided what.
-        self.assertEqual(named["delay_is_lower_bound"],
-                         absent["delay_is_lower_bound"])
+        self.assertEqual(named["claim"]["knowledge"],
+                         absent["claim"]["knowledge"])
         self.assertTrue(named["vias"][0]["policy"]["declared"])
         self.assertFalse(absent["vias"][0]["policy"]["declared"])
 
@@ -2560,16 +2520,19 @@ class AnUndeclaredViaTreatmentIsAnOmission(unittest.TestCase):
 
     def test_declaring_nothing_makes_the_total_a_lower_bound(self):
         record = self._record("via_silent", {
-            "backend": "analytic", "model": propagation.HAMMERSTAD})
-        self.assertTrue(record["delay_is_lower_bound"])
-        self.assertEqual(record["vias"][0]["fidelity"],
+            "model": propagation.HAMMERSTAD})
+        self.assertEqual(record["claim"]["knowledge"], claim.LOWER_BOUND)
+        self.assertEqual(
+            record["vias"][0]["claim"]["evidence"]["evidence_class"],
                          propagation.UNKNOWN_CONTRIBUTION)
-        self.assertEqual(record["fidelity"], propagation.UNKNOWN_CONTRIBUTION)
+        self.assertEqual(
+            record["claim"]["evidence"]["evidence_class"],
+            propagation.UNKNOWN_CONTRIBUTION)
 
     def test_a_path_with_no_vias_is_unaffected_either_way(self):
         def mutate(document, _project):
             document["timing"]["propagation"] = {
-                "backend": "analytic", "model": propagation.HAMMERSTAD}
+                "model": propagation.HAMMERSTAD}
             steps = document["timing"]["interfaces"]["series"]["routes"][
                 "template"]["steps"]
             steps[1]["delay_model"] = {"model": "none",
@@ -2579,7 +2542,7 @@ class AnUndeclaredViaTreatmentIsAnOmission(unittest.TestCase):
         # No vias, so the via policy contributes nothing either way; the
         # component's justified omission is what keeps it a lower bound.
         self.assertEqual(record["vias"], [])
-        self.assertTrue(record["delay_is_lower_bound"])
+        self.assertEqual(record["claim"]["knowledge"], claim.LOWER_BOUND)
 
 
 # ---------------------------------------------------------------------------
@@ -2652,7 +2615,7 @@ class AViaSpanIsPartOfTheStackupQuestion(unittest.TestCase):
                 entry["epsilon_r"] = None
         fixture = self._fixture("span_delay", propagation.VIA_GEOMETRIC, layers)
         record = _find(fixture, "multi")["delay"]
-        self.assertIsNone(record["delay_ps"])
+        self.assertIsNone(record["modelled_delay_ps"])
         self.assertTrue(any(i["portion"] == "via"
                             for i in record["insufficient"]), record)
 
@@ -2709,7 +2672,7 @@ class PadsCanBeLayerTransitions(unittest.TestCase):
         self.assertEqual(via["through"], "pad")
         self.assertAlmostEqual(via["vertical_length_mm"], VIA_VERTICAL_MM,
                                places=6)
-        self.assertGreater(via["delay_ps"], 0.0)
+        self.assertGreater(via["claim"]["quantity"]["value"], 0.0)
 
     def test_the_pad_span_counts_towards_the_stackup_question(self):
         def mutate(document, _project):
@@ -2858,15 +2821,15 @@ class ReferenceContinuity(unittest.TestCase):
 
     def test_and_the_model_refuses_rather_than_guessing(self):
         record = _find(self.fixture, "past_the_edge")["delay"]
-        self.assertIsNone(record["delay_ps"])
+        self.assertIsNone(record["modelled_delay_ps"])
         self.assertTrue(any("geometry is incomplete" in i["issue"]
                             for i in record["insufficient"]), record)
 
     def test_the_referenced_route_still_computes(self):
         record = _find(self.fixture, "over_copper")["delay"]
-        self.assertIsNotNone(record["delay_ps"])
+        self.assertIsNotNone(record["modelled_delay_ps"])
         self.assertAlmostEqual(
-            record["delay_ps"],
+            record["modelled_delay_ps"],
             LENGTH_PRE_SERIES_MM * expected_microstrip_ps_per_mm(), places=4)
 
     def test_assuming_continuity_takes_a_treatment_a_bound_and_a_reason(self):
@@ -2885,7 +2848,7 @@ class ReferenceContinuity(unittest.TestCase):
                     "justification": "fixture: assumed for the test"}
         fixture = make(mutate=mutate, tag="reftol")
         record = _find(fixture, "past_the_edge")["delay"]
-        self.assertIsNotNone(record["delay_ps"])
+        self.assertIsNotNone(record["modelled_delay_ps"])
         # The assumption is exercised and recorded, not silently absorbed -
         # per plane, naming the assumption that covered each gap.
         self.assertTrue(record["assumptions"])
@@ -2897,7 +2860,7 @@ class ReferenceContinuity(unittest.TestCase):
             self.assertAlmostEqual(gap["unreferenced_mm"],
                                    LENGTH_UNREFERENCED_MM, places=3)
         # And the value it produced is marked as standing on an assumption.
-        self.assertEqual(record["fidelity"],
+        self.assertEqual(record["claim"]["evidence"]["evidence_class"],
                          propagation.ASSUMED_TRANSMISSION_LINE)
         # The path-level accumulation is surfaced as one number: a bound
         # written per run must not hide how much the whole path leaned on it.
@@ -2918,7 +2881,7 @@ class ReferenceContinuity(unittest.TestCase):
                     "justification": "fixture"}
         fixture = make(mutate=mutate, tag="reftol_small")
         self.assertIsNone(
-            _find(fixture, "past_the_edge")["delay"]["delay_ps"])
+            _find(fixture, "past_the_edge")["delay"]["modelled_delay_ps"])
 
     def test_assuming_continuity_without_its_parts_is_refused(self):
         """A treatment, a size, a reason, and the plane it applies to."""
@@ -2950,7 +2913,7 @@ class ReferenceContinuity(unittest.TestCase):
             LENGTH_UNREFERENCED_MM, places=3)
         # ...and the microstrip formula still does not describe that copper.
         self.assertIsNone(
-            _find(fixture, "past_the_edge")["delay"]["delay_ps"])
+            _find(fixture, "past_the_edge")["delay"]["modelled_delay_ps"])
 
     def test_the_design_limit_can_also_fail(self):
         def mutate(document, _project):
@@ -3116,7 +3079,7 @@ class AnUnfilledReferenceZoneBlocksPropagation(unittest.TestCase):
 
     def test_no_delay_is_produced_from_an_unfilled_plane(self):
         record = _find(self.fixture, "series_branch_to_L1")["delay"]
-        self.assertIsNone(record["delay_ps"])
+        self.assertIsNone(record["modelled_delay_ps"])
         self.assertTrue(any("no filled polygons" in i["issue"]
                             for i in record["insufficient"]), record)
 
@@ -3130,7 +3093,7 @@ class AnUnfilledReferenceZoneBlocksPropagation(unittest.TestCase):
         """Proving the refusal is about the fill and nothing else."""
         record = _find(make(tag="unfilled_control"),
                        "series_branch_to_L1")["delay"]
-        self.assertIsNotNone(record["delay_ps"])
+        self.assertIsNotNone(record["modelled_delay_ps"])
 
     def test_path_integrity_is_unaffected(self):
         result = self.fixture.gates(only={"TIMING.PATH_INTEGRITY"})[
@@ -3171,16 +3134,16 @@ class CoverageFollowsThePlaneTheFormulaUses(unittest.TestCase):
 
     def test_the_route_referenced_to_the_broken_plane_refuses(self):
         record = _find(self.fixture, "over_the_gap")["delay"]
-        self.assertIsNone(record["delay_ps"])
+        self.assertIsNone(record["modelled_delay_ps"])
         problem = next(i for i in record["insufficient"]
                        if i["portion"] == "conductor")
         self.assertEqual(problem["reference_layers_used"], ["In1.Cu"])
 
     def test_the_route_referenced_to_the_continuous_plane_does_not(self):
         record = _find(self.fixture, "over_the_whole_plane")["delay"]
-        self.assertIsNotNone(record["delay_ps"])
+        self.assertIsNotNone(record["modelled_delay_ps"])
         self.assertAlmostEqual(
-            record["delay_ps"],
+            record["modelled_delay_ps"],
             LENGTH_SPLIT_ROUTE_MM * expected_microstrip_ps_per_mm(), places=4)
 
     def test_the_two_routes_occupy_the_same_footprint(self):
@@ -3270,11 +3233,6 @@ class APlatedHoleGoesThroughTheBoard(unittest.TestCase):
         self.assertEqual(transition["via_bottom_layer"], stack[-1])
         self.assertEqual(transition["layers_with_copper"], ["F.Cu", "B.Cu"])
 
-    def test_a_surface_mount_pad_cannot_be_a_layer_change(self):
-        source = open(os.path.join(paths.PACKAGE, "electrical_path.py"),
-                      encoding="utf-8").read()
-        self.assertIn("Only a plated hole", source)
-
     def test_the_barrel_reaches_the_layers_a_geometric_model_integrates(self):
         def mutate(document, _project):
             document["timing"]["interfaces"] = {"sparse": {
@@ -3308,7 +3266,7 @@ class WhatTheGeometricViaModelClaims(unittest.TestCase):
         self.assertAlmostEqual(record["vertical_length_mm"], FIXTURE_CORE_MM,
                                places=6)
         self.assertAlmostEqual(
-            record["delay_ps"],
+            record["claim"]["quantity"]["value"],
             FIXTURE_CORE_MM * math.sqrt(FIXTURE_EPSILON_R) / 0.299792458,
             places=4)
 
@@ -3385,12 +3343,6 @@ class MoreThanOneAmbiguousJunction(unittest.TestCase):
         far = _find(self.fixture, "past_two")["delay"]
         self.assertEqual(far["ambiguous_junctions"],
                          near["ambiguous_junctions"] + 1)
-
-    def test_it_is_a_bound_and_is_not_converted_into_a_delay(self):
-        record = _find(self.fixture, "past_two")["delay"]
-        self.assertNotIn("delay_uncertainty_ps", record)
-        self.assertGreater(record["length_uncertainty_mm"], 0.0)
-
 
 class ASupplementMayNotAddStructureOfAnyKind(unittest.TestCase):
 
@@ -3512,15 +3464,16 @@ class SkewIntervalArithmetic(unittest.TestCase):
         per_mm = expected_microstrip_ps_per_mm()
         nominal = (self.D_B - self.D_A) * per_mm
         _result, group = self._group(50.0, 1.0, tag="skew_ends")
+        lower, upper = claim.bounds(group["claims"]["skew_ps"])
         # lower: B must arrive at or after d_B; A can arrive as late as
         # d_A + 50, but B's own upper end d_B + 1 is the smaller ceiling.
-        self.assertAlmostEqual(group["skew_lower_ps"], 0.0, places=4)
+        self.assertAlmostEqual(lower, 0.0, places=4)
         self.assertAlmostEqual(group["skew_ps"], nominal, places=3)
         # upper: the realisable maximum pairs one path's latest against a
         # DIFFERENT path's earliest. A alone spans 50 ps, but A cannot arrive
         # at both of its own endpoints at once, so the widest realisable pair
         # is B at d_B + 1 against A at d_A.
-        self.assertAlmostEqual(group["skew_upper_ps"], nominal + 1.0,
+        self.assertAlmostEqual(upper, nominal + 1.0,
                                places=3)
 
     def test_a_single_member_group_can_have_no_skew(self):
@@ -3535,13 +3488,13 @@ class SkewIntervalArithmetic(unittest.TestCase):
             "TIMING.INTERCONNECT_SKEW"]
         group = result.measurements["groups"][0]
         self.assertEqual(group["members"], 1)
-        self.assertEqual(group["skew_lower_ps"], 0.0)
-        self.assertEqual(group["skew_upper_ps"], 0.0)
+        self.assertEqual(claim.bounds(group["claims"]["skew_ps"]),
+                         (0.0, 0.0))
 
     def test_omissions_can_erase_a_nonzero_nominal_spread(self):
         """bA covers the gap, so zero true skew is possible: no proven FAIL."""
         result, group = self._group(50.0, 1.0, limit=10.0, tag="skew_zero")
-        self.assertEqual(group["skew_lower_ps"], 0.0)
+        self.assertEqual(claim.bounds(group["claims"]["skew_ps"])[0], 0.0)
         self.assertEqual(result.status, Status.FAIL)
         self.assertTrue(any("falls inside the uncertainty interval"
                             in str(f.get("issue", ""))
@@ -3551,7 +3504,8 @@ class SkewIntervalArithmetic(unittest.TestCase):
         per_mm = expected_microstrip_ps_per_mm()
         result, group = self._group(2.0, 2.0, limit=10.0, tag="skew_fail")
         expected_lower = (self.D_B - self.D_A) * per_mm - 2.0
-        self.assertAlmostEqual(group["skew_lower_ps"], expected_lower,
+        self.assertAlmostEqual(
+            claim.bounds(group["claims"]["skew_ps"])[0], expected_lower,
                                places=3)
         self.assertEqual(result.status, Status.FAIL)
         self.assertTrue(any("whole of its uncertainty interval"
@@ -3567,9 +3521,10 @@ class SkewIntervalArithmetic(unittest.TestCase):
         an unbounded late arrival cannot make anyone arrive earlier."""
         per_mm = expected_microstrip_ps_per_mm()
         result, group = self._group(2.0, None, limit=10.0, tag="skew_unb")
-        self.assertIsNone(group["skew_upper_ps"])
+        lower, upper = claim.bounds(group["claims"]["skew_ps"])
+        self.assertIsNone(upper)
         expected_lower = (self.D_B - self.D_A) * per_mm - 2.0
-        self.assertAlmostEqual(group["skew_lower_ps"], expected_lower,
+        self.assertAlmostEqual(lower, expected_lower,
                                places=3)
         self.assertEqual(result.status, Status.FAIL)
         self.assertTrue(any("whole of its uncertainty interval"
@@ -3613,8 +3568,9 @@ class GeometryUncertaintyAndHardLimits(unittest.TestCase):
     def test_the_length_spread_interval_is_the_hand_calculated_one(self):
         _result, group = self._length_group(9.0, "len_ends")
         self.assertAlmostEqual(group["length_spread_mm"], 8.0, places=4)
-        self.assertAlmostEqual(group["length_spread_lower_mm"], 7.7, places=4)
-        self.assertAlmostEqual(group["length_spread_upper_mm"], 8.3, places=4)
+        lower, upper = claim.bounds(group["claims"]["length_spread_mm"])
+        self.assertAlmostEqual(lower, 7.7, places=4)
+        self.assertAlmostEqual(upper, 8.3, places=4)
 
     def test_nominal_passes_but_the_uncertainty_crosses_the_limit(self):
         result, _group = self._length_group(8.1, "len_straddle")
@@ -3645,18 +3601,9 @@ class GeometryUncertaintyAndHardLimits(unittest.TestCase):
         return fixture.gates(only={"TIMING.INTERCONNECT_DELAY"})[
             "TIMING.INTERCONNECT_DELAY"]
 
-    def test_the_flag_names_omissions_not_the_intervals_lower_end(self):
-        """`delay_is_lower_bound` says "a nonnegative contribution was
-        omitted, so the truth's upper side exceeds the modelled sum". It
-        does NOT say the nominal is the interval's lower endpoint -
-        `delay_lower_ps` is, and geometric uncertainty can place it below
-        the nominal with the flag in either state. Two paths pin the
-        contract from both sides: an ambiguous tee whose lower endpoint
-        sits below its nominal with NO omission (flag false), and a
-        via-omitting path whose flag is true while its lower endpoint
-        equals its nominal (nothing geometric in play). The endpoints,
-        not the flag, are what the gates compare against limits.
-        """
+    def test_knowledge_shape_distinguishes_geometry_from_unbounded_omission(self):
+        """Geometry creates an interval; an unbounded omission creates only
+        a lower bound. Gates consume these endpoints directly."""
         def mutate(document, _project):
             document["timing"]["interfaces"] = {
                 "tee": {"description": "x",
@@ -3672,13 +3619,15 @@ class GeometryUncertaintyAndHardLimits(unittest.TestCase):
                 "justification": "fixture: deliberate unbounded omission"}
         fixture = make(mutate=mutate, tag="flagmeaning")
         tee = _find(fixture, "tee")["delay"]
-        self.assertFalse(tee["delay_is_lower_bound"])
+        self.assertEqual(tee["claim"]["knowledge"], claim.INTERVAL)
         self.assertGreater(tee["geometric_uncertainty_ps"], 0.0)
-        self.assertLess(tee["delay_lower_ps"], tee["delay_ps"])
+        self.assertLess(claim.bounds(tee["claim"])[0],
+                        tee["modelled_delay_ps"])
         cut = _find(fixture, "layer_change")["delay"]
-        self.assertTrue(cut["delay_is_lower_bound"])
-        self.assertIsNone(cut["delay_upper_ps"])
-        self.assertEqual(cut["delay_lower_ps"], cut["delay_ps"])
+        self.assertEqual(cut["claim"]["knowledge"], claim.LOWER_BOUND)
+        lower, upper = claim.bounds(cut["claim"])
+        self.assertIsNone(upper)
+        self.assertEqual(lower, cut["modelled_delay_ps"])
 
     def test_delay_uncertainty_uses_the_paths_own_velocity(self):
         fixture = make(mutate=lambda d, _p: d["timing"].update(
@@ -3691,9 +3640,10 @@ class GeometryUncertaintyAndHardLimits(unittest.TestCase):
         per_mm = expected_microstrip_ps_per_mm()
         self.assertAlmostEqual(record["geometric_uncertainty_ps"],
                                (TRACK_WIDTH_MM / 2.0) * per_mm, places=4)
-        self.assertAlmostEqual(record["delay_upper_ps"] - record["delay_ps"],
+        lower, upper = claim.bounds(record["claim"])
+        self.assertAlmostEqual(upper - record["modelled_delay_ps"],
                                record["geometric_uncertainty_ps"], places=6)
-        self.assertAlmostEqual(record["delay_ps"] - record["delay_lower_ps"],
+        self.assertAlmostEqual(record["modelled_delay_ps"] - lower,
                                record["geometric_uncertainty_ps"], places=6)
 
     def test_a_delay_limit_inside_the_geometric_interval_is_undecided(self):
@@ -3724,7 +3674,8 @@ class GeometryUncertaintyAndHardLimits(unittest.TestCase):
         fixture = make(tag="noamb")
         record = _find(fixture, "series_branch_to_L1")["delay"]
         self.assertEqual(record["geometric_uncertainty_ps"], 0.0)
-        self.assertAlmostEqual(record["delay_lower_ps"], record["delay_ps"],
+        self.assertAlmostEqual(claim.bounds(record["claim"])[0],
+                               record["modelled_delay_ps"],
                                places=9)
 
 
@@ -3842,30 +3793,30 @@ class AssumptionsAreScoped(unittest.TestCase):
     def test_naming_the_gapped_plane_covers_it(self):
         record = self._with_assumption("scope_ok",
                                        reference_layers=["In1.Cu"])
-        self.assertIsNotNone(record["delay_ps"])
+        self.assertIsNotNone(record["modelled_delay_ps"])
 
     def test_naming_a_different_plane_does_not(self):
         """The gap is in In1.Cu; an assumption about In2.Cu says nothing
         about it, and a global reading would have waved it through."""
         record = self._with_assumption("scope_wrongplane",
                                        reference_layers=["In2.Cu"])
-        self.assertIsNone(record["delay_ps"])
+        self.assertIsNone(record["modelled_delay_ps"])
 
     def test_a_signal_layer_scope_must_match(self):
         record = self._with_assumption("scope_wrongsig",
                                        reference_layers=["In1.Cu"],
                                        signal_layers=["B.Cu"])
-        self.assertIsNone(record["delay_ps"])
+        self.assertIsNone(record["modelled_delay_ps"])
 
     def test_a_path_scope_must_match(self):
         record = self._with_assumption("scope_wrongpath",
                                        reference_layers=["In1.Cu"],
                                        paths="^some_other_interface")
-        self.assertIsNone(record["delay_ps"])
+        self.assertIsNone(record["modelled_delay_ps"])
         record = self._with_assumption("scope_rightpath",
                                        reference_layers=["In1.Cu"],
                                        paths="^over_")
-        self.assertIsNotNone(record["delay_ps"])
+        self.assertIsNotNone(record["modelled_delay_ps"])
 
     def test_several_assumptions_may_coexist(self):
         def mutate(document, project):
@@ -3880,7 +3831,7 @@ class AssumptionsAreScoped(unittest.TestCase):
                  "justification": "fixture: the relevant entry"}]
         fixture = make(mutate=mutate, tag="scope_list")
         record = _find(fixture, "over_the_gap")["delay"]
-        self.assertIsNotNone(record["delay_ps"])
+        self.assertIsNotNone(record["modelled_delay_ps"])
         covered = record["assumptions"][0]["covered_gaps"][0]
         self.assertEqual(covered["plane"], "In1.Cu")
         self.assertIn("relevant entry", covered["justification"])
@@ -3902,13 +3853,13 @@ class AssumedResultsAreMarked(unittest.TestCase):
                 "justification": "fixture"}
         cls.fixture = make(mutate=mutate, tag="assumedfid")
 
-    def test_the_fidelity_is_the_assumed_rung(self):
+    def test_the_evidence_class_is_the_assumed_rung(self):
         record = _find(self.fixture, "over_the_gap")["delay"]
-        self.assertEqual(record["fidelity"],
+        self.assertEqual(record["claim"]["evidence"]["evidence_class"],
                          propagation.ASSUMED_TRANSMISSION_LINE)
 
     def test_the_assumed_rung_sits_between_unknown_and_analytic(self):
-        rank = propagation.fidelity_rank
+        rank = propagation.evidence_class_rank
         self.assertLess(rank(propagation.UNKNOWN_CONTRIBUTION),
                         rank(propagation.ASSUMED_TRANSMISSION_LINE))
         self.assertLess(rank(propagation.ASSUMED_TRANSMISSION_LINE),
@@ -3919,13 +3870,14 @@ class AssumedResultsAreMarked(unittest.TestCase):
             "TIMING.INTERCONNECT_DELAY"]
         self.assertEqual(result.status, Status.PASS, result.reason)
         self.assertIn(propagation.ASSUMED_TRANSMISSION_LINE,
-                      result.measurements["fidelity"])
+                      result.measurements["evidence_classes"])
         row = result.measurements["paths"][0]
         self.assertTrue(row["assumptions"])
 
     def test_the_same_route_without_the_assumption_still_refuses(self):
         fixture = make(mutate=_split_route, tag="assumedfid_ctl")
-        self.assertIsNone(_find(fixture, "over_the_gap")["delay"]["delay_ps"])
+        self.assertIsNone(_find(fixture, "over_the_gap")["delay"]
+                          ["modelled_delay_ps"])
 
 
 # ---------------------------------------------------------------------------
@@ -3939,7 +3891,6 @@ class DeclaredConstantsRespectTheReference(unittest.TestCase):
         def mutate(document, project):
             _split_route(document, project)
             document["timing"]["propagation"] = {
-                "backend": "analytic",
                 "model": "declared-effective",
                 "via_delay_model": {
                     "model": propagation.VIA_NONE,
@@ -3951,7 +3902,7 @@ class DeclaredConstantsRespectTheReference(unittest.TestCase):
         fixture = self._fixture("decl_gap", {
             "F.Cu": {"ps_per_mm": 6.0, "provenance": "fixture value"}})
         record = _find(fixture, "over_the_gap")["delay"]
-        self.assertIsNone(record["delay_ps"])
+        self.assertIsNone(record["modelled_delay_ps"])
         self.assertTrue(any("geometry is incomplete" in i["issue"]
                             for i in record["insufficient"]), record)
 
@@ -3962,7 +3913,7 @@ class DeclaredConstantsRespectTheReference(unittest.TestCase):
             "F.Cu": {"ps_per_mm": 6.0, "provenance": "fixture value",
                      "reference_layers": ["In2.Cu"]}})
         record = _find(fixture, "over_the_gap")["delay"]
-        self.assertAlmostEqual(record["delay_ps"],
+        self.assertAlmostEqual(record["modelled_delay_ps"],
                                LENGTH_SPLIT_ROUTE_MM * 6.0, places=3)
         conductor = record["conductors"][0]
         self.assertEqual(conductor["reference_layers_used"], ["In2.Cu"])

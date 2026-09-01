@@ -39,9 +39,9 @@ PYTHON = sys.executable
 #: Serial runs get the same output isolation the parallel runner gives its
 #: workers. Without it, `run.py` roots a temporary manifest's output beside
 #: that manifest's project - which for these tests is the FROZEN Rev A
-#: fixture, so the run's own attempt directory appears inside the tree
+#: fixture, so the run's own output directory appears inside the tree
 #: PROV.FIXTURE_INTEGRITY holds to an exact inventory, and release tests
-#: judge attempts accumulated by every earlier invocation on the machine.
+#: judge outputs accumulated by every earlier invocation on the machine.
 #: The env var is inherited by the subprocesses these tests spawn.
 _OUTPUT_ISOLATION = {"owned": None, "saved": None}
 

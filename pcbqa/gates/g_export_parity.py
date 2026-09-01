@@ -119,16 +119,19 @@ def _classify(annulus, centre, openings, target, process, contact_tol, tie_tol):
                                      round(poly.centroid.y, 4)),
                 "annulus_to_opening_mm": round(d_ann, 4),
                 "centre_inside_opening": bool(inside),
-                "contacts": bool(d_ann <= contact_tol),
+                "contacts": bool(not contact_tol.violated_maximum(d_ann)),
                 "overlaps": bool(annulus.intersection(poly).area > 0.0),
             }
     if best is None:
         return None
     floor = min(d for d, _p in distances)
     best["tie_centroids"] = [(round(p.centroid.x, 4), round(p.centroid.y, 4))
-                             for d, p in distances if d <= floor + tie_tol]
-    best["below_target"] = best["annulus_to_opening_mm"] < target
-    best["below_process"] = best["annulus_to_opening_mm"] < process
+                             for d, p in distances
+                             if tie_tol.within(d, floor)]
+    best["below_target"] = target.violated_minimum(
+        best["annulus_to_opening_mm"])
+    best["below_process"] = process.violated_minimum(
+        best["annulus_to_opening_mm"])
     return best
 
 
@@ -145,16 +148,16 @@ def via_export_parity(ctx, res):
     profile = ctx.manifest.geometry_profile()
     geom.configure(res.limit(
         profile.tolerance("polygon_chord_error_mm")).value)
-    coord_tol = res.limit(profile.tolerance("coordinate_match_mm")).value
-    dim_tol = res.limit(profile.tolerance("dimension_match_mm")).value
-    dist_tol = res.limit(profile.tolerance("clearance_match_mm")).value
-    contact_tol = res.limit(profile.tolerance("contact_mm")).value
+    coord_tol = res.limit(profile.tolerance("coordinate_match_mm"))
+    dim_tol = res.limit(profile.tolerance("dimension_match_mm"))
+    dist_tol = res.limit(profile.tolerance("clearance_match_mm"))
+    contact_tol = res.limit(profile.tolerance("contact_mm"))
     target = res.limit(ctx.manifest.constraint(
         "via_mask.design_target_mm", units="mm",
-        cid="via_mask.design_target_mm")).value
+        cid="via_mask.design_target_mm"))
     process = res.limit(ctx.manifest.constraint(
         "via_mask.process.limit_mm", units="mm",
-        cid="via_mask.process.limit_mm")).value
+        cid="via_mask.process.limit_mm"))
 
     _geom, native_rows = _via_survey(ctx)
     _layers, drills, by_function = _find_layers(directory, ctx.manifest)
@@ -182,12 +185,13 @@ def via_export_parity(ctx, res):
         label = f"via[{row['net']}]@{row['x_mm']},{row['y_mm']}"
 
         hits = [h for h in plated
-                if abs(h[0] - gx) <= coord_tol and abs(h[1] - gy) <= coord_tol]
+                if coord_tol.within(h[0], gx) and coord_tol.within(h[1], gy)]
         if not hits:
             problems.append({"via": label,
                              "issue": "no plated drill hit at this coordinate"})
             continue
-        if all(abs(h[2] - row["drill_mm"]) > dim_tol for h in hits):
+        if all(dim_tol.differs_by_more_than(h[2], row["drill_mm"])
+               for h in hits):
             problems.append({"via": label, "issue": "drill diameter disagrees",
                              "native_mm": row["drill_mm"],
                              "export_mm": round(hits[0][2], 4)})
@@ -197,8 +201,9 @@ def via_export_parity(ctx, res):
         bad_annulus = False
         for side, data in sides.items():
             circles = [c for c in data["copper_circles"]
-                       if abs(c[0] - gx) <= coord_tol and abs(c[1] - gy) <= coord_tol
-                       and abs(c[2] - row["pad_mm"]) <= dim_tol]
+                       if coord_tol.within(c[0], gx)
+                       and coord_tol.within(c[1], gy)
+                       and dim_tol.within(c[2], row["pad_mm"])]
             if not circles:
                 problems.append({"via": label, "side": side,
                                  "issue": "no matching annulus in the exported copper",
@@ -226,11 +231,14 @@ def via_export_parity(ctx, res):
                 "centre_inside_opening": native["centre_inside_opening"],
                 "contacts": native["annulus_contacts_opening"],
                 "overlaps": native["annulus_overlaps_opening"],
-                "below_target": native["annulus_to_opening_mm"] < target,
-                "below_process": native["annulus_to_opening_mm"] < process,
+                "below_target": target.violated_minimum(
+                    native["annulus_to_opening_mm"]),
+                "below_process": process.violated_minimum(
+                    native["annulus_to_opening_mm"]),
             }
-            if abs(export["annulus_to_opening_mm"]
-                   - native_class["annulus_to_opening_mm"]) > dist_tol:
+            if dist_tol.differs_by_more_than(
+                    export["annulus_to_opening_mm"],
+                    native_class["annulus_to_opening_mm"]):
                 problems.append({
                     "via": label, "side": side, "issue": "signed clearance disagrees",
                     "native_mm": native_class["annulus_to_opening_mm"],
@@ -250,8 +258,8 @@ def via_export_parity(ctx, res):
             if native_poly is not None:
                 want = _to_gerber(native_poly.centroid.x, native_poly.centroid.y)
                 got = export["opening_centroid"]
-                tied = any(abs(want[0] - c[0]) <= coord_tol
-                           and abs(want[1] - c[1]) <= coord_tol
+                tied = any(coord_tol.within(want[0], c[0])
+                           and coord_tol.within(want[1], c[1])
                            for c in export["tie_centroids"])
                 if not tied:
                     problems.append({
@@ -313,17 +321,16 @@ def stack_gerber_parity(ctx, res):
     flags = res.limit(ctx.manifest.constraint(
         "artifacts.gerber_export_flags", units="cli option",
         cid="artifacts.gerber_export_flags")).value
-    tol = res.limit(ctx.manifest.geometry_profile()
-                    .tolerance("layer_symmetric_difference_mm2")).value
+    tolerance = res.limit(ctx.manifest.geometry_profile()
+                          .tolerance("layer_symmetric_difference_mm2"))
 
     fresh_dir = os.path.join(ctx.workdir, "fresh_gerbers")
     if os.path.isdir(fresh_dir):
         shutil.rmtree(fresh_dir)
     os.makedirs(fresh_dir)
     args = [ctx.kicad_cli, "pcb", "export", "gerbers", "--output", fresh_dir]
-    # Exported from the private copy: kicad-cli locks the project it opens,
-    # and a lock file appearing in the frozen fixture is indistinguishable
-    # from someone having left one there.
+    # Exported from the private checked copy; authoritative design files stay
+    # untouched while the generated data is compared with committed outputs.
     args += list(flags) + [ctx.check_path(ctx.manifest.get("sources.pcb"))]
     proc = ctx.run_tool(args)
     res.measurements["fresh_export_command"] = " ".join(args[1:])
@@ -371,12 +378,12 @@ def stack_gerber_parity(ctx, res):
             "fresh_area_mm2": round(f_union.area, 4),
             "symmetric_difference_mm2": round(diff, 6),
         }
-        if diff > tol:
+        if tolerance.violated_maximum(diff):
             problems.append({
                 "layer": fn, "shipped": s_name,
                 "issue": "shipped copper geometry differs from a fresh export",
                 "symmetric_difference_mm2": round(diff, 6),
-                "limit_mm2": tol,
+                "limit_mm2": tolerance.value,
                 "shipped_area_mm2": round(s_union.area, 4),
                 "fresh_area_mm2": round(f_union.area, 4)})
 
@@ -387,4 +394,4 @@ def stack_gerber_parity(ctx, res):
                           f"export of the same board")
     return res.passed(
         f"{len(shipped_cu)} shipped copper layers match a fresh export by "
-        f"geometric symmetric difference (limit {tol} mm2)")
+        f"geometric symmetric difference (limit {tolerance.value} mm2)")

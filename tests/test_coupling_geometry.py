@@ -12,8 +12,8 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import pcbnew                                       # noqa: E402
-from pcbqa import coupling_geometry, parasitics     # noqa: E402
-from pcbqa.parasitics import ParasiticsError        # noqa: E402
+from pcbqa import claim, coupling_geometry          # noqa: E402
+from pcbqa.coupling_geometry import CouplingGeometryError  # noqa: E402
 from tests import synth                             # noqa: E402
 
 
@@ -40,20 +40,21 @@ class ParallelRunsAreMeasuredExactly(unittest.TestCase):
             board, ["AGGR", "VICT", "FARAWAY"], 0.3)
         self.assertEqual(len(records), 1)
         record = records[0]
-        self.assertEqual(record["phenomenon"], "coupling")
+        self.assertEqual(record["evidence"]["phenomenon"], "coupling")
         self.assertIn("AGGR||VICT", record["scope"]["identity"])
         self.assertAlmostEqual(record["quantity"]["value"], 8.0,
                                delta=0.7)
         self.assertAlmostEqual(
-            record["provenance"]["minimum_edge_separation_mm"],
+            record["evidence"]["provenance"][
+                "minimum_edge_separation_mm"],
             0.2, delta=0.02)
-        self.assertEqual(record["model"]["fidelity"],
+        self.assertEqual(record["evidence"]["evidence_class"],
                          "geometry-only")
         self.assertIn("not a crosstalk voltage",
-                      record["decision_significance"])
+                      record["significance"])
         # Descriptive: no requirement linkage, no verdict.
         self.assertIsNone(
-            parasitics.requirement_verdict(record))
+            claim.verdict(record))
 
     def test_distant_pairs_produce_nothing(self):
         board = self._board()
@@ -63,13 +64,13 @@ class ParallelRunsAreMeasuredExactly(unittest.TestCase):
 
     def test_inputs_validate(self):
         board = self._board()
-        with self.assertRaises(ParasiticsError):
+        with self.assertRaises(CouplingGeometryError):
             coupling_geometry.parallelism_inventory(
                 board, ["AGGR", "VICT"], 0.0)
-        with self.assertRaises(ParasiticsError):
+        with self.assertRaises(CouplingGeometryError):
             coupling_geometry.parallelism_inventory(
                 board, ["AGGR"], 0.3)
-        with self.assertRaises(ParasiticsError):
+        with self.assertRaises(CouplingGeometryError):
             coupling_geometry.parallelism_inventory(
                 board, ["AGGR", "VICT"], 0.3,
                 layers=["No.Such.Layer"])

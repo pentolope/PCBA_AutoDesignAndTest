@@ -191,8 +191,8 @@ class ReferenceGeometry:
     a buried trace, whose field is entirely in dielectric, understates the
     permittivity and therefore the delay - by a wide margin, and silently.
 
-    Whether a mode is *supported* is the propagation backend's decision, not
-    this module's; this reports the geometry it found.
+    Whether a mode is supported by a particular physical model is that model's
+    decision, not this module's; this reports the geometry it found.
     """
 
     __slots__ = ("layer", "mode", "height_mm", "height_below_mm",
@@ -748,8 +748,8 @@ def from_declaration(document, source=DECLARED):
     Every layer needs a `name` and a `kind`; everything else is optional and a
     field that is absent stays absent. A declaration is allowed to be
     incomplete - `null` is a legitimate value meaning "this board does not know
-    this yet" - and it is `completeness()` and the propagation backend, not the
-    loader, that decide whether what is there is enough.
+    this yet" - and it is `completeness()` and the consuming physical model,
+    not the loader, that decide whether what is there is enough.
     """
     if not isinstance(document, dict):
         raise StackupError(

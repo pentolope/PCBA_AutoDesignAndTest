@@ -1,57 +1,29 @@
-"""One representation for "what do we know about this quantity, and how well".
+"""Shared evidence and numeric-claim contracts.
 
-Five producers in this toolkit answer that question about different physics:
-copper geometry, interconnect propagation, component traversals, simulation
-coverage, and simulated measurements. Each grew its own words for the same
-handful of facts - `exact` meant four different things, `fidelity` named a
-ranked ladder in one module and an unordered vocabulary in another, `bound`
-described three different data shapes - and a reader had to learn each one
-before they could compare anything.
+An evidence fact answers the non-numeric part of an engineering question:
+which phenomenon a model addresses, where the model came from, whether it
+applies, and which assumptions or omissions qualify it.  A claim adds scope,
+units and one of six numeric knowledge shapes.  Producers keep their physical
+detail, but they do not invent another spelling of exactness, bounds,
+applicability or PASS/FAIL/UNKNOWN.
 
-The distinctions are all real. The duplication is not. This module is the
-shared shape they adapt into, and the place the conservative rule lives.
+Evidence classes remain phenomenon-specific.  This module never ranks an RTL
+model against a propagation estimate or a measurement against geometry.  A
+producer that has a meaningful local ordering may keep that ordering.
 
-**Only `pcbqa.parasitics` has been migrated.** `propagation`, `component_models`,
-`sim/fidelity` and `sim/scenario` still carry their own vocabularies, and
-`sim/scenario.classify_assertion` is still a second conservative-verdict
-machine. Migrating them means changing the timing and simulation plumbing, and
-that is not done. Until it is, this is one shared shape beside four private
-ones - an improvement over five private ones, and not yet the unification it
-is meant to be.
-
-The shape:
-
-    phenomenon             what physical quantity is being described
-    scope                  what it is about: a path, a net, a pair, a board
-    units                  mandatory, because a number without them decides
-                           nothing
-    knowledge              exact | lower_bound | upper_bound | interval |
-                           approximate | unknown
-    evidence_class         how it was obtained - a name, never a rank. There
-                           is no universal ladder across phenomena, and this
-                           module deliberately declines to invent one; where a
-                           ladder is meaningful it stays inside the producer
-                           that can order it.
-    provenance             where it came from, with a source
-    applicability          whether the producing model applies here at all
-    assumptions            what had to be granted
-    omitted_contributions  what is knowingly not in the number
-    requirement            optional: the assertion this claim is judged
-                           against, or None for a descriptive claim
-    significance           what a reader may conclude
-
-`verdict()` is the one conservative rule they all share: a bound decides only
-in the direction it establishes, an interval only when it decides entirely,
-an approximation never, and an unknown never. A claim with no requirement is
-descriptive and never becomes a gate.
+An ASSUMED knowledge basis is an explicit premise, not numeric exactness.
+Consequently EXACT + ASSUMED is invalid: an exact value may be direct or
+derived, while a value resting on an assumption states the weaker knowledge
+shape that the premise actually supports.  Bounded and approximate knowledge
+always state the basis that qualifies them.
 """
 
 from __future__ import annotations
 
+import copy
 import math
 
-#: What a claim can be about. Open by construction: a producer names its own
-#: phenomenon, and this list is the set anything in this toolkit measures.
+
 PHENOMENA = (
     "interconnect_dc",
     "propagation_delay",
@@ -64,11 +36,10 @@ PHENOMENA = (
     "device_electrical",
     "digital_io",
     "interconnect_si",
+    "interconnect_geometry",
+    "node_voltage",
 )
 
-#: How much is known about the number. The single axis that replaces
-#: `semantics`, `exact`, `delay_is_lower_bound`, `value_bound.direction` and
-#: `model_status` - each of which was a different spelling of this.
 EXACT = "exact"
 LOWER_BOUND = "lower_bound"
 UPPER_BOUND = "upper_bound"
@@ -77,8 +48,24 @@ APPROXIMATE = "approximate"
 UNKNOWN = "unknown"
 KNOWLEDGE = (EXACT, LOWER_BOUND, UPPER_BOUND, INTERVAL, APPROXIMATE, UNKNOWN)
 
-#: Which knowledge kinds populate which value fields. Anything else refuses.
-_VALUE_FIELDS = {
+APPLICABLE = "applicable"
+UNSUPPORTED = "unsupported"
+NOT_APPLICABLE = "not-applicable"
+APPLICABILITY = (APPLICABLE, UNSUPPORTED, NOT_APPLICABLE)
+
+DIRECT = "direct"
+DERIVED = "derived"
+ASSUMED = "assumed"
+KNOWLEDGE_BASES = (DIRECT, DERIVED, ASSUMED)
+
+PASS = "PASS"
+FAIL = "FAIL"
+UNKNOWN_RESULT = "UNKNOWN"
+
+SCOPE_LEVELS = ("path", "net", "pair", "group", "board", "measurement",
+                "traversal", "model")
+
+_QUANTITY_FIELDS = {
     EXACT: {"value"},
     APPROXIMATE: {"value"},
     LOWER_BOUND: {"value"},
@@ -86,21 +73,18 @@ _VALUE_FIELDS = {
     INTERVAL: {"lower", "upper"},
     UNKNOWN: set(),
 }
-
-SCOPE_LEVELS = ("path", "net", "pair", "group", "board", "measurement",
-                "traversal")
-
-_REQUIRED_KEYS = {
-    "kind", "phenomenon", "scope", "units", "knowledge", "quantity",
-    "evidence_class", "provenance", "applicability", "assumptions",
-    "omitted_contributions", "requirement", "significance",
+_EVIDENCE_KEYS = {
+    "phenomenon", "evidence_class", "provenance", "applicability",
+    "assumptions", "omitted_contributions",
 }
-
-KIND = "claim"
+_CLAIM_KEYS = {
+    "kind", "scope", "units", "knowledge", "quantity", "evidence",
+    "knowledge_basis", "requirement", "significance",
+}
 
 
 class ClaimError(Exception):
-    """A claim that cannot be read is never a claim that passed."""
+    """Evidence or a claim is malformed.  Malformed evidence never passes."""
 
 
 def _finite(value, label):
@@ -111,241 +95,293 @@ def _finite(value, label):
     return float(value)
 
 
-def claim(phenomenon, scope_level, identity, units, knowledge, quantity,
-          evidence_class, provenance, significance, applicability=None,
-          assumptions=(), omitted_contributions=(), requirement=None):
-    """Build one claim. Every argument that decides anything is required."""
+def _statements(value, label):
+    if not isinstance(value, list):
+        raise ClaimError("{} must be a list".format(label))
+    for entry in value:
+        if isinstance(entry, str) and entry.strip():
+            continue
+        if isinstance(entry, dict) and entry \
+                and str(entry.get("detail") or "").strip():
+            continue
+        raise ClaimError(
+            "{} entries are non-empty statements or records with detail".format(
+                label))
+
+
+def evidence(phenomenon, evidence_class, provenance, applicability=None,
+             assumptions=(), omitted_contributions=()):
+    """Build the evidence fact shared by claims and simulation models."""
     record = {
-        "kind": KIND,
         "phenomenon": phenomenon,
+        "evidence_class": evidence_class,
+        "provenance": dict(provenance or {}),
+        "applicability": dict(applicability or {
+            "status": APPLICABLE, "detail": "model applies to this scope"}),
+        "assumptions": list(assumptions),
+        "omitted_contributions": list(omitted_contributions),
+    }
+    return validate_evidence(record)
+
+
+def validate_evidence(record):
+    if not isinstance(record, dict) or set(record) != _EVIDENCE_KEYS:
+        raise ClaimError("evidence carries exactly {}".format(
+            sorted(_EVIDENCE_KEYS)))
+    if record["phenomenon"] not in PHENOMENA:
+        raise ClaimError("phenomenon {!r} is not one of {}".format(
+            record["phenomenon"], list(PHENOMENA)))
+    applicability = record["applicability"]
+    if not isinstance(applicability, dict) or \
+            set(applicability) != {"status", "detail"}:
+        raise ClaimError("applicability carries exactly status and detail")
+    if applicability["status"] not in APPLICABILITY:
+        raise ClaimError("applicability status {!r} is not one of {}".format(
+            applicability["status"], list(APPLICABILITY)))
+    if not str(applicability["detail"] or "").strip():
+        raise ClaimError("applicability needs a non-empty detail")
+    evidence_class = record["evidence_class"]
+    if applicability["status"] == APPLICABLE:
+        if not str(evidence_class or "").strip():
+            raise ClaimError("applicable evidence names its evidence class")
+    elif evidence_class is not None:
+        raise ClaimError(
+            "unsupported or not-applicable evidence has no evidence class")
+    provenance = record["provenance"]
+    if not isinstance(provenance, dict) or not provenance.get("source"):
+        raise ClaimError("evidence whose origin is unstated is unusable")
+    _statements(record["assumptions"], "assumptions")
+    _statements(record["omitted_contributions"], "omitted_contributions")
+    return record
+
+
+def knowledge_basis(kind, detail):
+    record = {"kind": kind, "detail": detail}
+    return validate_knowledge_basis(record)
+
+
+def validate_knowledge_basis(record):
+    if record is None:
+        return None
+    if not isinstance(record, dict) or set(record) != {"kind", "detail"}:
+        raise ClaimError("knowledge_basis carries exactly kind and detail")
+    if record["kind"] not in KNOWLEDGE_BASES:
+        raise ClaimError("knowledge basis {!r} is not one of {}".format(
+            record["kind"], list(KNOWLEDGE_BASES)))
+    if not str(record["detail"] or "").strip():
+        raise ClaimError("knowledge_basis needs a non-empty detail")
+    return record
+
+
+def _validate_basis_for_knowledge(kind, basis):
+    validate_knowledge_basis(basis)
+    if kind in (LOWER_BOUND, UPPER_BOUND, INTERVAL, APPROXIMATE) and \
+            basis is None:
+        raise ClaimError(
+            "bounded and approximate knowledge states the basis that "
+            "qualifies it")
+    if kind == EXACT and basis is not None and basis["kind"] == ASSUMED:
+        raise ClaimError(
+            "exact knowledge cannot have an assumed basis; state the weaker "
+            "knowledge shape supported by the assumption")
+
+
+def knowledge_declaration(kind, basis=None):
+    """Declare numeric knowledge before a producer has supplied its value."""
+    if kind not in KNOWLEDGE:
+        raise ClaimError("knowledge {!r} is not one of {}".format(
+            kind, list(KNOWLEDGE)))
+    basis = copy.deepcopy(basis)
+    _validate_basis_for_knowledge(kind, basis)
+    return {"kind": kind, "basis": basis}
+
+
+def validate_knowledge_declaration(record):
+    if not isinstance(record, dict) or set(record) != {"kind", "basis"}:
+        raise ClaimError("a knowledge declaration carries exactly kind and basis")
+    return knowledge_declaration(record["kind"], record["basis"])
+
+
+def requirement(name, source, assertion):
+    record = {"name": name, "source": source,
+              "assertion": dict(assertion or {})}
+    _validate_requirement(record)
+    return record
+
+
+def _validate_requirement(record):
+    if not isinstance(record, dict) or \
+            set(record) != {"name", "source", "assertion"}:
+        raise ClaimError("a requirement carries exactly name, source and assertion")
+    for field in ("name", "source"):
+        if not str(record[field] or "").strip():
+            raise ClaimError("requirement.{} is required".format(field))
+    assertion = record["assertion"]
+    if not isinstance(assertion, dict) or assertion.get("op") not in \
+            ("<=", ">=", "within"):
+        raise ClaimError("assertion op must be <=, >= or within")
+    expected = {"op", "value", "tolerance"} if \
+        assertion["op"] == "within" else {"op", "value"}
+    if set(assertion) != expected:
+        raise ClaimError("assertion {!r} carries exactly {}".format(
+            assertion["op"], sorted(expected)))
+    _finite(assertion["value"], "assertion.value")
+    if assertion["op"] == "within":
+        tolerance = _finite(assertion["tolerance"], "assertion.tolerance")
+        if tolerance <= 0:
+            raise ClaimError("assertion.tolerance must be positive")
+
+
+def claim(scope_level, identity, units, knowledge, quantity, evidence,
+          significance, knowledge_basis=None, requirement=None):
+    """Build one numeric claim from shared evidence."""
+    record = {
+        "kind": "claim",
         "scope": {"level": scope_level, "identity": identity},
         "units": units,
         "knowledge": knowledge,
         "quantity": dict(quantity or {}),
-        "evidence_class": evidence_class,
-        "provenance": dict(provenance or {}),
-        "applicability": dict(applicability
-                              or {"applicable": True, "detail": ""}),
-        "assumptions": list(assumptions),
-        "omitted_contributions": list(omitted_contributions),
-        "requirement": requirement,
+        "evidence": copy.deepcopy(evidence),
+        "knowledge_basis": copy.deepcopy(knowledge_basis),
+        "requirement": copy.deepcopy(requirement),
         "significance": significance,
     }
-    validate(record)
-    return record
+    return validate(record)
 
 
 def validate(record):
-    """Raise ClaimError unless the record is a well-formed claim."""
-    if not isinstance(record, dict):
-        raise ClaimError("a claim is an object, not a {}".format(
-            type(record).__name__))
-    if set(record) != _REQUIRED_KEYS:
-        raise ClaimError(
-            "a claim carries exactly {}; got {}".format(
-                sorted(_REQUIRED_KEYS), sorted(record)))
-    if record["kind"] != KIND:
-        raise ClaimError("kind must be {!r}".format(KIND))
-    if record["phenomenon"] not in PHENOMENA:
-        raise ClaimError("phenomenon {!r} is not one of {}".format(
-            record["phenomenon"], list(PHENOMENA)))
-
+    if not isinstance(record, dict) or set(record) != _CLAIM_KEYS:
+        raise ClaimError("a claim carries exactly {}".format(
+            sorted(_CLAIM_KEYS)))
+    if record["kind"] != "claim":
+        raise ClaimError("kind must be 'claim'")
     scope = record["scope"]
     if not isinstance(scope, dict) or set(scope) != {"level", "identity"}:
         raise ClaimError("scope carries exactly level and identity")
-    if scope["level"] not in SCOPE_LEVELS:
-        raise ClaimError("scope level {!r} is not one of {}".format(
-            scope["level"], list(SCOPE_LEVELS)))
-    if not str(scope["identity"] or "").strip():
-        raise ClaimError("a claim about nothing in particular is not a claim")
-
+    if scope["level"] not in SCOPE_LEVELS or \
+            not str(scope["identity"] or "").strip():
+        raise ClaimError("scope needs a known level and non-empty identity")
     if not str(record["units"] or "").strip():
-        raise ClaimError(
-            "a claim states its units; a number without them decides nothing")
-
+        raise ClaimError("a claim states its units")
     knowledge = record["knowledge"]
     if knowledge not in KNOWLEDGE:
         raise ClaimError("knowledge {!r} is not one of {}".format(
             knowledge, list(KNOWLEDGE)))
     quantity = record["quantity"]
-    if not isinstance(quantity, dict):
-        raise ClaimError("quantity is an object")
-    expected = _VALUE_FIELDS[knowledge]
-    if set(quantity) != expected:
-        raise ClaimError(
-            "knowledge {!r} populates exactly {}, not {}".format(
-                knowledge, sorted(expected) or "nothing", sorted(quantity)))
-    for name, value in sorted(quantity.items()):
+    if not isinstance(quantity, dict) or set(quantity) != _QUANTITY_FIELDS[knowledge]:
+        raise ClaimError("knowledge {!r} populates exactly {}".format(
+            knowledge, sorted(_QUANTITY_FIELDS[knowledge])))
+    for name, value in quantity.items():
         _finite(value, "quantity." + name)
     if knowledge == INTERVAL and quantity["lower"] > quantity["upper"]:
         raise ClaimError("an interval's lower end exceeds its upper end")
-
-    if not str(record["evidence_class"] or "").strip():
-        raise ClaimError(
-            "a claim names how it was obtained; without that a reader cannot "
-            "tell a measurement from an estimate")
-    provenance = record["provenance"]
-    if not isinstance(provenance, dict) or not provenance.get("source"):
-        raise ClaimError(
-            "a claim whose origin is unstated is not usable evidence")
-
-    applicability = record["applicability"]
-    if not isinstance(applicability, dict) or \
-            set(applicability) != {"applicable", "detail"}:
-        raise ClaimError("applicability carries exactly applicable and detail")
-    if not isinstance(applicability["applicable"], bool):
-        raise ClaimError("applicability.applicable is a boolean")
-    if not applicability["applicable"] and knowledge != UNKNOWN:
-        raise ClaimError(
-            "a claim from outside its model's applicability domain knows "
-            "nothing; it is {!r}, not {!r}".format(UNKNOWN, knowledge))
-
-    for field in ("assumptions", "omitted_contributions"):
-        entries = record[field]
-        if not isinstance(entries, list) or \
-                any(not str(e or "").strip() for e in entries):
-            raise ClaimError("{} is a list of non-empty statements".format(
-                field))
-    if knowledge == EXACT and record["omitted_contributions"]:
-        raise ClaimError(
-            "exact knowledge with omitted contributions refuses: an omission "
-            "makes the value a bound or an approximation, never exact")
-    if knowledge == APPROXIMATE and not (record["assumptions"]
-                                         or record["omitted_contributions"]):
-        raise ClaimError(
-            "an unexplained approximation is just an unaudited number")
-
-    requirement = record["requirement"]
-    if requirement is not None:
-        if not isinstance(requirement, dict) or \
-                set(requirement) != {"requirement", "source", "assertion"}:
-            raise ClaimError(
-                "a requirement carries exactly requirement, source and "
-                "assertion")
-        for field in ("requirement", "source"):
-            if not str(requirement[field] or "").strip():
-                raise ClaimError("requirement.{} is required".format(field))
-        assertion = requirement["assertion"]
-        if not isinstance(assertion, dict) or set(assertion) != {"op", "value"}:
-            raise ClaimError("an assertion carries exactly op and value")
-        if assertion["op"] not in ("<=", ">="):
-            raise ClaimError(
-                "assertion op {!r} is not <= or >=".format(assertion["op"]))
-        _finite(assertion["value"], "assertion.value")
-
+    validate_evidence(record["evidence"])
+    status = record["evidence"]["applicability"]["status"]
+    if status != APPLICABLE and knowledge != UNKNOWN:
+        raise ClaimError("unsupported or not-applicable evidence knows no number")
+    _validate_basis_for_knowledge(knowledge, record["knowledge_basis"])
+    omissions = record["evidence"]["omitted_contributions"]
+    assumptions = record["evidence"]["assumptions"]
+    if knowledge == EXACT and omissions:
+        raise ClaimError("exact knowledge cannot omit a contribution")
+    if knowledge == APPROXIMATE and not (assumptions or omissions):
+        raise ClaimError("an approximation states its assumptions or omissions")
+    if record["requirement"] is not None:
+        _validate_requirement(record["requirement"])
     if not str(record["significance"] or "").strip():
-        raise ClaimError(
-            "a claim states what may be concluded from it; a number with no "
-            "stated significance invites the reader to invent one")
+        raise ClaimError("a claim states what may be concluded from it")
     return record
 
 
-def verdict(record):
-    """PASS / FAIL / UNKNOWN, or None for a claim with no requirement.
-
-    The one conservative rule all five producers share. A bound decides only
-    in the direction it establishes; an interval only when it decides
-    entirely; an approximation and an unknown never decide at all.
-    """
+def with_requirement(record, requirement_record):
+    """Return a validated copy linked to a requirement."""
     validate(record)
-    requirement = record["requirement"]
-    if requirement is None:
-        return None
-    op = requirement["assertion"]["op"]
-    limit = requirement["assertion"]["value"]
-    knowledge = record["knowledge"]
-    quantity = record["quantity"]
+    linked = copy.deepcopy(record)
+    linked["requirement"] = copy.deepcopy(requirement_record)
+    return validate(linked)
 
+
+def bounds(record):
+    """The finite endpoints a claim establishes; either may be None."""
+    validate(record)
+    knowledge, quantity = record["knowledge"], record["quantity"]
     if knowledge == EXACT:
-        value = quantity["value"]
-        return "PASS" if (value <= limit if op == "<=" else value >= limit) \
-            else "FAIL"
-    if knowledge in (APPROXIMATE, UNKNOWN):
-        return "UNKNOWN"
-    if knowledge == UPPER_BOUND:
-        value = quantity["value"]
-        if op == "<=":
-            return "PASS" if value <= limit else "UNKNOWN"
-        return "FAIL" if value < limit else "UNKNOWN"
+        return quantity["value"], quantity["value"]
     if knowledge == LOWER_BOUND:
-        value = quantity["value"]
+        return quantity["value"], None
+    if knowledge == UPPER_BOUND:
+        return None, quantity["value"]
+    if knowledge == INTERVAL:
+        return quantity["lower"], quantity["upper"]
+    return None, None
+
+
+def verdict(record):
+    """One conservative PASS/FAIL/UNKNOWN result, or None if descriptive."""
+    validate(record)
+    required = record["requirement"]
+    if required is None:
+        return None
+    knowledge = record["knowledge"]
+    lower, upper = bounds(record)
+    assertion = required["assertion"]
+    op, target = assertion["op"], assertion["value"]
+    result = UNKNOWN_RESULT
+    if knowledge not in (APPROXIMATE, UNKNOWN):
         if op == "<=":
-            return "FAIL" if value > limit else "UNKNOWN"
-        return "PASS" if value >= limit else "UNKNOWN"
-    lower, upper = quantity["lower"], quantity["upper"]
-    if op == "<=":
-        if upper <= limit:
-            return "PASS"
-        return "FAIL" if lower > limit else "UNKNOWN"
-    if lower >= limit:
-        return "PASS"
-    return "FAIL" if upper < limit else "UNKNOWN"
+            if upper is not None and upper <= target:
+                result = PASS
+            elif lower is not None and lower > target:
+                result = FAIL
+        elif op == ">=":
+            if lower is not None and lower >= target:
+                result = PASS
+            elif upper is not None and upper < target:
+                result = FAIL
+        else:
+            tolerance = assertion["tolerance"]
+            wanted_lower, wanted_upper = target - tolerance, target + tolerance
+            if lower is not None and upper is not None \
+                    and lower >= wanted_lower and upper <= wanted_upper:
+                result = PASS
+            elif (upper is not None and upper < wanted_lower) or \
+                    (lower is not None and lower > wanted_upper):
+                result = FAIL
+    if knowledge == EXACT:
+        basis = "exact"
+    elif knowledge in (LOWER_BOUND, UPPER_BOUND):
+        basis = "bound"
+    else:
+        basis = knowledge
+    return {"result": result, "basis": basis,
+            "exact": knowledge == EXACT and result != UNKNOWN_RESULT,
+            "knowledge_basis": copy.deepcopy(record["knowledge_basis"])}
 
 
 def comparable(one, other):
-    """Whether two claims may be compared numerically at all.
-
-    Same phenomenon, same scope level, same units, same knowledge kind and the
-    same evidence class. Comparing across unmatched evidence is how a
-    geometric estimate ends up ranked against a measurement.
-    """
     validate(one)
     validate(other)
-    for path in (("phenomenon",), ("units",), ("knowledge",),
-                 ("evidence_class",), ("scope", "level")):
-        left, right = one, other
-        for step in path:
-            left, right = left[step], right[step]
+    left_evidence, right_evidence = one["evidence"], other["evidence"]
+    checks = (
+        ("phenomenon", left_evidence["phenomenon"],
+         right_evidence["phenomenon"]),
+        ("scope.level", one["scope"]["level"], other["scope"]["level"]),
+        ("units", one["units"], other["units"]),
+        ("knowledge", one["knowledge"], other["knowledge"]),
+        ("evidence_class", left_evidence["evidence_class"],
+         right_evidence["evidence_class"]),
+        ("applicability", left_evidence["applicability"]["status"],
+         right_evidence["applicability"]["status"]),
+    )
+    for label, left, right in checks:
         if left != right:
-            return False, "{} differs: {!r} vs {!r}".format(
-                ".".join(path), left, right)
-    return True, "same phenomenon, scope level, units, knowledge and evidence"
+            return False, "{} differs: {!r} vs {!r}".format(label, left, right)
+    return True, ("same phenomenon, scope level, units, knowledge, evidence "
+                  "class and applicability")
 
 
 def require_comparable(one, other):
     ok, detail = comparable(one, other)
     if not ok:
-        raise ClaimError(
-            "these two claims cannot be compared - {}".format(detail))
+        raise ClaimError("these claims cannot be compared - " + detail)
     return True
-
-
-# ---------------------------------------------------------------------------
-# adapters
-#
-# A producer keeps its own record - the physics is not the same and the detail
-# is load-bearing where it is produced. What it stops keeping is a private
-# answer to "how well is this known".
-#
-# There is one adapter, because one producer has been migrated. Adapters for
-# the others are not written until the producer that needs one is migrated
-# with it: an adapter no producer calls is reserved architecture, and this
-# toolkit does not reserve architecture.
-# ---------------------------------------------------------------------------
-
-def from_parasitic_metric(record):
-    """`pcbqa.parasitics` metrics, whose shape this model generalises."""
-    quantity = record["quantity"]
-    semantics = quantity["semantics"]
-    if semantics == "exact":
-        knowledge, values = EXACT, {"value": quantity["value"]}
-    elif semantics == "approximate":
-        knowledge, values = APPROXIMATE, {"value": quantity["value"]}
-    elif semantics == "bound":
-        bound = quantity["bound"]
-        knowledge = (UPPER_BOUND if bound["direction"] == "upper"
-                     else LOWER_BOUND)
-        values = {"value": bound["value"]}
-    else:
-        knowledge = INTERVAL
-        values = {"lower": quantity["interval"]["lower"],
-                  "upper": quantity["interval"]["upper"]}
-    return claim(
-        record["phenomenon"], record["scope"]["level"],
-        record["scope"]["identity"], quantity["units"], knowledge, values,
-        record["model"]["fidelity"], record["provenance"],
-        record["decision_significance"],
-        applicability=record["applicability"],
-        assumptions=record["assumptions"],
-        omitted_contributions=record["omitted_contributions"],
-        requirement=record["requirement_linkage"])

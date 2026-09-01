@@ -2,9 +2,9 @@
 
 Most of the suite runs against fixtures this repository ships. A few tests need
 something a fixture cannot be: a board with a *complete, installed* release -
-a receipt, cross-checkable reports, frozen part-orientation evidence - because
-what they exercise is the toolkit's behaviour on a project that really was
-released.
+committed fabrication outputs, cross-checkable reports and frozen
+part-orientation evidence - because what they exercise is the toolkit's
+behaviour on a real consumer state.
 
 Rather than keep a consumer's board here, or drop the coverage, those tests
 take the board from outside:

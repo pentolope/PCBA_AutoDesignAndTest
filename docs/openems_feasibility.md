@@ -1,46 +1,66 @@
-# openEMS targeted feasibility (design note)
+# openEMS targeted feasibility (technical design note)
 
-Status: design note only. openEMS is NOT a dependency, is not
-installed in the reference environment, and nothing in validation
-invokes it.
+Status: engineering research only. openEMS is not a toolkit dependency, no
+openEMS runtime integration is implemented, and validation does not invoke it.
+This note records the technical work needed to make a full-wave result
+trustworthy; it does not define a backend registry or dispatch abstraction.
 
-## Scope discipline
+## Targeted extraction scope
 
-Whole-board FDTD is out of scope indefinitely. The useful unit is one
-ElectricalPath region:
+The useful simulation unit is a bounded region around one targeted
+`ElectricalPath`, not an invented whole-board simulation mode:
 
-    KiCad region / ElectricalPath
-        -> traces + vias + planes + dielectric (geometry export)
-        -> EM submodel (bounded box, ports at path endpoints)
-        -> openEMS FDTD
-        -> Touchstone S-parameters / extracted quantities
-        -> toolkit fidelity class "full-wave-extracted" + gates
+```text
+KiCad board + targeted ElectricalPath
+    -> path copper, vias, reference planes and dielectric geometry
+    -> bounded EM submodel with ports at the path endpoints
+    -> converged openEMS FDTD solve
+    -> Touchstone S-parameters and explicitly derived quantities
+    -> shared claims carrying full-wave evidence and exact provenance
+```
 
-## The genuinely hard parts (in order)
+The extraction must retain the selected path identity and the source board
+digest. Exact geometry and stackup provenance includes the clipped copper and
+plane shapes, layer elevations, dielectric definitions, finished conductor and
+via geometry, solder mask treatment when modeled, extraction bounds, and every
+transformation applied before solving. A result whose geometry cannot be bound
+back to those inputs is unusable regardless of solver convergence.
 
-1. **Geometry truthfulness.** The exported submodel must be provably
-   the board's copper: same outline clip, same stackup heights, same
-   finished thicknesses as the approved evidence. The extractor in
-   `pcbqa/extract.py` (segment inventories, hashes of the source
-   board) is the natural provenance anchor.
-2. **Ports.** Port placement/reference definition at clipped path
-   endpoints dominates result validity; naive ports invalidate S11
-   long before meshing does.
-3. **Meshing.** Thirds-rule mesh lines on trace edges, dielectric
-   interfaces, via barrels; a mesh-convergence check (two densities,
-   compared) is mandatory before any number is trusted.
-4. Launching openEMS is the easy part (python API, offline).
+## Ports and reference structure
 
-## Integration contract (future)
+Ports are part of the physical claim, not incidental solver configuration.
+Each port records its location, excitation, reference conductor, orientation,
+de-embedding plane and relationship to the clipped `ElectricalPath` endpoint.
+The extraction boundary must preserve a physically valid return path. A naive
+endpoint port can invalidate S11 and impedance results even when the mesh and
+solver converge.
 
-- Backend discovery like ngspice/verilator: absent -> explicit
-  `backend-unavailable`, never fabricated data.
-- Results enter as fidelity "full-wave-extracted" with the submodel
-  geometry hash, mesh parameters, and convergence delta recorded.
-- A synthetic reference fixture FIRST: one microstrip of known
-  analytic impedance; the pipeline is proven when its extracted Z0
-  agrees with the analytic model within a stated tolerance band.
+## Mesh convergence
 
-No code beyond this note ships until the fixture pipeline can be run
-by someone with openEMS installed; the note exists so that work starts
-at the geometry/ports problem, not at the solver invocation.
+The mesh resolves trace edges, conductor thickness, dielectric interfaces, via
+barrels and antipads, ports, and nearby reference-plane discontinuities. One
+mesh is not evidence of convergence. At least two successively refined meshes
+must be solved, with the compared frequency band, S-parameter delta and
+acceptance tolerance recorded. Failure to meet the declared convergence
+criterion leaves the requested quantity unknown.
+
+## Output and claim shape
+
+The primary exchange artifact is Touchstone data over an explicitly recorded
+frequency grid. Any impedance, delay, loss or coupling quantity derived from it
+records the Touchstone digest and the derivation. The resulting numeric record
+uses the shared claim contract: phenomenon, scope, units, knowledge shape,
+full-wave evidence class, provenance, applicability, assumptions, omitted
+contributions and any linked requirement. Solver completion by itself is not a
+PASS.
+
+## Reference-fixture validation
+
+Before a board-derived result is trusted, the same extraction, port, mesh and
+Touchstone pipeline must reproduce a reference fixture with independently known
+behavior. A controlled microstrip or stripline fixture provides analytic or
+measured impedance and S-parameter expectations over a stated band. Validation
+compares the converged result against that reference with declared tolerances
+and retains the complete geometry, stackup, port and mesh provenance. This
+fixture validates the pipeline; it does not substitute for provenance or
+convergence on a later board extraction.

@@ -242,13 +242,7 @@ class LineEndingsAreNotAChange(unittest.TestCase):
 
 
 class TheConfigurationIdentityCoversTheWholeManifest(unittest.TestCase):
-    """Every key, paths included.
-
-    Nothing rewrites a manifest any more - a build reads it where it lies and
-    installs into the paths it names - so there is no leaf a board could be
-    excused from binding, and the exclusion list that used to exist for the
-    clean room is gone rather than left empty.
-    """
+    """Every manifest key, paths included, contributes to identity."""
 
     def test_changing_a_covered_value_changes_the_identity(self):
         origin = _manifest(_doc())
@@ -267,7 +261,7 @@ class TheConfigurationIdentityCoversTheWholeManifest(unittest.TestCase):
                             closure_mod.configuration_identity(_manifest(edited)))
 
     def test_moving_an_output_path_changes_the_identity(self):
-        """The property the exclusion list used to deny."""
+        """Output locations are release-affecting configuration."""
         edited = _doc()
         edited["artifacts"]["bom"] = "somewhere/else/bom.csv"
         self.assertNotEqual(closure_mod.configuration_identity(_manifest(_doc())),

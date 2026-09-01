@@ -1,9 +1,8 @@
 """JLCPCB knowledge: acquisition, comparison, selection.
 
 The committed catalog is the only thing design work may trust, and a Git
-commit is what makes it committed. There is no observed/latest pair, no
-promotion and no ledger: a refresh fetches into scratch and shows a semantic
-diff, and a person reviewing that diff and committing is the approval.
+commit is what makes it committed. A refresh fetches into scratch and shows a
+semantic diff; review replaces the catalog/evidence set exactly before commit.
 
 So the load path is where the refusals live. A catalog whose evidence is
 missing, altered, or describes an acquisition that never completed must refuse
@@ -14,6 +13,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import hashlib
 import json
 import os
 import shutil
@@ -913,12 +913,7 @@ class ValuesKeepTheirScopes(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TheCommittedCatalogRefusesWhatItCannotProve(unittest.TestCase):
-    """Evidence integrity and fail-closed parsing, on the load path.
-
-    Promotion used to be the gate that refused these. With promotion gone -
-    a commit is the approval now - the loader is the only thing between a
-    damaged catalog and design work that would consume it.
-    """
+    """Evidence integrity and fail-closed parsing, on the load path."""
 
     def _damaged(self, mutate, tag):
         store = _approved_store(tag)
@@ -940,6 +935,56 @@ class TheCommittedCatalogRefusesWhatItCannotProve(unittest.TestCase):
                       "ab") as handle:
                 handle.write(b"one byte too many")
         self.assertIn("evidence", self._damaged(tamper, "ev_altered"))
+
+    def test_unreferenced_evidence_is_detected(self):
+        def add_orphan(store):
+            with open(os.path.join(store.approved_evidence, "orphan.raw"),
+                      "wb") as handle:
+                handle.write(b"not named by approved.json")
+        detail = self._damaged(add_orphan, "ev_orphan")
+        self.assertIn("unreferenced evidence", detail)
+        self.assertIn("exactly", detail)
+
+    def test_writing_a_refresh_removes_obsolete_evidence(self):
+        root = _root("ev_replace")
+        first, problem = acquire.acquire(fetcher=_fetcher())
+        self.assertIsNone(problem)
+        store_module.write_catalog(root, first, first["raw"])
+
+        second = copy.deepcopy(first)
+        second_raw = dict(first["raw"])
+        changed = second_raw["capabilities"] + b"\nreviewed refresh\n"
+        second_raw["capabilities"] = changed
+        source = next(s for s in second["sources"]
+                      if s["id"] == "capabilities")
+        old_name = "capabilities-{}.raw".format(source["sha256_raw"][:12])
+        source["sha256_raw"] = hashlib.sha256(changed).hexdigest()
+        new_name = "capabilities-{}.raw".format(source["sha256_raw"][:12])
+
+        store_module.write_catalog(root, second, second_raw)
+        evidence = os.path.join(root, "catalog", "evidence")
+        self.assertFalse(os.path.exists(os.path.join(evidence, old_name)))
+        self.assertTrue(os.path.isfile(os.path.join(evidence, new_name)))
+        self.assertEqual(store_module.verify_evidence(second, evidence), [])
+
+    def test_writing_replaces_an_evidence_symlink_without_following_it(self):
+        root = _root("ev_symlink")
+        result, problem = acquire.acquire(fetcher=_fetcher())
+        self.assertIsNone(problem)
+        evidence = os.path.join(root, "catalog", "evidence")
+        os.makedirs(evidence)
+        source = result["sources"][0]
+        name = "{}-{}.raw".format(source["id"],
+                                  source["sha256_raw"][:12])
+        outside = os.path.join(root, "outside.raw")
+        with open(outside, "wb") as handle:
+            handle.write(b"outside must stay unchanged")
+        os.symlink(outside, os.path.join(evidence, name))
+
+        store_module.write_catalog(root, result, result["raw"])
+        self.assertFalse(os.path.islink(os.path.join(evidence, name)))
+        with open(outside, "rb") as handle:
+            self.assertEqual(handle.read(), b"outside must stay unchanged")
 
     def test_an_unsupported_snapshot_schema_refuses(self):
         def bump(store):
