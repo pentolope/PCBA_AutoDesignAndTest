@@ -1,9 +1,9 @@
 """Analytic passive propagation: how long copper takes, and how well it is known.
 
-This is the first and lowest-fidelity backend. It answers one question - how
-long does a signal take to travel this copper - from closed-form transmission
-line theory, using the board's geometry and its physical stackup. It models no
-driver, no receiver, no reflection, no loss and no coupling.
+It answers one question - how long does a signal take to travel this copper -
+from closed-form transmission-line theory, using the board's geometry and its
+physical stackup. It models no driver, no receiver, no reflection, no loss and
+no coupling.
 
 Why not simply c/sqrt(Dk)
 -------------------------
@@ -65,6 +65,8 @@ from __future__ import annotations
 
 import math
 
+from . import claim
+
 # Speed of light in vacuum, mm/ps. Exact by definition of the metre.
 C_MM_PER_PS = 0.299792458
 
@@ -73,7 +75,6 @@ EMBEDDED_MICROSTRIP = "embedded_microstrip"
 STRIPLINE = "stripline"
 ASYMMETRIC_STRIPLINE = "asymmetric_stripline"
 
-ANALYTIC = "analytic"
 HAMMERSTAD = "hammerstad"
 HAMMERSTAD_T = "hammerstad-thickness-corrected"
 DECLARED_EFFECTIVE = "declared-effective"
@@ -99,11 +100,11 @@ ASSUMED_TRANSMISSION_LINE = "analytic-estimate-under-declared-assumptions"
 DECLARED_PROPAGATION = "declared-propagation-constant"
 DECLARED_MODEL = "declared-model"
 
-#: Rank, not order: two kinds of declared value are equally good and neither is
-#: below the other. A rank comparison also means an unrecognised fidelity - one
-#: from a backend this release does not know - sorts below everything rather
+#: Rank within propagation-delay evidence only, not a universal model-quality
+#: order. Two kinds of declared value are equally strong and neither is below
+#: the other. An unrecognised evidence class sorts below everything rather
 #: than raising or, worse, ranking high.
-FIDELITY_RANK = {
+EVIDENCE_CLASS_RANK = {
     GEOMETRY_ONLY: 0,
     UNKNOWN_CONTRIBUTION: 1,
     ASSUMED_TRANSMISSION_LINE: 2,
@@ -112,13 +113,15 @@ FIDELITY_RANK = {
     DECLARED_MODEL: 4,
 }
 
-FIDELITY_ORDER = tuple(sorted(FIDELITY_RANK, key=lambda f: (FIDELITY_RANK[f],
-                                                            f)))
+EVIDENCE_CLASS_ORDER = tuple(sorted(
+    EVIDENCE_CLASS_RANK,
+    key=lambda evidence_class: (EVIDENCE_CLASS_RANK[evidence_class],
+                                evidence_class)))
 
 
-def fidelity_rank(name):
-    """Where a fidelity sits. Anything unrecognised sits below everything."""
-    return FIDELITY_RANK.get(name, -1)
+def evidence_class_rank(name):
+    """Strength for propagation delay; unknown classes rank below all."""
+    return EVIDENCE_CLASS_RANK.get(name, -1)
 
 
 def _stub_extent(record):
@@ -134,15 +137,15 @@ def _stub_extent(record):
                     "modelled by this release"}
 
 
-def weakest(fidelities):
-    """The weakest fidelity in a set.
+def weakest_evidence_class(evidence_classes):
+    """The weakest propagation-delay evidence class in a set.
 
     A result is worth exactly what its worst modelled portion is worth. Ties
     break on the name so the answer is deterministic across runs.
     """
-    if not fidelities:
+    if not evidence_classes:
         return GEOMETRY_ONLY
-    return min(sorted(fidelities), key=fidelity_rank)
+    return min(sorted(evidence_classes), key=evidence_class_rank)
 
 # Via vertical-transit treatments.
 VIA_NONE = "none"
@@ -192,22 +195,6 @@ class ViaPolicy:
         self.declared = declared
         self.max_delay_ps = max_delay_ps
         self.provenance = provenance
-
-    @property
-    def exact(self):
-        """Does this contribute a value rather than an acknowledged omission?"""
-        return self.model == VIA_GEOMETRIC
-
-    @property
-    def omitted_bound_ps(self):
-        """How much the omission could be worth, when the board says."""
-        return None if self.exact else self.max_delay_ps
-
-    @property
-    def fidelity(self):
-        if self.model == VIA_GEOMETRIC:
-            return ANALYTIC_TRANSMISSION_LINE
-        return UNKNOWN_CONTRIBUTION
 
     def note(self):
         if self.model == VIA_GEOMETRIC:
@@ -299,40 +286,19 @@ def via_policy(declaration):
                                  if isinstance(declaration, dict) else None))
 
 
-#: The result contract every backend produces, whatever it is inside.
-#:
-#: This exists so the gates can stay backend-agnostic and a board's manifest
-#: never has to know which one ran. A full-wave extraction and a closed-form
-#: estimate answer the same question at different quality, so they return the
-#: same shape and differ in `fidelity` - which is the field the gates already
-#: use to refuse to overstate a result.
-#:
-#: Per conductor run: `layer`, `width_mm`, `length_mm`, `ps_per_mm`,
-#: `delay_ps`, `fidelity`, and either `mode` plus `geometry` (derived from a
-#: stackup) or `provenance` (declared or measured).
-CONDUCTOR_RESULT_FIELDS = ("layer", "width_mm", "ps_per_mm", "fidelity",
+#: Per conductor run: the physical inputs, delay and shared evidence class.
+CONDUCTOR_RESULT_FIELDS = ("layer", "width_mm", "ps_per_mm", "evidence_class",
                            "delay_ps")
 
 #: Per via transition: where it went and what, if anything, that cost.
 VIA_RESULT_FIELDS = ("from_layer", "to_layer", "model", "vertical_length_mm",
-                     "delay_ps", "fidelity")
+                     "claim")
 
-#: Per path: the totals, how good they are, and what stopped them.
-#: `delay_ps` is None when some portion could not be evaluated at all;
-#: `delay_is_lower_bound` is True when every portion was evaluable but at
-#: least one omitted a known-nonnegative contribution, so the truth's upper
-#: side exceeds the modelled sum by an unknown (or separately bounded)
-#: amount. What the flag does NOT claim: that `delay_ps` is the interval's
-#: lower endpoint. `delay_lower_ps` is - geometric length uncertainty can
-#: place the true delay BELOW the modelled nominal even while the flag is
-#: true, and the interval endpoints, not this flag, are what the gates
-#: compare against limits. The flag names the presence of omissions; a
-#: backend that cannot honour that distinction cannot be plugged in here.
-PATH_RESULT_FIELDS = ("path", "source", "destination", "delay_ps",
-                      "delay_lower_ps", "delay_upper_ps",
-                      "delay_is_lower_bound", "omitted_bound_ps",
-                      "geometric_uncertainty_ps", "fidelity", "insufficient",
-                      "backend", "conductors", "vias",
+#: Per path: physical detail, the shared delay claim, and what stopped it.
+PATH_RESULT_FIELDS = ("path", "source", "destination", "claim",
+                      "modelled_delay_ps", "geometric_uncertainty_ps",
+                      "insufficient",
+                      "conductors", "vias",
                       "component_traversals")
 
 
@@ -691,7 +657,7 @@ class PropagationModel:
     """
 
     def __init__(self, stackup, reference_layers, model=HAMMERSTAD,
-                 via_model=None, declared_layers=None, backend="analytic",
+                 via_model=None, declared_layers=None,
                  discontinuity=None, unfilled_reference_layers=()):
         if model not in MODELS:
             raise PropagationError(
@@ -712,7 +678,6 @@ class PropagationModel:
         #: Reference layers whose zones were never filled. Coverage against one
         #: of these is unknown, and unknown is not covered.
         self.unfilled_reference_layers = set(unfilled_reference_layers or ())
-        self.backend = backend
         self.declared = {
             layer: DeclaredLayerModel(layer, spec)
             for layer, spec in (declared_layers or {}).items()}
@@ -759,7 +724,7 @@ class PropagationModel:
             return {
                 "layer": layer, "width_mm": width_mm,
                 "model": DECLARED_EFFECTIVE,
-                "fidelity": DECLARED_PROPAGATION,
+                "evidence_class": DECLARED_PROPAGATION,
                 "epsilon_effective": epsilon_effective,
                 "ps_per_mm": ps_per_mm,
                 "provenance": declared.provenance,
@@ -820,7 +785,7 @@ class PropagationModel:
             raise Unsupported(
                 "layer {!r} is {}, which none of the implemented closed forms "
                 "cover; declare an effective propagation constant for it or "
-                "use a higher-fidelity backend".format(layer, geometry.mode))
+                "use a supported field model".format(layer, geometry.mode))
 
         return {
             "layer": layer, "width_mm": width_mm,
@@ -833,7 +798,7 @@ class PropagationModel:
                                        geometry.reference_below)
                                       if name],
             "model": record_model,
-            "fidelity": ANALYTIC_TRANSMISSION_LINE,
+            "evidence_class": ANALYTIC_TRANSMISSION_LINE,
             "epsilon_r": geometry.epsilon_r,
             "epsilon_effective": round(epsilon_effective, 6),
             "ps_per_mm": round(delay_ps_per_mm(epsilon_effective), 6),
@@ -871,10 +836,40 @@ class PropagationModel:
         record["layers_crossed"] = None if span is None else span["crossed"]
         record["policy"] = self.via_treatment.to_dict()
         if self.via_treatment.model == VIA_NONE:
-            record["delay_ps"] = 0.0
-            record["fidelity"] = self.via_treatment.fidelity
-            record["exact"] = self.via_treatment.exact
             record["note"] = self.via_treatment.note()
+            provenance = self.via_treatment.provenance
+            provenance = (dict(provenance) if isinstance(provenance, dict)
+                          else {"source": str(provenance or
+                                             "manifest via_delay_model")})
+            assumptions = ([self.via_treatment.justification]
+                           if self.via_treatment.justification else [])
+            omission = {"detail": record["note"]}
+            if self.via_treatment.max_delay_ps is None:
+                knowledge = claim.LOWER_BOUND
+                quantity = {"value": 0.0}
+                basis = claim.knowledge_basis(
+                    claim.DERIVED,
+                    "a passive vertical transit has non-negative delay; no "
+                    "upper bound was established")
+            else:
+                knowledge = claim.INTERVAL
+                quantity = {"lower": 0.0,
+                            "upper": self.via_treatment.max_delay_ps}
+                omission["upper_bound_ps"] = self.via_treatment.max_delay_ps
+                basis = claim.knowledge_basis(
+                    claim.ASSUMED,
+                    "the manifest supplies a sourced maximum for omitted via "
+                    "delay")
+            record["claim"] = claim.claim(
+                "traversal", "{}->{}".format(record["from_layer"],
+                                               record["to_layer"]),
+                "ps", knowledge, quantity,
+                claim.evidence(
+                    "propagation_delay", UNKNOWN_CONTRIBUTION, provenance,
+                    assumptions=assumptions,
+                    omitted_contributions=[omission]),
+                "vertical transit delay only; the policy deliberately omits "
+                "the transit", knowledge_basis=basis)
             return record
         if span is None:
             raise Unsupported(
@@ -900,15 +895,26 @@ class PropagationModel:
         # stub effects are not modelled here at all - not as zero, but as
         # outside what this calculation describes.
         record["unmodelled_stub"] = _stub_extent(record)
-        record["fidelity"] = self.via_treatment.fidelity
-        record["exact"] = True
-        record["delay_ps"] = round(
+        delay = round(
             span["length_mm"] * math.sqrt(span["epsilon_r"]) / C_MM_PER_PS, 6)
         record["note"] = self.via_treatment.note()
         record["models"] = ("delay of the actively traversed barrel span "
                             "only, as a first-order line in the surrounding "
                             "dielectric; stub resonance, inductance and "
                             "broadband behaviour are outside this model")
+        record["claim"] = claim.claim(
+            "traversal", "{}->{}".format(record["from_layer"],
+                                           record["to_layer"]),
+            "ps", claim.EXACT, {"value": delay},
+            claim.evidence(
+                "propagation_delay", ANALYTIC_TRANSMISSION_LINE,
+                {"source": self.stackup.source,
+                 "model": self.via_treatment.model}),
+            "first-order delay of the actively traversed barrel span only",
+            knowledge_basis=claim.knowledge_basis(
+                claim.DERIVED,
+                "barrel span and dielectric permittivity are taken from the "
+                "physical stackup"))
         return record
 
     def _vertical_mm(self, from_layer, to_layer):
@@ -1081,14 +1087,11 @@ class PropagationModel:
             because the stackup does not support it or because the board asked
             for a model this release does not implement.
 
-        `delay_ps` is None in the third case. Otherwise the truth is bracketed
-        by `delay_lower_ps` and `delay_upper_ps`: the nominal total shifted
-        down by the geometric length uncertainty, and up by that uncertainty
-        plus every bounded omission. `delay_upper_ps` is None the moment one
-        omission is unbounded, because an upper bound with an unbounded term
-        in it is not an upper bound. Gates decide against the interval - a
-        FAIL needs the lower endpoint over the limit, a PASS needs the upper
-        one within it, and anything between is undecidable rather than met.
+        The shared path claim is UNKNOWN in the third case. Otherwise it is an
+        exact value, a finite interval, or a lower bound: the modelled total is
+        shifted down by geometric uncertainty and up by that uncertainty plus
+        every bounded omission. One unbounded omission removes the upper end.
+        Gates attach requirements and use the shared conservative verdict.
         """
         record = {
             "path": resolved_path.id,
@@ -1104,7 +1107,6 @@ class PropagationModel:
             "via_delay_model": self.via_model,
             "via_policy": self.via_treatment.to_dict(),
             "reference_discontinuity": self.discontinuity.to_dict(),
-            "backend": self.backend,
             # Summed across steps because each step's figure is already a sum
             # over the distinct junctions that step crossed, and no junction
             # can be crossed by two steps of one path: steps are on different
@@ -1117,7 +1119,7 @@ class PropagationModel:
                 for s in getattr(resolved_path, "steps", ())),
         }
         total = 0.0
-        fidelities = set()
+        evidence_classes = set()
         exact = True
         # What the omissions could add up to. `None` the moment one omission
         # is unbounded, because an upper bound with an unbounded term in it is
@@ -1149,10 +1151,10 @@ class PropagationModel:
                 record.setdefault("assumptions", []).append(assumed)
                 # A value that stands on a declared assumption must never read
                 # as one whose geometry was physically established.
-                fidelities.add(ASSUMED_TRANSMISSION_LINE)
+                evidence_classes.add(ASSUMED_TRANSMISSION_LINE)
             delay = conductor["length_mm"] * model["ps_per_mm"]
             total += delay
-            fidelities.add(model["fidelity"])
+            evidence_classes.add(model["evidence_class"])
             worst_ps_per_mm = max(worst_ps_per_mm, model["ps_per_mm"])
             record["conductors"].append({**conductor, **model,
                                          "delay_ps": round(delay, 6)})
@@ -1167,16 +1169,21 @@ class PropagationModel:
                                     transition.get("to_layer")],
                     "issue": str(exc)})
                 continue
-            total += via.get("delay_ps") or 0.0
-            if via.get("fidelity"):
-                fidelities.add(via["fidelity"])
-            if via.get("exact") is False:
+            via_claim = via["claim"]
+            lower, upper = claim.bounds(via_claim)
+            contribution = (via_claim["quantity"].get("value")
+                            if via_claim["knowledge"] == claim.EXACT
+                            else (lower or 0.0))
+            total += contribution
+            evidence_class = via_claim["evidence"]["evidence_class"]
+            if evidence_class:
+                evidence_classes.add(evidence_class)
+            if via_claim["knowledge"] != claim.EXACT:
                 exact = False
-                bound = self.via_treatment.omitted_bound_ps
-                if bound is None:
+                if upper is None:
                     omissions_bounded = False
                 else:
-                    omitted += bound
+                    omitted += max(0.0, upper - contribution)
             if via.get("unmodelled_stub"):
                 record["unmodelled_via_stubs"] = record.get(
                     "unmodelled_via_stubs", 0) + 1
@@ -1194,26 +1201,35 @@ class PropagationModel:
             entry = {"reference": traversal["reference"],
                      "from_net": traversal["from_net"],
                      "to_net": traversal["to_net"],
-                     **contribution.to_dict()}
+                     "claim": contribution}
             record["component_traversals"].append(entry)
-            if not contribution.evaluable:
+            status = contribution["evidence"]["applicability"]["status"]
+            if status != claim.APPLICABLE:
                 record["insufficient"].append({
                     "portion": "component",
                     "reference": traversal["reference"],
-                    "issue": contribution.reason})
+                    "issue": contribution["evidence"]["applicability"][
+                        "detail"]})
                 continue
-            total += contribution.delay_ps or 0.0
-            fidelities.add(contribution.fidelity)
-            if not contribution.exact:
+            lower, upper = claim.bounds(contribution)
+            value = (contribution["quantity"].get("value")
+                     if contribution["knowledge"] == claim.EXACT
+                     else (lower or 0.0))
+            total += value
+            evidence_class = contribution["evidence"]["evidence_class"]
+            if evidence_class:
+                evidence_classes.add(evidence_class)
+            if contribution["knowledge"] != claim.EXACT:
                 exact = False
-                bound = contribution.omitted_bound_ps
-                if bound is None:
+                if upper is None:
                     omissions_bounded = False
                 else:
-                    omitted += bound
+                    omitted += max(0.0, upper - value)
 
-        unmodelled = [t["reference"] for t in record["component_traversals"]
-                      if t["model_status"] == "unmodelled"]
+        unmodelled = [
+            t["reference"] for t in record["component_traversals"]
+            if t["claim"]["evidence"]["applicability"]["status"] ==
+            claim.APPLICABLE and t["claim"]["knowledge"] != claim.EXACT]
         if unmodelled:
             record["unmodelled_component_delay"] = unmodelled
 
@@ -1228,29 +1244,38 @@ class PropagationModel:
                 for gap in use["covered_gaps"]), 4)
 
         if record["insufficient"]:
-            record["delay_ps"] = None
-            record["delay_lower_ps"] = None
-            record["delay_upper_ps"] = None
-            record["omitted_bound_ps"] = None
+            record["modelled_delay_ps"] = None
             record["geometric_uncertainty_ps"] = None
-            record["delay_is_lower_bound"] = False
-            record["fidelity"] = GEOMETRY_ONLY
+            record["claim"] = claim.claim(
+                "path", resolved_path.id, "ps", claim.UNKNOWN, {},
+                claim.evidence(
+                    "propagation_delay", None,
+                    {"source": self.stackup.source, "model": self.model},
+                    applicability={
+                        "status": claim.UNSUPPORTED,
+                        "detail": "one or more path portions are outside the "
+                                  "implemented propagation models"}),
+                "no propagation-delay conclusion is available")
             return record
 
         if not record["conductors"] and not record["vias"]:
             # No copper was modelled, so a total of zero would be a number
             # standing where a measurement never happened.
-            record["delay_ps"] = None
-            record["delay_lower_ps"] = None
-            record["delay_upper_ps"] = None
-            record["omitted_bound_ps"] = None
+            record["modelled_delay_ps"] = None
             record["geometric_uncertainty_ps"] = None
-            record["delay_is_lower_bound"] = False
-            record["fidelity"] = GEOMETRY_ONLY
             record["insufficient"].append({
                 "portion": "path",
                 "issue": "no conductor or via contributed a delay, so there is "
                          "no propagation result to report"})
+            record["claim"] = claim.claim(
+                "path", resolved_path.id, "ps", claim.UNKNOWN, {},
+                claim.evidence(
+                    "propagation_delay", None,
+                    {"source": self.stackup.source, "model": self.model},
+                    applicability={
+                        "status": claim.UNSUPPORTED,
+                        "detail": "no conductor or via produced a delay"}),
+                "no propagation-delay conclusion is available")
             return record
 
         # The geometric length uncertainty, converted at the fastest velocity
@@ -1259,21 +1284,46 @@ class PropagationModel:
         # the delay itself was computed with, applied to the same millimetres.
         u_ps = round(record["length_uncertainty_mm"] * worst_ps_per_mm, 6)
         record["geometric_uncertainty_ps"] = u_ps
-        record["delay_ps"] = round(total, 6)
+        record["modelled_delay_ps"] = round(total, 6)
         # The interval bracketing the truth. Lower: the copper could be up to
         # the geometric uncertainty shorter than the nominal walk. Upper: up
         # to that much longer, plus everything omitted, when every omission
         # was bounded. Equal to each other exactly when nothing was omitted
         # and no junction was ambiguous, which is what keeps a clean path
         # decidable in the ordinary way without a special case.
-        record["delay_lower_ps"] = round(max(0.0, total - u_ps), 6)
-        record["delay_is_lower_bound"] = not exact
-        record["delay_upper_ps"] = (
+        lower = round(max(0.0, total - u_ps), 6)
+        upper = (
             round(total + omitted + u_ps, 6)
             if (exact or omissions_bounded) else None)
-        record["omitted_bound_ps"] = (round(omitted, 6)
-                                      if omissions_bounded else None)
-        record["fidelity"] = weakest(fidelities)
+        if exact and lower == upper:
+            knowledge, quantity = claim.EXACT, {"value": lower}
+        elif upper is None:
+            knowledge, quantity = claim.LOWER_BOUND, {"value": lower}
+        else:
+            knowledge, quantity = claim.INTERVAL, {
+                "lower": lower, "upper": upper}
+        assumptions = []
+        for declared in record.get("assumptions") or []:
+            assumptions.append({
+                **declared,
+                "detail": declared.get("detail") or declared.get("reason") or
+                          "declared reference-continuity assumption"})
+        omitted_contributions = []
+        for part in record["vias"] + record["component_traversals"]:
+            nested = part["claim"]
+            omitted_contributions.extend(
+                nested["evidence"]["omitted_contributions"])
+        record["claim"] = claim.claim(
+            "path", resolved_path.id, "ps", knowledge, quantity,
+            claim.evidence(
+                "propagation_delay",
+                weakest_evidence_class(evidence_classes),
+                {"source": self.stackup.source, "model": self.model},
+                assumptions=assumptions,
+                omitted_contributions=omitted_contributions),
+            "passive interconnect propagation delay for this declared path",
+            knowledge_basis=claim.knowledge_basis(
+                claim.DERIVED,
+                "the path interval is mechanically composed from conductor, "
+                "via, component and geometric-uncertainty claims"))
         return record
-
-

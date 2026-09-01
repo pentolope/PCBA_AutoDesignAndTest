@@ -62,8 +62,8 @@ offset closed form. IPC-2141A's 4.2.5 correction form remains
 accuracy-bounded usefully only near 50 ohm per the literature, and
 Wadell's fuller treatment remains unheld. Conclusion recorded: the
 honest path to asymmetric-stripline support is a numerically
-validated field-solver backend entering through the simulation
-fidelity contract, not a transcribed closed form; until then the
+validated field model producing a shared evidence claim, not a
+transcribed closed form; until then the
 topology refuses.
 
 What a result does NOT claim: reference-plane continuity (the named

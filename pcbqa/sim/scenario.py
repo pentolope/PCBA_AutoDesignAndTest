@@ -21,7 +21,8 @@ fix.
 
 from __future__ import annotations
 
-from .fidelity import SimulationError, validate_requirement
+from .. import claim
+from .model_registry import SimulationError, validate_requirement
 
 #: The reference node. Contribution closure does not propagate
 #: through it: two subcircuits that share only the reference are
@@ -51,8 +52,7 @@ _ELEMENT_KEYS = {
 _ANALYSIS_KEYS = {"op": {"kind"},
                   "tran": {"kind", "step_s", "stop_s"}}
 
-_MEASUREMENT_KEYS = {"name", "kind", "node", "assertion",
-                     "value_bound"}
+_MEASUREMENT_KEYS = {"name", "kind", "node", "assertion", "knowledge"}
 _MEASUREMENT_KINDS = ("op_voltage", "tran_final_voltage")
 
 _ASSERTION_KEYS = {"<=": {"op", "value"},
@@ -239,27 +239,16 @@ def validate_scenario(scenario):
             if assertion["op"] == "within":
                 _finite("assertion tolerance", assertion["tolerance"],
                         strict_minimum=0.0)
-        bound = measurement.get("value_bound")
-        if bound is not None:
-            _require(isinstance(bound, dict)
-                     and set(bound) == {"direction", "reason",
-                                        "established_by"},
-                     "value_bound carries exactly direction, "
-                     "reason and established_by")
-            _require(bound["direction"] in ("upper", "lower",
-                                            "exact"),
-                     "value_bound.direction must be upper, lower "
-                     "or exact")
-            _require(isinstance(bound["reason"], str)
-                     and bound["reason"],
-                     "value_bound.reason must be a nonempty "
-                     "string")
-            _require(bound["established_by"] in ("derived",
-                                                 "assumed"),
-                     "value_bound.established_by must be "
-                     "'derived' (mechanically re-verifiable) or "
-                     "'assumed' (an explicit assumption, never "
-                     "theorem-level provenance)")
+        knowledge = measurement.get("knowledge")
+        if knowledge is not None:
+            try:
+                claim.validate_knowledge_declaration(knowledge)
+            except claim.ClaimError as exc:
+                raise SimulationError(str(exc)) from exc
+            _require(knowledge["kind"] != claim.INTERVAL,
+                     "measurement {!r} declares interval knowledge, but a "
+                     "simulator measurement produces one value rather than "
+                     "interval endpoints".format(name))
 
     conditions = scenario.get("operating_conditions")
     if conditions is not None:
@@ -311,19 +300,8 @@ def referenced_models(scenario):
                    if element["kind"] == "model_instance"})
 
 
-def check_assertion(assertion, value):
-    """Evaluate one assertion against a measured value."""
-    if assertion is None:
-        return None
-    if assertion["op"] == "<=":
-        return value <= assertion["value"]
-    if assertion["op"] == ">=":
-        return value >= assertion["value"]
-    return abs(value - assertion["value"]) <= assertion["tolerance"]
-
-
-def derive_value_bound(sim_scenario, measurement, registry):
-    """Mechanical bound direction for SUPPORTED monotonic
+def derive_measurement_knowledge(sim_scenario, measurement, registry):
+    """Mechanical measurement knowledge for supported monotonic
     templates; None wherever the circuit is not one of them.
 
     Supported today: the series divider -
@@ -372,73 +350,35 @@ def derive_value_bound(sim_scenario, measurement, registry):
     if load["kind"] != "resistor" or load.get("value", 0) <= 0:
         return None
     if series["kind"] == "resistor":
-        declared = "exact" if series.get("value", 0) > 0 else None
+        resistance_knowledge = (claim.EXACT
+                                if series.get("value", 0) > 0 else None)
     elif series["kind"] == "model_instance":
         record = registry.get(series["model"])
         derivation = record.get("derivation") or {}
-        declared = (derivation.get("path")
-                    or {}).get("resistance_bound") \
-            or derivation.get("resistance_bound")
+        resistance_claim = derivation.get("resistance_claim")
+        if resistance_claim is None:
+            return None
+        try:
+            claim.validate(resistance_claim)
+        except claim.ClaimError:
+            return None
+        resistance_knowledge = resistance_claim["knowledge"]
     else:
         return None
-    direction = {"lower": "upper", "upper": "lower",
-                 "exact": "exact"}.get(declared)
-    if direction is None:
+    measurement_knowledge = {
+        claim.LOWER_BOUND: claim.UPPER_BOUND,
+        claim.UPPER_BOUND: claim.LOWER_BOUND,
+        claim.EXACT: claim.EXACT,
+    }.get(resistance_knowledge)
+    if measurement_knowledge is None:
         return None
-    return {
-        "direction": direction,
-        "reason": "mechanically derived: series-divider template - "
-                  "the load voltage is monotonically decreasing in "
-                  "the series resistance, whose declared bound is "
-                  "{!r}".format(declared),
-        "established_by": "derived",
-    }
-
-
-def classify_assertion(assertion, value, value_bound=None):
-    """What may be CLAIMED from a measured value under its declared
-    bound direction.
-
-    A value produced by a model that omitted positive physics is a
-    BOUND, not a truth. The omission's optimistic direction can
-    never manufacture a PASS - that side reads 'unresolved' - while
-    the pessimistic direction still concludes: a value that fails
-    its assertion despite being flattered by the omission has truly
-    failed (conservative-FAIL). The asymmetry is structural; no
-    caller choice can produce an exact PASS from a bound.
-    """
-    passed = check_assertion(assertion, value)
-    if passed is None:
-        return None
-    direction = "exact" if value_bound is None \
-        else value_bound["direction"]
-    if direction == "exact":
-        return "exact-PASS" if passed else "exact-FAIL"
-    op = assertion["op"]
-    if op == ">=":
-        if passed:
-            return "conservative-PASS" if direction == "lower" \
-                else "unresolved"
-        return "conservative-FAIL" if direction == "upper" \
-            else "unresolved"
-    if op == "<=":
-        if passed:
-            return "conservative-PASS" if direction == "upper" \
-                else "unresolved"
-        return "conservative-FAIL" if direction == "lower" \
-            else "unresolved"
-    # "within": a bounded value can never confirm the interval;
-    # failing is conclusive only when the bound points away from
-    # the interval entirely.
-    if passed:
-        return "unresolved"
-    if direction == "upper" and value < (assertion["value"]
-                                         - assertion["tolerance"]):
-        return "conservative-FAIL"
-    if direction == "lower" and value > (assertion["value"]
-                                         + assertion["tolerance"]):
-        return "conservative-FAIL"
-    return "unresolved"
+    basis = None if measurement_knowledge == claim.EXACT else \
+        claim.knowledge_basis(
+            claim.DERIVED,
+            "series-divider voltage is monotonically decreasing in series "
+            "resistance; resistance knowledge is {!r}".format(
+                resistance_knowledge))
+    return claim.knowledge_declaration(measurement_knowledge, basis)
 
 
 def measurement_contributors(scenario, measurement):
@@ -523,24 +463,28 @@ def contributor_coverage_report(registry, scenario):
                 not_applicable = []
                 unaccounted = []
                 for name, model in sorted(models.items()):
-                    disposition = model["coverage"].get(phenomenon)
-                    if disposition is None:
+                    facts = {fact["phenomenon"]: fact
+                             for fact in model["evidence"]}
+                    fact = facts.get(phenomenon)
+                    if fact is None:
                         # Silence is not irrelevance: a contributor
                         # that does not account for a required
                         # phenomenon blocks, exactly like one that
                         # covers it badly.
                         unaccounted.append(name)
-                    elif disposition == "not-applicable":
+                    elif fact["applicability"]["status"] == \
+                            claim.NOT_APPLICABLE:
                         not_applicable.append(name)
-                    elif disposition == "unsupported":
+                    elif fact["applicability"]["status"] == claim.UNSUPPORTED:
                         violating.append(name)
                     else:
+                        evidence_class = fact["evidence_class"]
                         providers[name] = {
                             "identity": model["identity"],
-                            "evidence_class": disposition,
-                            "accepted": disposition in accepted,
+                            "evidence": fact,
+                            "accepted": evidence_class in accepted,
                         }
-                        if disposition not in accepted:
+                        if evidence_class not in accepted:
                             violating.append(name)
                 met = bool(providers) and not violating \
                     and not unaccounted

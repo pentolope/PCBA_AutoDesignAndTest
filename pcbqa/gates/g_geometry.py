@@ -129,7 +129,7 @@ def _clearance_gate(ctx, res, limit_key, label):
     offenders = []
     for row in rows:
         worst = _worst(row, metric)
-        if worst is not None and worst < limit:
+        if worst is not None and constraint.violated_minimum(worst):
             side = min(row["sides"].items(),
                        key=lambda kv: kv[1].get(metric, 9e9))
             offenders.append({
@@ -298,12 +298,13 @@ def _joins(segs):
 @gate("ROUTE.ANGLE_STYLE", "Routing obeys the permitted angle style",
       requires=("routing.permitted_turn_degrees",))
 def route_angles(ctx, res):
-    permitted = res.limit(ctx.manifest.constraint(
+    permitted_constraint = res.limit(ctx.manifest.constraint(
         "routing.permitted_turn_degrees", units="deg",
-        cid="routing.permitted_turn_degrees")).value
-    tol = res.limit(ctx.manifest.constraint(
+        cid="routing.permitted_turn_degrees"))
+    permitted = permitted_constraint.value
+    tolerance = res.limit(ctx.manifest.constraint(
         "routing.angle_tolerance_deg", units="deg",
-        cid="routing.angle_tolerance_deg")).value
+        cid="routing.angle_tolerance_deg"))
     board, segs, _ = _track_graph(ctx)
     off = []
     for (k, pt), grp in _joins(segs).items():
@@ -320,7 +321,7 @@ def route_angles(ctx, res):
             continue
         cos = max(-1.0, min(1.0, (ax * bx + ay * by) / (na * nb)))
         turn = 180.0 - math.degrees(math.acos(cos))
-        if not any(abs(turn - p) <= tol for p in permitted):
+        if not any(tolerance.within(turn, p) for p in permitted):
             off.append({"net": grp[0].GetNetname(),
                         "layer": board.GetLayerName(grp[0].GetLayer()),
                         "x_mm": round(pt[0] / 1e6, 3), "y_mm": round(-pt[1] / 1e6, 3),
@@ -330,9 +331,11 @@ def route_angles(ctx, res):
     res.measurements["off_style_corners"] = len(off)
     widest = max(permitted)
     res.measurements["off_style_sharper_than_permitted_max"] = sum(
-        1 for o in off if o["turn_deg"] > widest + tol)
+        1 for o in off
+        if tolerance.violated_maximum(o["turn_deg"] - widest))
     res.measurements["off_style_between_permitted_values"] = sum(
-        1 for o in off if o["turn_deg"] <= widest + tol)
+        1 for o in off
+        if not tolerance.violated_maximum(o["turn_deg"] - widest))
     for o in sorted(off, key=lambda d: -d["turn_deg"])[:60]:
         res.finding(**o)
     if off:
@@ -344,8 +347,9 @@ def route_angles(ctx, res):
 @gate("ROUTE.TINY_SEGMENTS", "No unjustified sub-minimum track fragments",
       requires=("routing.min_segment_mm",))
 def route_tiny(ctx, res):
-    limit = res.limit(ctx.manifest.constraint(
-        "routing.min_segment_mm", units="mm", cid="routing.min_segment_mm")).value
+    constraint = res.limit(ctx.manifest.constraint(
+        "routing.min_segment_mm", units="mm", cid="routing.min_segment_mm"))
+    limit = constraint.value
     justify = ctx.manifest.get("routing.short_segment_justification", {})
     board, segs, vias = _track_graph(ctx)
     via_pts = {(v.GetPosition().x, v.GetPosition().y) for v in vias}
@@ -356,7 +360,7 @@ def route_tiny(ctx, res):
     unjustified, justified = [], 0
     for t in segs:
         length = t.GetLength() / 1e6
-        if length >= limit:
+        if not constraint.violated_minimum(length):
             continue
         # A short fragment is legitimate when it is an entry stub into a pad or
         # via: one of its ends lands on one. Anything else is an artifact.

@@ -126,8 +126,8 @@ def _cmd_refresh(arguments, store):
     result, problem = _acquire.acquire(timeout=arguments.timeout)
     raw = result.pop("raw")
 
-    # Written in the committed layout, so adopting a reviewed refresh is a
-    # copy and a commit rather than a state transition.
+    # Written in the committed layout, so the reviewed result can replace the
+    # committed catalog/evidence set exactly before it is committed.
     write_catalog(out, result, raw)
     print("acquisition: {} ({})".format(result["outcome"], out))
 
@@ -164,9 +164,10 @@ def _cmd_refresh(arguments, store):
         print("  " + json.dumps(change, sort_keys=True))
     if len(changes) > 40:
         print("  ... {} more".format(len(changes) - 40))
-    print("Review them. To adopt: copy {} over profiles/jlcpcb/catalog and "
-          "commit. The commit is the approval, and `git log` is the record "
-          "of it.".format(os.path.join(out, "catalog")))
+    print("Review them. To adopt: replace profiles/jlcpcb/catalog with {} "
+          "as a whole (do not merge evidence directories), then commit. "
+          "The commit is the approval, and `git log` is the record of it."
+          .format(os.path.join(out, "catalog")))
     return 0
 
 

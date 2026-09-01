@@ -43,6 +43,30 @@ from __future__ import annotations
 import hashlib
 import json
 
+from . import claim
+
+
+def _simulation_model_evidence(provenance, assumptions=(), omissions=()):
+    """Phenomenon-specific model facts in the shared evidence shape."""
+    facts = [claim.evidence(
+        "interconnect_dc", "geometry-derived", provenance,
+        assumptions=assumptions, omitted_contributions=omissions)]
+    for phenomenon in ("interconnect_si", "power_integrity"):
+        facts.append(claim.evidence(
+            phenomenon, None, provenance,
+            applicability={
+                "status": claim.UNSUPPORTED,
+                "detail": "the phenomenon applies to copper but this DC "
+                          "extraction does not model it"}))
+    for phenomenon in ("functional_behavior", "device_electrical",
+                       "digital_io"):
+        facts.append(claim.evidence(
+            phenomenon, None, provenance,
+            applicability={
+                "status": claim.NOT_APPLICABLE,
+                "detail": "the phenomenon does not arise for passive copper"}))
+    return facts
+
 #: The extraction contract version: recorded in every baseline and
 #: in every derived simulation model, so a consumer can tell which
 #: semantics produced a number.
@@ -656,14 +680,45 @@ def path_resistance(board, net_name, from_pad, to_pad,
     # ambiguity: the ambiguous millimetres priced at the most
     # resistive traversed cross-section.
     resistance_uncertainty = round(uncertainty * max_r_per_mm, 9)
+    meaning = ("series DC resistance over the traced copper traversal "
+               "between the two named pads; stubs the current never crosses "
+               "are excluded, and any alternate copper path refuses this "
+               "model entirely")
+    omissions = ([{"detail": "via barrel resistance is omitted; no supported "
+                   "model covers the {} traversed via(s)".format(via_count)}]
+                 if via_count else [])
+    resistance = round(resistance, 9)
     if resistance_uncertainty > 0:
         # The junction ambiguity is symmetric, so the value is not
         # a one-sided bound in either direction, vias or not.
-        bound = "uncertain"
+        knowledge = claim.APPROXIMATE
+        assumptions = [
+            "junction-span ambiguity is symmetric and equals {} ohm at the "
+            "most resistive traversed cross-section".format(
+                resistance_uncertainty)]
     elif via_count:
-        bound = "lower"
+        knowledge = claim.LOWER_BOUND
+        assumptions = []
     else:
-        bound = "exact"
+        knowledge = claim.EXACT
+        assumptions = []
+    resistance_claim = claim.claim(
+        "path", "{}:{}->{}".format(net_name, from_pad, to_pad),
+        "ohm", knowledge, {"value": resistance},
+        claim.evidence(
+            "interconnect_dc", "geometry-derived",
+            {"source": "pcbqa.extract path-scoped traversal",
+             "resistivity_source": (
+                 "IEC 60028 international annealed copper standard, 20 C"
+                 if resistivity_ohm_m == IACS_RESISTIVITY_OHM_M
+                 else "caller-supplied")},
+            assumptions=assumptions,
+            omitted_contributions=omissions),
+        meaning,
+        knowledge_basis=claim.knowledge_basis(
+            claim.DERIVED,
+            "copper geometry and sourced physical parameters determine the "
+            "modelled resistance and its knowledge shape"))
     return {
         "kind": "path-scoped-dc",
         "net": net_name,
@@ -673,8 +728,7 @@ def path_resistance(board, net_name, from_pad, to_pad,
         "length_uncertainty_mm": uncertainty,
         "length_by_layer_mm": dict(sorted(per_layer_mm.items())),
         "via_count_in_path": via_count,
-        "resistance_ohm": round(resistance, 9),
-        "resistance_bound": bound,
+        "resistance_claim": resistance_claim,
         "resistance_uncertainty_ohm": resistance_uncertainty,
         "resistivity_ohm_m": resistivity_ohm_m,
         "resistivity_source": "IEC 60028 international annealed "
@@ -682,19 +736,7 @@ def path_resistance(board, net_name, from_pad, to_pad,
                               if resistivity_ohm_m
                               == IACS_RESISTIVITY_OHM_M
                               else "caller-supplied",
-        "omissions": ["via barrel resistance (no supported model; "
-                      "{} via(s) traversed contribute zero)".format(
-                          via_count)],
-        "meaning": "series DC resistance over the traced copper "
-                   "traversal between the two named pads; stubs the "
-                   "current never crosses are excluded, and any "
-                   "alternate copper path refuses this model "
-                   "entirely; resistance_bound is 'lower' when "
-                   "omitted positive contributions (via barrels) "
-                   "are the only deviation, 'exact' when there is "
-                   "none, and 'uncertain' when the junction-span "
-                   "ambiguity is nonzero - a symmetric uncertainty "
-                   "is never passed off as a one-sided bound",
+        "meaning": meaning,
     }
 
 
@@ -738,22 +780,25 @@ def interconnect_model_from_path(path_record, board_sha256,
                  "and alternate copper paths refused during "
                  "extraction".format(path_record["from_pad"],
                                      path_record["to_pad"]))
+    provenance = {
+        "source": "pcbqa.extract path-scoped traversal",
+        "board_file_sha256": board_sha256,
+        "resistivity_source": path_record["resistivity_source"],
+        "two_terminal_asserted_by": assertion,
+    }
+    resistance_claim = path_record["resistance_claim"]
+    try:
+        claim.validate(resistance_claim)
+    except claim.ClaimError as exc:
+        raise ExtractionError("path resistance claim is invalid: {}".format(
+            exc)) from exc
+    omissions = resistance_claim["evidence"]["omitted_contributions"]
+    resistance = resistance_claim["quantity"]["value"]
     record = {
         "identity": identity,
         "kind": "board-interconnect-path",
-        "coverage": {"interconnect_dc": "geometry-derived",
-                     "interconnect_si": "unsupported",
-                     "power_integrity": "unsupported",
-                     "functional_behavior": "not-applicable",
-                     "device_electrical": "not-applicable",
-                     "digital_io": "not-applicable"},
-        "provenance": {
-            "source": "pcbqa.extract path-scoped traversal",
-            "board_file_sha256": board_sha256,
-            "resistivity_source":
-                path_record["resistivity_source"],
-            "two_terminal_asserted_by": assertion,
-        },
+        "evidence": _simulation_model_evidence(
+            provenance, [path_record["meaning"]], omissions),
         "derivation": {
             "chain": ["physical-parameters[{}]".format(
                           "+".join(root_types)),
@@ -776,21 +821,15 @@ def interconnect_model_from_path(path_record, board_sha256,
                      "length_mm": path_record["path_length_mm"],
                      "length_uncertainty_mm":
                          path_record["length_uncertainty_mm"],
-                     "via_count": path_record["via_count_in_path"],
-                     "resistance_bound":
-                         path_record["resistance_bound"]},
+                     "via_count": path_record["via_count_in_path"]},
+            "resistance_claim": resistance_claim,
             "two_terminal_assertion": assertion,
             "assumptions": [path_record["meaning"]],
         },
-        "omissions": list(path_record["omissions"]) + [
-            "inductance", "capacitance", "distributed effects",
-            "frequency dependence", "temperature dependence beyond "
-            "the stated resistivity reference"],
         "notes": [path_record["meaning"]],
         "spice": ".subckt {identity} a b\nR1 a b {value}\n"
                  ".ends".format(identity=identity,
-                                value=path_record[
-                                    "resistance_ohm"]),
+                                value=resistance),
     }
     if path_record["resistivity_ohm_m"] == IACS_RESISTIVITY_OHM_M:
         record["conditions"] = {
@@ -939,6 +978,31 @@ def interconnect_model_from_net(net_record, board_sha256,
         "physical-constant (IEC 60028)"
         if resistivity["value_ohm_m"] == IACS_RESISTIVITY_OHM_M
         else "caller-supplied")
+    provenance = {
+        "source": "pcbqa.extract segment inventory",
+        "board_file_sha256": board_sha256,
+        "resistivity_source": net_record["dc"]["resistivity_source"],
+    }
+    if two_terminal_asserted_by:
+        provenance["two_terminal_asserted_by"] = two_terminal_asserted_by
+    via_count = net_record["totals"]["via_count"]
+    dc_omissions = ([] if not via_count else [
+        "via barrel resistance ({} traversed via(s) contribute zero)".format(
+            via_count)])
+    resistance_knowledge = (claim.LOWER_BOUND if via_count else claim.EXACT)
+    resistance_claim = claim.claim(
+        "net", identity, "ohm", resistance_knowledge,
+        {"value": net_record["dc"]["segment_resistance_sum_ohm"]},
+        claim.evidence(
+            "interconnect_dc", "geometry-derived", provenance,
+            assumptions=[net_record["dc"]["meaning"]],
+            omitted_contributions=dc_omissions),
+        "sum of routed-segment DC resistance; a two-terminal model only when "
+        "the recorded construction assertion establishes that topology",
+        knowledge_basis=claim.knowledge_basis(
+            claim.DERIVED,
+            "copper geometry and sourced physical parameters determine the "
+            "segment-resistance sum"))
     derivation = {
         "chain": ["physical-parameters[{}]".format(
                       "+".join(root_types)),
@@ -952,42 +1016,16 @@ def interconnect_model_from_net(net_record, board_sha256,
         "copper_thickness_mm": copper,
         "board_thickness_mm": physical_inputs["board_thickness_mm"],
         "resistivity": resistivity,
-        # Same omission semantics as the path-scoped model: via
-        # barrels contribute zero, so any traversed via makes the
-        # resistance a lower bound; the scenario runner refuses an
-        # assertion fed by a non-exact bound without a declared
-        # value_bound.
-        "resistance_bound": (
-            "lower" if net_record["totals"]["via_count"]
-            else "exact"),
+        "resistance_claim": resistance_claim,
         "two_terminal_assertion": two_terminal_asserted_by,
         "assumptions": [net_record["dc"]["meaning"]],
     }
     record = {
         "identity": identity,
         "kind": "board-interconnect",
-        # Every phenomenon is explicitly accounted for: the DC
-        # inventory is covered, SI and PI are applicable to an
-        # interconnect but unsupported by this model, and the device
-        # phenomena do not arise for passive copper.
-        "coverage": {"interconnect_dc": "geometry-derived",
-                     "interconnect_si": "unsupported",
-                     "power_integrity": "unsupported",
-                     "functional_behavior": "not-applicable",
-                     "device_electrical": "not-applicable",
-                     "digital_io": "not-applicable"},
-        "provenance": {
-            "source": "pcbqa.extract segment inventory",
-            "board_file_sha256": board_sha256,
-            "resistivity_source":
-                net_record["dc"]["resistivity_source"],
-        },
+        "evidence": _simulation_model_evidence(
+            provenance, [net_record["dc"]["meaning"]], dc_omissions),
         "derivation": derivation,
-        "omissions": [
-            "inductance", "capacitance", "distributed effects",
-            "frequency dependence", "temperature dependence beyond "
-            "the stated resistivity reference",
-        ],
         "notes": [net_record["dc"]["meaning"]],
     }
     if resistivity["value_ohm_m"] == IACS_RESISTIVITY_OHM_M:
@@ -1001,8 +1039,6 @@ def interconnect_model_from_net(net_record, board_sha256,
             }
         }
     if two_terminal_asserted_by:
-        record["provenance"]["two_terminal_asserted_by"] = \
-            two_terminal_asserted_by
         record["spice"] = (
             ".subckt {identity} a b\n"
             "R1 a b {value}\n"

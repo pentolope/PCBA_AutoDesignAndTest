@@ -40,7 +40,7 @@ import hashlib
 import os
 import subprocess
 
-from .fidelity import SimulationError
+from .model_registry import SimulationError
 
 VERILATOR_BINARY = "verilator"
 

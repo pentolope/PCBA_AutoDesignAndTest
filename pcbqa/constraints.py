@@ -12,6 +12,8 @@ profile and are reported as such. They are never mixed in with process limits.
 
 from __future__ import annotations
 
+import math
+
 
 class ConstraintError(Exception):
     pass
@@ -51,19 +53,49 @@ class Constraint:
             "provenance": self.provenance,
         }
 
-    # Comparisons are expressed on the constraint so a gate never writes a
-    # bare numeric literal next to a measurement.
-    def exceeded_by(self, measured):
+    # Comparisons are expressed on the constraint so a gate never extracts a
+    # policy number and writes its own inequality beside a measurement.
+    def violated_maximum(self, measured):
         return measured > self.value
 
-    def under(self, measured):
+    def violated_minimum(self, measured):
         return measured < self.value
 
-    def not_equal(self, measured):
+    def differs(self, measured):
         return measured != self.value
+
+    def differs_by_more_than(self, measured, expected):
+        return abs(measured - expected) > self.value
+
+    def within(self, measured, expected):
+        return abs(measured - expected) <= self.value
+
+    def contains(self, measured, upper_inclusive=False):
+        try:
+            low, high = self.value
+        except (TypeError, ValueError) as exc:
+            raise ConstraintError(
+                "constraint {!r} is not a two-ended range".format(
+                    self.id)) from exc
+        return low <= measured <= high if upper_inclusive \
+            else low <= measured < high
 
     def __repr__(self):
         return f"<Constraint {self.id}={self.value}{self.units or ''}>"
+
+
+def implementation_constant(value, rationale):
+    """Mark a numeric algorithm constant as non-policy for source audit.
+
+    The returned object is deliberately just the original number: this is a
+    development-time declaration, not another runtime quantity system.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or \
+            not math.isfinite(float(value)):
+        raise ConstraintError("an implementation constant is finite numeric")
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise ConstraintError("an implementation constant needs a rationale")
+    return value
 
 
 class GeometryProfile:

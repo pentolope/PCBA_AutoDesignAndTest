@@ -1,10 +1,4 @@
-"""The shared evidence model, and that every producer reaches it.
-
-Five vocabularies said the same handful of things in different words. This
-checks the one that replaced them: the conservative verdict rule in full, the
-refusals that must survive, and an adapter from each producer - because a
-shared model nothing adapts into is a sixth vocabulary, not a unification.
-"""
+"""Behavioral tests for the shared evidence and numeric-claim contract."""
 
 from __future__ import annotations
 
@@ -16,188 +10,205 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from pcbqa import claim, parasitics                            # noqa: E402
-from pcbqa.claim import ClaimError                             # noqa: E402
+from pcbqa import claim, component_models                    # noqa: E402
+from pcbqa.claim import ClaimError                           # noqa: E402
 
 
-def _claim(**overrides):
-    base = dict(
-        phenomenon="propagation_delay", scope_level="path", identity="CLK/U1",
-        units="ps", knowledge=claim.EXACT, quantity={"value": 100.0},
-        evidence_class="analytic", provenance={"source": "a test"},
-        significance="for this test only")
-    base.update(overrides)
-    return claim.claim(**base)
+def _evidence(status=claim.APPLICABLE, evidence_class="analytic",
+              assumptions=(), omissions=()):
+    return claim.evidence(
+        "propagation_delay",
+        evidence_class if status == claim.APPLICABLE else None,
+        {"source": "test evidence"},
+        applicability={"status": status, "detail": "test applicability"},
+        assumptions=assumptions,
+        omitted_contributions=omissions)
 
 
-class TheVerdictIsConservative(unittest.TestCase):
-    """The rule every producer now shares, in full."""
+def _claim(knowledge=claim.EXACT, quantity=None, requirement=None,
+           status=claim.APPLICABLE, evidence_class="analytic",
+           assumptions=(), omissions=(), basis=None, units="ps",
+           significance="usable only for this contract test"):
+    if quantity is None:
+        quantity = {} if knowledge == claim.UNKNOWN else {"value": 5.0}
+    if basis is None and knowledge in (
+            claim.LOWER_BOUND, claim.UPPER_BOUND, claim.INTERVAL):
+        basis = claim.knowledge_basis(
+            claim.DERIVED, "the test derives this bound mechanically")
+    return claim.claim(
+        "path", "CLK/U1", units, knowledge, quantity,
+        _evidence(status, evidence_class, assumptions, omissions),
+        significance, knowledge_basis=basis, requirement=requirement)
 
-    def _verdict(self, knowledge, quantity, op, limit):
-        return claim.verdict(_claim(
-            knowledge=knowledge, quantity=quantity,
-            assumptions=["under test"] if knowledge == claim.APPROXIMATE
-            else [],
-            applicability={"applicable": knowledge != claim.UNKNOWN,
-                           "detail": ""},
-            requirement={"requirement": "R1", "source": "the test",
-                         "assertion": {"op": op, "value": limit}}))
 
-    def test_a_descriptive_claim_never_becomes_a_gate(self):
+def _require(op, value, tolerance=None):
+    assertion = {"op": op, "value": value}
+    if tolerance is not None:
+        assertion["tolerance"] = tolerance
+    return claim.requirement("R1", "test requirement", assertion)
+
+
+class VerdictsAreConservative(unittest.TestCase):
+
+    def _result(self, knowledge, quantity, op, limit, tolerance=None):
+        record = _claim(
+            knowledge, quantity,
+            requirement=_require(op, limit, tolerance),
+            assumptions=["declared approximation"]
+            if knowledge == claim.APPROXIMATE else [])
+        return claim.verdict(record)
+
+    def test_descriptive_claim_has_no_verdict(self):
         self.assertIsNone(claim.verdict(_claim()))
 
-    def test_exact_decides_both_ways(self):
-        self.assertEqual(self._verdict(claim.EXACT, {"value": 5.0}, "<=", 10),
-                         "PASS")
-        self.assertEqual(self._verdict(claim.EXACT, {"value": 15.0}, "<=", 10),
-                         "FAIL")
-        self.assertEqual(self._verdict(claim.EXACT, {"value": 15.0}, ">=", 10),
-                         "PASS")
+    def test_exact_results_preserve_exact_pass_and_fail(self):
+        passed = self._result(claim.EXACT, {"value": 5}, "<=", 10)
+        failed = self._result(claim.EXACT, {"value": 15}, "<=", 10)
+        self.assertEqual(passed["result"], claim.PASS)
+        self.assertTrue(passed["exact"])
+        self.assertEqual(passed["basis"], "exact")
+        self.assertEqual(failed["result"], claim.FAIL)
+        self.assertTrue(failed["exact"])
 
-    def test_an_upper_bound_decides_only_downwards(self):
-        self.assertEqual(
-            self._verdict(claim.UPPER_BOUND, {"value": 5.0}, "<=", 10), "PASS")
-        self.assertEqual(
-            self._verdict(claim.UPPER_BOUND, {"value": 15.0}, "<=", 10),
-            "UNKNOWN", "an upper bound above the limit proves nothing")
-        self.assertEqual(
-            self._verdict(claim.UPPER_BOUND, {"value": 5.0}, ">=", 10), "FAIL")
+    def test_upper_and_lower_bounds_only_conclude_conservatively(self):
+        cases = (
+            (claim.UPPER_BOUND, {"value": 5}, "<=", 10, claim.PASS),
+            (claim.UPPER_BOUND, {"value": 15}, "<=", 10,
+             claim.UNKNOWN_RESULT),
+            (claim.UPPER_BOUND, {"value": 5}, ">=", 10, claim.FAIL),
+            (claim.LOWER_BOUND, {"value": 15}, ">=", 10, claim.PASS),
+            (claim.LOWER_BOUND, {"value": 5}, ">=", 10,
+             claim.UNKNOWN_RESULT),
+            (claim.LOWER_BOUND, {"value": 15}, "<=", 10, claim.FAIL),
+        )
+        for knowledge, quantity, op, limit, expected in cases:
+            with self.subTest(knowledge=knowledge, op=op, limit=limit):
+                verdict = self._result(knowledge, quantity, op, limit)
+                self.assertEqual(verdict["result"], expected)
+                self.assertFalse(verdict["exact"])
+                self.assertEqual(verdict["basis"], "bound")
+                self.assertEqual(
+                    verdict["knowledge_basis"]["kind"], claim.DERIVED)
 
-    def test_a_lower_bound_decides_only_upwards(self):
-        self.assertEqual(
-            self._verdict(claim.LOWER_BOUND, {"value": 15.0}, ">=", 10),
-            "PASS")
-        self.assertEqual(
-            self._verdict(claim.LOWER_BOUND, {"value": 5.0}, ">=", 10),
-            "UNKNOWN")
-        self.assertEqual(
-            self._verdict(claim.LOWER_BOUND, {"value": 15.0}, "<=", 10),
-            "FAIL")
-
-    def test_an_interval_decides_only_when_it_decides_entirely(self):
+    def test_interval_and_within_require_the_whole_interval(self):
         span = {"lower": 4.0, "upper": 6.0}
-        self.assertEqual(self._verdict(claim.INTERVAL, span, "<=", 10), "PASS")
-        self.assertEqual(self._verdict(claim.INTERVAL, span, "<=", 5),
-                         "UNKNOWN", "a limit inside the interval is undecided")
-        self.assertEqual(self._verdict(claim.INTERVAL, span, "<=", 3), "FAIL")
+        self.assertEqual(
+            self._result(claim.INTERVAL, span, "<=", 10)["result"],
+            claim.PASS)
+        self.assertEqual(
+            self._result(claim.INTERVAL, span, "<=", 5)["result"],
+            claim.UNKNOWN_RESULT)
+        self.assertEqual(
+            self._result(claim.INTERVAL, span, "within", 5, 1)["result"],
+            claim.PASS)
+        self.assertEqual(
+            self._result(claim.INTERVAL, span, "within", 5, 0.5)["result"],
+            claim.UNKNOWN_RESULT)
 
-    def test_an_approximation_never_decides(self):
-        for op, limit in (("<=", 10), (">=", 10), ("<=", 0)):
-            self.assertEqual(
-                self._verdict(claim.APPROXIMATE, {"value": 5.0}, op, limit),
-                "UNKNOWN")
-
-    def test_an_unknown_never_decides(self):
-        self.assertEqual(self._verdict(claim.UNKNOWN, {}, "<=", 10), "UNKNOWN")
+    def test_approximate_and_unknown_never_manufacture_a_result(self):
+        approximate = self._result(
+            claim.APPROXIMATE, {"value": 5}, "<=", 10)
+        unknown = self._result(claim.UNKNOWN, {}, "<=", 10)
+        self.assertEqual(approximate["result"], claim.UNKNOWN_RESULT)
+        self.assertEqual(unknown["result"], claim.UNKNOWN_RESULT)
 
 
-class TheRefusalsSurvive(unittest.TestCase):
+class ClaimsRefuseOverstatement(unittest.TestCase):
 
-    def test_a_claim_without_units_refuses(self):
+    def test_units_source_and_significance_are_mandatory(self):
+        for change in (
+                lambda: _claim(units=""),
+                lambda: claim.claim(
+                    "path", "CLK/U1", "ps", claim.EXACT, {"value": 1},
+                    claim.evidence(
+                        "propagation_delay", "analytic", {"model": "x"}),
+                    "test"),
+                lambda: _claim(significance="")):
+            with self.subTest(change=change):
+                with self.assertRaises(ClaimError):
+                    change()
+
+    def test_exact_cannot_hide_an_omitted_contribution(self):
         with self.assertRaises(ClaimError):
-            _claim(units="")
+            _claim(omissions=["via barrels"])
 
-    def test_a_claim_without_a_source_refuses(self):
+    def test_approximate_must_state_what_qualifies_it(self):
         with self.assertRaises(ClaimError):
-            _claim(provenance={"model": "something"})
+            _claim(claim.APPROXIMATE, {"value": 1})
 
-    def test_a_claim_with_no_stated_significance_refuses(self):
+    def test_bounded_knowledge_states_derived_or_assumed_justification(self):
         with self.assertRaises(ClaimError):
-            _claim(significance="")
+            claim.claim(
+                "path", "CLK/U1", "ps", claim.UPPER_BOUND, {"value": 1},
+                _evidence(), "test", knowledge_basis=None)
+        assumed = _claim(
+            claim.UPPER_BOUND, {"value": 1},
+            basis=claim.knowledge_basis(claim.ASSUMED, "declared by owner"))
+        self.assertEqual(assumed["knowledge_basis"]["kind"], claim.ASSUMED)
 
-    def test_exact_with_an_omission_refuses(self):
+    def test_unsupported_and_not_applicable_are_distinct_and_numeric_unknown(self):
+        unsupported = _claim(claim.UNKNOWN, {}, status=claim.UNSUPPORTED)
+        outside_scope = _claim(
+            claim.UNKNOWN, {}, status=claim.NOT_APPLICABLE)
+        self.assertEqual(
+            unsupported["evidence"]["applicability"]["status"],
+            claim.UNSUPPORTED)
+        self.assertEqual(
+            outside_scope["evidence"]["applicability"]["status"],
+            claim.NOT_APPLICABLE)
         with self.assertRaises(ClaimError):
-            _claim(omitted_contributions=["via barrels"])
+            _claim(claim.EXACT, {"value": 1}, status=claim.UNSUPPORTED)
 
-    def test_an_unexplained_approximation_refuses(self):
-        with self.assertRaises(ClaimError):
-            _claim(knowledge=claim.APPROXIMATE, quantity={"value": 1.0})
+    def test_knowledge_shape_and_interval_order_validate(self):
+        for knowledge, quantity in (
+                (claim.INTERVAL, {"value": 1}),
+                (claim.EXACT, {"lower": 1, "upper": 2}),
+                (claim.UNKNOWN, {"value": 1}),
+                (claim.INTERVAL, {"lower": 9, "upper": 1})):
+            with self.subTest(knowledge=knowledge, quantity=quantity):
+                with self.assertRaises(ClaimError):
+                    _claim(knowledge, quantity)
 
-    def test_an_inapplicable_claim_must_know_nothing(self):
-        with self.assertRaises(ClaimError):
-            _claim(applicability={"applicable": False, "detail": "outside"})
-        self.assertTrue(_claim(
-            knowledge=claim.UNKNOWN, quantity={},
-            applicability={"applicable": False, "detail": "outside"}))
-
-    def test_the_wrong_value_fields_for_the_knowledge_kind_refuse(self):
-        with self.assertRaises(ClaimError):
-            _claim(knowledge=claim.INTERVAL, quantity={"value": 1.0})
-        with self.assertRaises(ClaimError):
-            _claim(knowledge=claim.EXACT,
-                   quantity={"lower": 1.0, "upper": 2.0})
-        with self.assertRaises(ClaimError):
-            _claim(knowledge=claim.UNKNOWN, quantity={"value": 1.0})
-
-    def test_an_inverted_interval_refuses(self):
-        with self.assertRaises(ClaimError):
-            _claim(knowledge=claim.INTERVAL,
-                   quantity={"lower": 9.0, "upper": 1.0})
-
-    def test_a_comparison_across_unmatched_evidence_refuses(self):
-        with self.assertRaises(ClaimError):
-            claim.require_comparable(_claim(),
-                                     _claim(evidence_class="measured"))
+    def test_comparability_requires_matching_physical_semantics(self):
+        self.assertTrue(claim.require_comparable(
+            _claim(), _claim(quantity={"value": 20})))
         with self.assertRaises(ClaimError):
             claim.require_comparable(_claim(), _claim(units="mm"))
-        self.assertTrue(claim.require_comparable(
-            _claim(), _claim(quantity={"value": 200.0})))
+        with self.assertRaises(ClaimError):
+            claim.require_comparable(
+                _claim(), _claim(evidence_class="measured"))
+        with self.assertRaises(ClaimError):
+            claim.require_comparable(
+                _claim(claim.UNKNOWN, {}, status=claim.UNSUPPORTED),
+                _claim(claim.UNKNOWN, {}, status=claim.NOT_APPLICABLE))
 
 
-class TheMigratedProducerReachesTheSharedModel(unittest.TestCase):
-    """The adapter must preserve everything its producer knew."""
+class ComponentModelsProduceSharedClaims(unittest.TestCase):
 
-    def test_a_parasitic_metric(self):
-        metric = {
-            "kind": "parasitic-metric", "phenomenon": "coupling",
-            "scope": {"level": "pair", "identity": "A||B"},
-            "quantity": {"semantics": "exact", "value": 3.0, "bound": None,
-                         "interval": None, "units": "mm"},
-            "model": {"name": "parallelism-inventory",
-                      "fidelity": "geometry-only"},
-            "provenance": {"source": "pcbqa.coupling_geometry"},
-            "assumptions": [], "omitted_contributions": [],
-            "applicability": {"applicable": True, "detail": "one layer"},
-            "requirement_linkage": None,
-            "decision_significance": "ranking only"}
-        parasitics.validate_metric(metric)
-        record = claim.from_parasitic_metric(metric)
+    def test_fixed_delay_is_exact_for_the_declared_model(self):
+        record = component_models.evaluate({
+            "model": "fixed_delay", "delay_ps": 42,
+            "provenance": "component data sheet"}, "U1.1->U1.2")
         self.assertEqual(record["knowledge"], claim.EXACT)
-        self.assertEqual(record["units"], "mm")
-        self.assertIsNone(claim.verdict(record))
+        self.assertEqual(record["quantity"], {"value": 42.0})
+        self.assertEqual(
+            record["evidence"]["phenomenon"], "propagation_delay")
+
+    def test_deliberate_omission_is_a_sourced_assumed_interval(self):
+        record = component_models.evaluate({
+            "model": "none", "justification": "bounded switch delay",
+            "max_delay_ps": 80, "provenance": "switch data sheet"}, "SW1")
+        self.assertEqual(record["knowledge"], claim.INTERVAL)
+        self.assertEqual(record["quantity"], {"lower": 0.0, "upper": 80.0})
+        self.assertEqual(record["knowledge_basis"]["kind"], claim.ASSUMED)
+
+    def test_unsupported_model_remains_unknown_and_unsupported(self):
+        record = component_models.evaluate({"model": "wavefront"}, "U2")
+        self.assertEqual(record["knowledge"], claim.UNKNOWN)
+        self.assertEqual(
+            record["evidence"]["applicability"]["status"],
+            claim.UNSUPPORTED)
 
 
-class OnlyMigratedProducersHaveAdapters(unittest.TestCase):
-    """An adapter no producer calls is reserved architecture.
-
-    This toolkit deleted a backend-dispatch package for exactly that reason in
-    the same pass. One producer is migrated, so there is one adapter; the next
-    adapter is written with the producer that uses it.
-    """
-
-    def test_there_is_an_adapter_for_every_production_caller(self):
-        adapters = {name for name in dir(claim) if name.startswith("from_")}
-        self.assertEqual(adapters, {"from_parasitic_metric"}, adapters)
-
-    def test_the_unmigrated_producers_are_named_honestly(self):
-        """The module says which producers still carry their own vocabulary."""
-        doc = " ".join(claim.__doc__.split())
-        self.assertIn("Only `pcbqa.parasitics` has been migrated", doc)
-        for producer in ("propagation", "component_models", "sim/fidelity",
-                         "sim/scenario"):
-            self.assertIn(producer, doc)
-
-
-class ThereIsOneVerdictImplementation(unittest.TestCase):
-
-    def test_parasitics_delegates_rather_than_repeating_it(self):
-        import inspect
-        source = inspect.getsource(parasitics.requirement_verdict)
-        self.assertIn("claim", source)
-        for repeated in ('"PASS"', '"FAIL"'):
-            self.assertNotIn(repeated, source,
-                             "the conservative rule is implemented twice")
-
-
-if __name__ == "__main__":
+if __name__ == "__main__":                    # pragma: no cover
     unittest.main()

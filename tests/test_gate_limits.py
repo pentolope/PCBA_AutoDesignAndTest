@@ -1,18 +1,15 @@
-"""Every limit a gate applies is a typed constraint traced to the manifest.
+"""Typed gate policy, checked as toolkit development behavior.
 
-This used to be a gate - a check that ran against a consumer's board to prove
-the toolkit's own programmers had used its API correctly, and that required
-every consuming board to carry a `constraint_parity` block to enable it. Three
-of the four defects it looked for are now unrepresentable: `GateResult.limit`
-refuses anything but a `Constraint`, `Manifest.constraint` takes the value from
-the key it names, and `Constraint` refuses to exist without units.
-
-What is left is a property of this repository's own source, so it is checked
-here, against every gate, on this repository's own fixtures.
+Runtime types ensure an applied limit has units and manifest provenance. A
+focused source audit checks that gate policy comparisons use the constraint API
+instead of bypassing it with raw numeric literals.
 """
 
 from __future__ import annotations
 
+import ast
+import glob
+import operator
 import os
 import sys
 import tempfile
@@ -24,15 +21,16 @@ if HERE not in sys.path:
 
 from tests import paths                                           # noqa: E402
 from pcbqa import core                                            # noqa: E402
-from pcbqa.constraints import Constraint, ConstraintError          # noqa: E402
+from pcbqa.constraints import (Constraint, ConstraintError,        # noqa: E402
+                               implementation_constant)
 from pcbqa.core import Context, GateResult, Manifest               # noqa: E402
 from pcbqa.gates import (g_provenance, g_checks, g_geometry,       # noqa: E402,F401
                          g_contracts, g_assembly, g_export_parity,
                          g_fabrication, g_orientation, g_timing)
 
 
-class TheApiRefusesAnUntypedLimit(unittest.TestCase):
-    """The three defects that no longer need detecting."""
+class TheConstraintApiIsTyped(unittest.TestCase):
+    """Applied limits and policy comparisons retain type and provenance."""
 
     def test_a_raw_value_is_not_a_limit(self):
         res = GateResult("T.EST", "t")
@@ -53,6 +51,30 @@ class TheApiRefusesAnUntypedLimit(unittest.TestCase):
                          manifest.get("routing.min_segment_mm"))
         with self.assertRaises(core.ManifestError):
             manifest.constraint("routing.no_such_key", units="mm")
+
+    def test_policy_comparisons_live_on_the_constraint(self):
+        constraint = Constraint(
+            "clearance", "routing.clearance_mm", 0.15, "mm",
+            "board.json", "0" * 64)
+        self.assertTrue(constraint.violated_minimum(0.14))
+        self.assertFalse(constraint.violated_minimum(0.15))
+        self.assertTrue(constraint.violated_maximum(0.16))
+        self.assertTrue(constraint.within(1.14, 1.0))
+        self.assertTrue(constraint.differs_by_more_than(1.16, 1.0))
+
+    def test_range_constraints_keep_their_boundary_semantics(self):
+        constraint = Constraint(
+            "angle", "orientation.range", [0.0, 360.0], "degrees",
+            "board.json", "0" * 64)
+        self.assertTrue(constraint.contains(0.0))
+        self.assertTrue(constraint.contains(359.999))
+        self.assertFalse(constraint.contains(360.0))
+
+    def test_implementation_constants_need_numeric_value_and_rationale(self):
+        self.assertEqual(implementation_constant(2, "two endpoints"), 2)
+        for value, rationale in ((True, "not numeric"), (2, "")):
+            with self.assertRaises(ConstraintError):
+                implementation_constant(value, rationale)
 
 
 class EveryLimitEveryGateAppliesIsTraceable(unittest.TestCase):
@@ -100,24 +122,160 @@ def _leaf(value):
     return round(value, 9) if isinstance(value, float) else value
 
 
-class TheParityGatesAreGone(unittest.TestCase):
-    """A board no longer configures the policing of toolkit implementation."""
+def _target_names(target):
+    if isinstance(target, ast.Name):
+        return {target.id}
+    names = set()
+    for child in ast.iter_child_nodes(target):
+        names.update(_target_names(child))
+    return names
 
-    def test_no_gate_scans_prose_or_python_for_toolkit_style(self):
-        registered = {entry["id"] for entry in core.registered()}
-        for gate_id in ("CFG.THRESHOLD_PARITY", "CFG.NO_RIVAL_THRESHOLDS",
-                        "PROV.SOURCE_AUTHORITY"):
-            self.assertNotIn(gate_id, registered)
 
-    def test_no_manifest_this_repository_ships_configures_them(self):
-        import json
-        for path in (paths.REVA_MANIFEST, paths.PORTABILITY_MANIFEST,
-                     paths.CLEAN_MANIFEST):
-            with open(path, encoding="utf-8") as fh:
-                doc = json.load(fh)
-            for key in ("source_authority", "constraint_parity"):
-                self.assertNotIn(key, doc, "{} still declares {}".format(
-                    os.path.basename(path), key))
+def _number(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) \
+            and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        value = _number(node.operand)
+        return -value if value is not None else None
+    if isinstance(node, ast.BinOp):
+        operations = {
+            ast.Add: operator.add, ast.Sub: operator.sub,
+            ast.Mult: operator.mul, ast.Div: operator.truediv,
+            ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
+            ast.Pow: operator.pow,
+        }
+        operation = operations.get(type(node.op))
+        left, right = _number(node.left), _number(node.right)
+        if operation is not None and left is not None and right is not None:
+            try:
+                value = operation(left, right)
+            except (ArithmeticError, OverflowError):
+                return None
+            return value if isinstance(value, (int, float)) else None
+    return None
+
+
+def _call_name(node):
+    if not isinstance(node, ast.Call):
+        return None
+    function = node.func
+    return function.id if isinstance(function, ast.Name) else \
+        function.attr if isinstance(function, ast.Attribute) else None
+
+
+class _PolicyComparisonAudit(ast.NodeVisitor):
+    """Ordered comparisons in gate code, deliberately not a Python linter."""
+
+    def __init__(self, source):
+        self.source = source
+        self.numeric_names = {}
+        self.implementation_names = set()
+        self.policy_names = set()
+        self.issues = []
+
+    def collect(self, tree):
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            targets = node.targets if isinstance(node, ast.Assign) \
+                else [node.target]
+            names = set().union(*(_target_names(target) for target in targets))
+            number = _number(value)
+            if number is not None:
+                for name in names:
+                    self.numeric_names[name] = number
+            if _call_name(value) == "implementation_constant":
+                self.implementation_names.update(names)
+            if any(isinstance(part, ast.Attribute) and part.attr == "value"
+                   for part in ast.walk(value)):
+                self.policy_names.update(names)
+            for call in (part for part in ast.walk(value)
+                         if isinstance(part, ast.Call)):
+                if isinstance(call.func, ast.Attribute) and \
+                        call.func.attr == "get" and any(
+                            isinstance(part, ast.Attribute) and
+                            part.attr == "manifest"
+                            for part in ast.walk(call.func.value)):
+                    self.policy_names.update(names)
+
+    @staticmethod
+    def _ordered(node):
+        return any(isinstance(op, (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
+                   for op in node.ops)
+
+    def visit_Compare(self, node):
+        if not self._ordered(node):
+            return self.generic_visit(node)
+        operands = [node.left] + list(node.comparators)
+        for operand in operands:
+            number = _number(operand)
+            if number not in (None, -1, 0, 1):
+                self.issues.append(
+                    (node.lineno, "literal numeric policy candidate {}".format(
+                        number)))
+            for part in ast.walk(operand):
+                if isinstance(part, ast.Attribute) and part.attr == "value":
+                    self.issues.append(
+                        (node.lineno, "ordered comparison extracts .value"))
+                if not isinstance(part, ast.Name):
+                    continue
+                name = part.id
+                if name in self.policy_names:
+                    self.issues.append((
+                        node.lineno,
+                        "ordered comparison uses extracted policy {!r}".format(
+                            name)))
+                numeric = self.numeric_names.get(name)
+                if numeric not in (None, -1, 0, 1) and \
+                        name not in self.implementation_names:
+                    self.issues.append((
+                        node.lineno,
+                        "numeric constant {!r} lacks implementation rationale"
+                        .format(name)))
+        self.generic_visit(node)
+
+
+def _policy_comparison_issues(source):
+    tree = ast.parse(source)
+    audit = _PolicyComparisonAudit(source)
+    audit.collect(tree)
+    audit.visit(tree)
+    return sorted(set(audit.issues))
+
+
+class GatePolicyComparisonsAreStructural(unittest.TestCase):
+
+    def test_literal_policy_bypass_is_detected(self):
+        source = "def gate(measured):\n    return measured < 0.15\n"
+        self.assertTrue(_policy_comparison_issues(source))
+
+    def test_named_literal_and_extracted_value_bypasses_are_detected(self):
+        literal = "LIMIT = 0.15\ndef gate(x):\n    return x < LIMIT\n"
+        expression = ("LIMIT = 3 / 20\n"
+                      "def gate(x):\n    return x < LIMIT\n")
+        extracted = ("def gate(res, constraint, x):\n"
+                     "    limit = res.limit(constraint).value\n"
+                     "    return x < limit\n")
+        self.assertTrue(_policy_comparison_issues(literal))
+        self.assertTrue(_policy_comparison_issues(expression))
+        self.assertTrue(_policy_comparison_issues(extracted))
+
+    def test_explained_implementation_constant_is_not_policy(self):
+        source = ("EPS = implementation_constant(1e-9, 'rounding')\n"
+                  "def gate(x):\n    return x < EPS\n")
+        self.assertEqual(_policy_comparison_issues(source), [])
+
+    def test_real_gate_code_has_no_untyped_ordered_policy_comparisons(self):
+        problems = []
+        pattern = os.path.join(HERE, "pcbqa", "gates", "g_*.py")
+        for path in sorted(glob.glob(pattern)):
+            with open(path, encoding="utf-8") as handle:
+                issues = _policy_comparison_issues(handle.read())
+            problems.extend((os.path.basename(path), line, issue)
+                            for line, issue in issues)
+        self.assertEqual(problems, [], problems)
 
 
 if __name__ == "__main__":

@@ -7,18 +7,22 @@ DOES establish exactly is proximity: for a pair of nets on one
 layer, the length of one net's centerline whose copper edge runs
 within a declared separation of the other's, and the closest
 approach observed. Those are exact geometric quantities with
-honest units (millimetres), suitable for risk RANKING and for
-matched-fidelity comparison - and for nothing electrical
+honest units (millimetres), suitable for risk ranking and for
+like-for-like geometric comparison - and for nothing electrical
 until a source-supported coupling model consumes them.
 
-Every record produced here says so: phenomenon ``coupling``,
-model fidelity ``geometry-only``, decision significance limited to
-risk ranking.
+Every record produced here is a shared numeric claim: phenomenon ``coupling``,
+evidence class ``geometry-only``, exact geometric knowledge, and significance
+limited to risk ranking.
 """
 
 from __future__ import annotations
 
-from .parasitics import ParasiticsError, validate_metric
+from . import claim
+
+
+class CouplingGeometryError(Exception):
+    pass
 
 
 def parallelism_inventory(board, net_names, threshold_mm,
@@ -39,11 +43,11 @@ def parallelism_inventory(board, net_names, threshold_mm,
 
     if not isinstance(threshold_mm, (int, float)) \
             or isinstance(threshold_mm, bool) or threshold_mm <= 0:
-        raise ParasiticsError(
+        raise CouplingGeometryError(
             "threshold_mm must be a positive number")
     names = list(net_names)
     if len(set(names)) != len(names) or len(names) < 2:
-        raise ParasiticsError(
+        raise CouplingGeometryError(
             "parallelism needs at least two distinct net names")
 
     if layers is None:
@@ -53,7 +57,7 @@ def parallelism_inventory(board, net_names, threshold_mm,
         for name in layers:
             identifier = board.GetLayerID(name)
             if identifier < 0:
-                raise ParasiticsError(
+                raise CouplingGeometryError(
                     "unknown layer {!r}".format(name))
             layer_ids.append(identifier)
 
@@ -103,20 +107,12 @@ def parallelism_inventory(board, net_names, threshold_mm,
                 if coupled <= 0:
                     continue
                 pair = "{}||{}".format(*sorted((net_a, net_b)))
-                records.append(validate_metric({
-                    "kind": "parasitic-metric",
-                    "phenomenon": "coupling",
-                    "scope": {
-                        "level": "pair",
-                        "identity": "{}@{}<= {} mm".format(
-                            pair, layer_name, threshold_mm)},
-                    "quantity": {"semantics": "exact",
-                                 "value": round(coupled, 4),
-                                 "bound": None, "interval": None,
-                                 "units": "mm"},
-                    "model": {"name": "parallelism-inventory",
-                              "fidelity": "geometry-only"},
-                    "provenance": {
+                records.append(claim.claim(
+                    "pair", "{}@{}<= {} mm".format(
+                        pair, layer_name, threshold_mm),
+                    "mm", claim.EXACT, {"value": round(coupled, 4)},
+                    claim.evidence(
+                        "coupling", "geometry-only", {
                         "source": "pcbqa.coupling_geometry over "
                                   "the board's own track "
                                   "centerlines",
@@ -124,20 +120,13 @@ def parallelism_inventory(board, net_names, threshold_mm,
                         "threshold_mm": threshold_mm,
                         "minimum_edge_separation_mm":
                             round(minimum, 4)},
-                    "assumptions": [],
-                    "omitted_contributions": [],
-                    "applicability": {
-                        "applicable": True,
-                        "detail": "straight track segments on one "
-                                  "copper layer; pads and zone "
-                                  "fills are outside this "
-                                  "inventory"},
-                    "requirement_linkage": None,
-                    "decision_significance":
-                        "geometric proximity for risk RANKING "
-                        "only; this is coupled run length in mm, "
-                        "not a crosstalk voltage, and no electrical "
-                        "claim follows until a source-supported "
-                        "coupling model consumes it",
-                }))
+                        applicability={
+                            "status": claim.APPLICABLE,
+                            "detail": "straight track segments on one copper "
+                                      "layer; pads and zone fills are outside "
+                                      "this inventory"}),
+                    "geometric proximity for risk ranking only; this is "
+                    "coupled run length in mm, not a crosstalk voltage, and "
+                    "no electrical conclusion follows until a sourced "
+                    "coupling model consumes it"))
     return records

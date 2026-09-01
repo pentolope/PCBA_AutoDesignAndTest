@@ -20,9 +20,9 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import pcbnew                                      # noqa: E402
-from pcbqa import extract                          # noqa: E402
+from pcbqa import claim, extract                   # noqa: E402
 from pcbqa.extract import ExtractionError          # noqa: E402
-from pcbqa.sim import fidelity                     # noqa: E402
+from pcbqa.sim import model_registry               # noqa: E402
 from tests import synth                            # noqa: E402
 from tests.test_fabricators import _raw_sources    # noqa: E402
 from pcbqa.fabricators import jlcpcb, model        # noqa: E402
@@ -171,14 +171,17 @@ class ExtractedInterconnectsEnterSimulationHonestly(unittest.TestCase):
         becomes a transmission-line model by renaming."""
         record = extract.interconnect_model_from_net(
             self._net_record(), "a" * 64, self._physical_inputs())
-        registry = fidelity.ModelRegistry([record])
-        self.assertEqual(record["coverage"]["interconnect_dc"],
+        registry = model_registry.ModelRegistry([record])
+        evidence = {fact["phenomenon"]: fact
+                    for fact in record["evidence"]}
+        self.assertEqual(evidence["interconnect_dc"]["evidence_class"],
                          "geometry-derived")
-        self.assertEqual(record["coverage"]["interconnect_si"],
-                         "unsupported")
-        self.assertEqual(record["coverage"]["device_electrical"],
-                         "not-applicable")
-        self.assertIn("inductance", record["omissions"])
+        self.assertEqual(
+            evidence["interconnect_si"]["applicability"]["status"],
+            claim.UNSUPPORTED)
+        self.assertEqual(
+            evidence["device_electrical"]["applicability"]["status"],
+            claim.NOT_APPLICABLE)
         report = registry.coverage_report(
             [record["identity"]],
             {"interconnect_si": ["full-wave-extracted",
@@ -198,8 +201,8 @@ class ExtractedInterconnectsEnterSimulationHonestly(unittest.TestCase):
             two_terminal_asserted_by="test author")
         self.assertIn(".subckt", with_assertion["spice"])
         self.assertEqual(
-            with_assertion["provenance"][
-                "two_terminal_asserted_by"], "test author")
+            with_assertion["derivation"]["resistance_claim"]["evidence"]
+            ["provenance"]["two_terminal_asserted_by"], "test author")
 
 
 if __name__ == "__main__":                        # pragma: no cover
@@ -539,15 +542,16 @@ class PathScopedExtractionIsHonest(unittest.TestCase):
             board, "LINK", "P1.1", "P2.1", COPPER)
         inventory = extract.extract_net(board, "LINK", COPPER,
                                         THICKNESS)
+        resistance = record["resistance_claim"]["quantity"]["value"]
         self.assertLess(
-            record["resistance_ohm"],
+            resistance,
             inventory["dc"]["segment_resistance_sum_ohm"])
         self.assertAlmostEqual(record["path_length_mm"], 10.0,
                                delta=1.2)
         expected = extract.IACS_RESISTIVITY_OHM_M \
             * (record["path_length_mm"] / 1000.0) \
             / ((0.2 / 1000.0) * (0.035 / 1000.0))
-        self.assertAlmostEqual(record["resistance_ohm"], expected,
+        self.assertAlmostEqual(resistance, expected,
                                places=9)
 
     def test_parallel_copper_refuses(self):
@@ -591,11 +595,10 @@ class PathScopedExtractionIsHonest(unittest.TestCase):
             record, "a" * 64,
             {"copper_thickness_mm": COPPER,
              "board_thickness_mm": THICKNESS})
-        registry = fidelity.ModelRegistry([model])
+        registry = model_registry.ModelRegistry([model])
         self.assertIn("path:LINK:P1.1->P2.1@", model["identity"])
         self.assertIn("established by construction",
-                      model["provenance"][
-                          "two_terminal_asserted_by"])
+                      model["derivation"]["two_terminal_assertion"])
         self.assertIn(".subckt", model["spice"])
         self.assertEqual(
             model["conditions"]["temperature_c"]["value"], 20.0)
@@ -746,7 +749,8 @@ class OmittedPhysicsIsABoundNotATruth(unittest.TestCase):
                         width_mm=0.2)
         record = extract.path_resistance(board, "FLAT",
                                          "P1.1", "P2.1", COPPER)
-        self.assertEqual(record["resistance_bound"], "exact")
+        self.assertEqual(record["resistance_claim"]["knowledge"],
+                         claim.EXACT)
         self.assertEqual(record["via_count_in_path"], 0)
 
     def test_a_via_path_reports_a_lower_bound(self):
@@ -766,16 +770,18 @@ class OmittedPhysicsIsABoundNotATruth(unittest.TestCase):
         record = extract.path_resistance(board, "DEEP",
                                          "P1.1", "P2.1", COPPER)
         self.assertEqual(record["via_count_in_path"], 1)
-        self.assertEqual(record["resistance_bound"], "lower")
-        self.assertTrue(any("via barrel" in omission
-                            for omission in record["omissions"]))
+        resistance_claim = record["resistance_claim"]
+        self.assertEqual(resistance_claim["knowledge"], claim.LOWER_BOUND)
+        self.assertTrue(any(
+            "via barrel" in omission["detail"] for omission in
+            resistance_claim["evidence"]["omitted_contributions"]))
         model = extract.interconnect_model_from_path(
             record, "b" * 64,
             {"copper_thickness_mm": COPPER,
              "board_thickness_mm": THICKNESS})
         self.assertEqual(
-            model["derivation"]["path"]["resistance_bound"],
-            "lower")
+            model["derivation"]["resistance_claim"]["knowledge"],
+            claim.LOWER_BOUND)
 
 
 class MetricNamesCannotMasquerade(unittest.TestCase):

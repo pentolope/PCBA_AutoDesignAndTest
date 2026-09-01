@@ -27,15 +27,7 @@ TESTED_KICAD = ("10.0",)
 
 
 def _probe_python():
-    """The interpreter, judged on the only thing that matters: its version.
-
-    There used to be a second signal here - whether "kicad" appeared in the
-    executable's path - because a Windows KiCad ships its own interpreter and
-    nothing else could import pcbnew. A distribution KiCad installs pcbnew
-    into the system interpreter, so that heuristic reported "this does not
-    look like KiCad's interpreter" on precisely the interpreter that works.
-    Whether pcbnew imports is a fact `_probe_pcbnew` establishes directly.
-    """
+    """Judge the interpreter by its version; pcbnew is probed directly."""
     ok = tuple(sys.version_info[:2]) >= MIN_PYTHON
     return {"name": "python", "present": True,
             "version": ".".join(str(v) for v in sys.version_info[:3]),

@@ -126,7 +126,7 @@ def _inner_layers_are_native(ctx, res, spec, zpath):
     if not inner:
         return []
     tolerance = res.limit(ctx.manifest.geometry_profile()
-                          .tolerance("layer_symmetric_difference_mm2")).value
+                          .tolerance("layer_symmetric_difference_mm2"))
     board = ctx.manifest.resolve(ctx.manifest.get("sources.pcb"))
     flags = [f for f in ctx.manifest.get("artifacts.gerber_export_flags")]
     problems = []
@@ -183,13 +183,13 @@ def _inner_layers_are_native(ctx, res, spec, zpath):
                     "native_area_mm2": round(b.area, 4),
                     "symmetric_difference_mm2": round(difference, 6),
             }
-            if difference > tolerance:
+            if tolerance.violated_maximum(difference):
                 problems.append({
                     "file": row["ship_as"], "layer": row["kicad_layer"],
                     "issue": "shipped inner layer is not this KiCad layer's "
                              "own output",
                     "symmetric_difference_mm2": round(difference, 6),
-                    "limit_mm2": tolerance})
+                    "limit_mm2": tolerance.value})
             if a.area <= 0:
                 problems.append({"file": row["ship_as"],
                                  "issue": "inner layer renders no copper"})

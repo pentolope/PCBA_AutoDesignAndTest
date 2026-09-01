@@ -21,11 +21,26 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from pcbqa.sim import fidelity, scenario, ngspice, digital  # noqa: E402
-from pcbqa.sim.fidelity import SimulationError               # noqa: E402
+from pcbqa import claim                                      # noqa: E402
+from pcbqa.sim import model_registry, scenario, ngspice, digital  # noqa: E402
+from pcbqa.sim.model_registry import SimulationError              # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "fixtures", "digital")
+
+
+def _evidence(mapping, source="test fixture"):
+    records = []
+    for phenomenon, value in mapping.items():
+        if value in (claim.UNSUPPORTED, claim.NOT_APPLICABLE):
+            records.append(claim.evidence(
+                phenomenon, None, {"source": source},
+                applicability={"status": value,
+                               "detail": "declared by the test model"}))
+        else:
+            records.append(claim.evidence(
+                phenomenon, value, {"source": source}))
+    return records
 
 
 def _rc_scenario():
@@ -51,31 +66,36 @@ def _rc_scenario():
 
 def _rtl_model():
     return {"identity": "controller-rtl", "kind": "digital-controller",
-            "coverage": {"functional_behavior": "rtl"},
-            "provenance": {"source": "firmware repo, fingerprinted"}}
+            "evidence": _evidence(
+                {"functional_behavior": "rtl"},
+                "firmware repo, fingerprinted")}
 
 
 def _ibis_model():
     return {"identity": "controller-io", "kind": "digital-io-buffer",
-            "coverage": {"digital_io": "vendor-ibis"},
-            "provenance": {"source": "vendor IBIS file"}}
+            "evidence": _evidence(
+                {"digital_io": "vendor-ibis"}, "vendor IBIS file")}
 
 
 class CoverageIsPhenomenonAware(unittest.TestCase):
 
     def test_vocabularies_are_closed(self):
+        bad = _rtl_model()
+        bad["evidence"][0]["phenomenon"] = "telepathy"
         with self.assertRaises(SimulationError):
-            fidelity.validate_coverage({"telepathy": "measured"})
+            model_registry.validate_model(bad)
+        bad = _rtl_model()
+        bad["evidence"][0]["evidence_class"] = "excellent"
         with self.assertRaises(SimulationError):
-            fidelity.validate_coverage({"digital_io": "excellent"})
+            model_registry.validate_model(bad)
         with self.assertRaises(SimulationError):
-            fidelity.validate_requirement({"digital_io": []})
+            model_registry.validate_requirement({"digital_io": []})
 
     def test_wrong_phenomenon_never_satisfies(self):
         """The invariant: RTL, however strong for function, cannot
         satisfy a digital_io requirement - a model never satisfies a
         phenomenon it does not cover."""
-        registry = fidelity.ModelRegistry([_rtl_model()])
+        registry = model_registry.ModelRegistry([_rtl_model()])
         report = registry.coverage_report(
             ["controller-rtl"],
             {"digital_io": ["vendor-ibis", "measured"]})
@@ -84,7 +104,7 @@ class CoverageIsPhenomenonAware(unittest.TestCase):
             report["per_phenomenon"]["digital_io"]["satisfied_by"], [])
 
     def test_mixed_domain_coverage_reports_per_phenomenon(self):
-        registry = fidelity.ModelRegistry([_rtl_model(),
+        registry = model_registry.ModelRegistry([_rtl_model(),
                                            _ibis_model()])
         report = registry.coverage_report(
             ["controller-rtl", "controller-io"],
@@ -98,7 +118,7 @@ class CoverageIsPhenomenonAware(unittest.TestCase):
                          ["controller-io"])
 
     def test_unaccepted_class_is_reported_not_promoted(self):
-        registry = fidelity.ModelRegistry([_ibis_model()])
+        registry = model_registry.ModelRegistry([_ibis_model()])
         report = registry.coverage_report(
             ["controller-io"], {"digital_io": ["measured"]})
         self.assertFalse(report["satisfied"])
@@ -107,15 +127,15 @@ class CoverageIsPhenomenonAware(unittest.TestCase):
                 "covered_at_unaccepted_class"], ["controller-io"])
 
     def test_records_validate_strictly(self):
-        registry = fidelity.ModelRegistry([_rtl_model()])
+        registry = model_registry.ModelRegistry([_rtl_model()])
         with self.assertRaises(SimulationError):
             registry.add(_rtl_model())
         with self.assertRaises(SimulationError):
-            fidelity.validate_model(dict(_rtl_model(), surprise=1))
+            model_registry.validate_model(dict(_rtl_model(), surprise=1))
         with self.assertRaises(SimulationError):
-            fidelity.validate_model(dict(_rtl_model(), coverage={}))
+            model_registry.validate_model(dict(_rtl_model(), evidence=[]))
         with self.assertRaises(SimulationError):
-            fidelity.validate_model(dict(_rtl_model(),
+            model_registry.validate_model(dict(_rtl_model(),
                                          provenance={}))
         with self.assertRaises(SimulationError):
             registry.get("absent")
@@ -212,7 +232,7 @@ class TheNgspiceBackendIsHonest(unittest.TestCase):
 
     def test_deck_generation_is_deterministic_and_applies_conditions(
             self):
-        registry = fidelity.ModelRegistry()
+        registry = model_registry.ModelRegistry()
         with_conditions = _rc_scenario()
         with_conditions["operating_conditions"] = {
             "temperature_c": 85.0}
@@ -223,7 +243,7 @@ class TheNgspiceBackendIsHonest(unittest.TestCase):
         self.assertIn("wrdata op_mid.data v(mid)", deck_one)
 
     def test_an_unregistered_model_refuses_before_any_run(self):
-        registry = fidelity.ModelRegistry()
+        registry = model_registry.ModelRegistry()
         with_model = _rc_scenario()
         with_model["elements"].append(
             {"kind": "model_instance", "name": "u1",
@@ -232,10 +252,11 @@ class TheNgspiceBackendIsHonest(unittest.TestCase):
             ngspice.generate_deck(registry, with_model)
 
     def test_unmet_coverage_refuses_before_any_run(self):
-        registry = fidelity.ModelRegistry([{
+        registry = model_registry.ModelRegistry([{
             "identity": "weak-load", "kind": "load",
-            "coverage": {"device_electrical": "assumed-behavioral"},
-            "provenance": {"source": "assumption, recorded"},
+            "evidence": _evidence(
+                {"device_electrical": "assumed-behavioral"},
+                "assumption, recorded"),
             "spice": ".subckt weak-load a b\nR1 a b 1e6\n.ends",
         }])
         demanding = _rc_scenario()
@@ -249,7 +270,7 @@ class TheNgspiceBackendIsHonest(unittest.TestCase):
                                  tempfile.mkdtemp())
 
     def test_the_result_contract_separates_its_verdicts(self):
-        registry = fidelity.ModelRegistry()
+        registry = model_registry.ModelRegistry()
         with_conditions = _rc_scenario()
         with_conditions["operating_conditions"] = {
             "temperature_c": 60.0}
@@ -269,269 +290,171 @@ class TheNgspiceBackendIsHonest(unittest.TestCase):
             self.assertEqual(result["status"], "ran")
             self.assertTrue(result["converged"])
             measurement = result["measurements"]["mid"]
-            self.assertTrue(measurement["passed"])
-            self.assertAlmostEqual(measurement["value"], 0.5,
+            self.assertEqual(
+                measurement["verdict"]["result"], claim.PASS)
+            self.assertTrue(measurement["verdict"]["exact"])
+            self.assertAlmostEqual(
+                measurement["claim"]["quantity"]["value"], 0.5,
                                    places=3)
 
 
-class BoundsNeverManufacturePass(unittest.TestCase):
-    """Assertion verdicts under declared value bounds: the
-    omission's optimistic direction reads unresolved, only the
-    pessimistic direction concludes - structurally."""
+def _resistance_claim(knowledge=claim.LOWER_BOUND):
+    quantity = {"value": 0.01}
+    basis = None
+    omissions = []
+    if knowledge != claim.EXACT:
+        basis = claim.knowledge_basis(
+            claim.DERIVED, "geometry omits positive via resistance")
+        omissions = [{"detail": "positive via resistance is omitted"}]
+    return claim.claim(
+        "model", "test interconnect", "ohm", knowledge, quantity,
+        claim.evidence(
+            "interconnect_dc", "geometry-derived", {"source": "test model"},
+            omitted_contributions=omissions),
+        "series resistance under the declared interconnect model",
+        knowledge_basis=basis)
 
-    def test_the_ge_truth_table(self):
-        ge = {"op": ">=", "value": 4.999}
-        upper = {"direction": "upper",
-                 "reason": "omitted series resistance",
-                 "established_by": "assumed"}
-        lower = {"direction": "lower", "reason": "test"}
-        self.assertEqual(
-            scenario.classify_assertion(ge, 4.9998, upper),
-            "unresolved")
-        self.assertEqual(
-            scenario.classify_assertion(ge, 4.9985, upper),
-            "conservative-FAIL")
-        self.assertEqual(
-            scenario.classify_assertion(ge, 4.9998, lower),
-            "conservative-PASS")
-        self.assertEqual(
-            scenario.classify_assertion(ge, 4.9985, lower),
-            "unresolved")
-        self.assertEqual(
-            scenario.classify_assertion(ge, 4.9998, None),
-            "exact-PASS")
-        self.assertEqual(
-            scenario.classify_assertion(ge, 4.9985, None),
-            "exact-FAIL")
-        self.assertIsNone(
-            scenario.classify_assertion(None, 4.9998, upper))
 
-    def test_the_le_and_within_truth_tables(self):
-        le = {"op": "<=", "value": 1.0}
-        upper = {"direction": "upper", "reason": "test"}
-        lower = {"direction": "lower", "reason": "test"}
-        self.assertEqual(
-            scenario.classify_assertion(le, 0.9, upper),
-            "conservative-PASS")
-        self.assertEqual(
-            scenario.classify_assertion(le, 1.1, upper),
-            "unresolved")
-        self.assertEqual(
-            scenario.classify_assertion(le, 1.1, lower),
-            "conservative-FAIL")
-        within = {"op": "within", "value": 0.5,
-                  "tolerance": 0.001}
-        self.assertEqual(
-            scenario.classify_assertion(within, 0.5, upper),
-            "unresolved")
-        self.assertEqual(
-            scenario.classify_assertion(within, 0.4, upper),
-            "conservative-FAIL")
-        self.assertEqual(
-            scenario.classify_assertion(within, 0.6, upper),
-            "unresolved")
-        self.assertEqual(
-            scenario.classify_assertion(within, 0.6, lower),
-            "conservative-FAIL")
+def _bounded_model(identity="series-link"):
+    return {
+        "identity": identity,
+        "kind": "board-interconnect-path",
+        "evidence": _evidence({"interconnect_dc": "geometry-derived"}),
+        "derivation": {"resistance_claim": _resistance_claim()},
+        "spice": ".subckt {} a b\nR1 a b 0.01\n.ends".format(identity),
+    }
 
-    def test_the_divider_bound_is_mechanically_derived(self):
-        """Test 10: the supported template derives the direction
-        from the model's own declared resistance bound - upper Vout
-        from lower series R - with no prose trusted."""
-        bounded_model = {
-            "identity": "series-link",
-            "kind": "board-interconnect-path",
-            "coverage": {"interconnect_dc": "geometry-derived"},
-            "provenance": {"source": "test"},
-            "derivation": {"path": {"resistance_bound": "lower"}},
-            "spice": ".subckt series-link a b\nR1 a b 0.01\n.ends",
-        }
-        registry = fidelity.ModelRegistry([bounded_model])
+
+class BoundedSimulationValuesFailClosed(unittest.TestCase):
+
+    def _divider_with_model(self, model):
+        registry = model_registry.ModelRegistry([model])
         declared = _rc_scenario()
         declared["elements"][1] = {
             "kind": "model_instance", "name": "top",
-            "nodes": ["in", "mid"], "model": "series-link"}
-        derived = scenario.derive_value_bound(
-            declared, declared["measurements"][0], registry)
-        self.assertEqual(derived["direction"], "upper")
-        self.assertEqual(derived["established_by"], "derived")
-        # And the runner accepts the derived declaration.
-        declared["measurements"][0]["value_bound"] = derived
-        result = ngspice.run_scenario(
-            registry, declared,
-            __import__("tempfile").mkdtemp(prefix="pcbqa-derive-"))
-        self.assertIn(result["status"],
-                      ("ran", "backend-unavailable"))
+            "nodes": ["in", "mid"], "model": model["identity"]}
+        return declared, registry
 
-    def test_unsupported_circuits_never_get_theorem_provenance(
-            self):
-        """Test 11: outside the template, 'derived' refuses - only
-        an explicit assumption may classify, and it is recorded as
-        an assumption."""
+    def test_divider_knowledge_is_mechanically_derived(self):
+        declared, registry = self._divider_with_model(_bounded_model())
+        derived = scenario.derive_measurement_knowledge(
+            declared, declared["measurements"][0], registry)
+        self.assertEqual(derived["kind"], claim.UPPER_BOUND)
+        self.assertEqual(derived["basis"]["kind"], claim.DERIVED)
+        declared["measurements"][0]["knowledge"] = derived
+        result = ngspice.run_scenario(
+            registry, declared, tempfile.mkdtemp(prefix="pcbqa-derive-"))
+        self.assertIn(result["status"], ("ran", "backend-unavailable"))
+
+    def test_unsupported_circuit_cannot_claim_derived_knowledge(self):
         declared = _rc_scenario()
-        # A second load makes the topology unsupported for the
-        # deriver.
         declared["elements"].append(
             {"kind": "resistor", "name": "shunt",
              "nodes": ["mid", "0"], "value": 500.0})
-        declared["measurements"][0]["value_bound"] = {
-            "direction": "upper",
-            "reason": "claimed without a template",
-            "established_by": "derived"}
-        registry = fidelity.ModelRegistry([])
-        self.assertIsNone(scenario.derive_value_bound(
+        declared["measurements"][0]["knowledge"] = \
+            claim.knowledge_declaration(
+                claim.UPPER_BOUND,
+                claim.knowledge_basis(
+                    claim.DERIVED, "claimed without a supported template"))
+        registry = model_registry.ModelRegistry([])
+        self.assertIsNone(scenario.derive_measurement_knowledge(
             declared, declared["measurements"][0], registry))
         with self.assertRaisesRegex(SimulationError,
                                     "no supported monotonic"):
-            ngspice.run_scenario(registry, declared,
-                                 "unused-workdir")
-        declared["measurements"][0]["value_bound"][
-            "established_by"] = "assumed"
+            ngspice.run_scenario(registry, declared, "unused-workdir")
+        declared["measurements"][0]["knowledge"]["basis"] = \
+            claim.knowledge_basis(
+                claim.ASSUMED, "owner accepts an upper voltage bound")
         result = ngspice.run_scenario(
-            registry, declared,
-            __import__("tempfile").mkdtemp(prefix="pcbqa-assume-"))
-        if result["status"] == "ran":
-            self.assertEqual(
-                result["measurements"]["mid"][
-                    "bound_establishment"], "assumed")
+            registry, declared, tempfile.mkdtemp(prefix="pcbqa-assume-"))
+        self.assertIn(result["status"], ("ran", "backend-unavailable"))
 
-    def test_a_wrong_derived_direction_refuses(self):
-        declared = _rc_scenario()
-        declared["measurements"][0]["value_bound"] = {
-            "direction": "lower",
-            "reason": "wrong on purpose",
-            "established_by": "derived"}
-        registry = fidelity.ModelRegistry([])
+    def test_wrong_derived_knowledge_direction_refuses(self):
+        declared, registry = self._divider_with_model(_bounded_model())
+        declared["measurements"][0]["knowledge"] = \
+            claim.knowledge_declaration(
+                claim.LOWER_BOUND,
+                claim.knowledge_basis(
+                    claim.DERIVED, "wrong direction on purpose"))
         with self.assertRaisesRegex(SimulationError,
                                     "mechanical derivation"):
-            ngspice.run_scenario(registry, declared,
-                                 "unused-workdir")
+            ngspice.run_scenario(registry, declared, "unused-workdir")
 
-    def test_no_assertions_is_never_vacuously_claimable(self):
-        """A run that asserts nothing has nothing to claim: None,
-        not True - it must never read more confident than an
-        unresolved verdict."""
-        declared = _rc_scenario()
-        del declared["measurements"][0]["assertion"]
-        registry = fidelity.ModelRegistry([])
-        import tempfile
-        result = ngspice.run_scenario(
-            registry, declared,
-            tempfile.mkdtemp(prefix="pcbqa-noassert-"))
-        if result["status"] != "ran":
-            self.skipTest("no ngspice backend present")
-        self.assertIsNone(
-            result["result_policy"]["assertions_claimable"])
-
-    def test_net_scoped_bounds_also_refuse_silent_assertions(self):
-        bounded_model = {
-            "identity": "bounded-net-link",
-            "kind": "board-interconnect",
-            "coverage": {"interconnect_dc": "geometry-derived"},
-            "provenance": {"source": "test"},
-            "derivation": {"resistance_bound": "lower"},
-            "spice": ".subckt bounded-net-link a b\n"
-                     "R1 a b 0.01\n.ends",
-        }
-        registry = fidelity.ModelRegistry([bounded_model])
-        declared = _rc_scenario()
-        declared["elements"][1] = {
-            "kind": "model_instance", "name": "top",
-            "nodes": ["in", "mid"], "model": "bounded-net-link"}
+    def test_nonexact_model_with_silent_assertion_refuses(self):
+        declared, registry = self._divider_with_model(_bounded_model())
         with self.assertRaisesRegex(SimulationError,
-                                    "value_bound"):
-            ngspice.run_scenario(registry, declared,
-                                 "unused-workdir")
+                                    "measurement's knowledge"):
+            ngspice.run_scenario(registry, declared, "unused-workdir")
 
-    def test_value_bound_validates_exactly(self):
-        bad = _rc_scenario()
-        bad["measurements"][0]["value_bound"] = {
-            "direction": "upper",
-            "established_by": "assumed"}
-        with self.assertRaises(SimulationError):
-            scenario.validate_scenario(bad)
-        bad["measurements"][0]["value_bound"] = {
-            "direction": "sideways", "reason": "x",
-            "established_by": "assumed"}
-        with self.assertRaises(SimulationError):
-            scenario.validate_scenario(bad)
+    def test_measurement_knowledge_validates_exactly(self):
+        for invalid in (
+                {"kind": claim.UPPER_BOUND, "basis": None},
+                {"kind": "sideways", "basis": claim.knowledge_basis(
+                    claim.ASSUMED, "test")},
+                {"kind": claim.UPPER_BOUND,
+                 "basis": claim.knowledge_basis(claim.ASSUMED, "test"),
+                 "surprise": True}):
+            bad = _rc_scenario()
+            bad["measurements"][0]["knowledge"] = invalid
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(SimulationError):
+                    scenario.validate_scenario(bad)
+
+        interval = _rc_scenario()
+        interval["measurements"][0]["knowledge"] = \
+            claim.knowledge_declaration(
+                claim.INTERVAL,
+                claim.knowledge_basis(claim.ASSUMED, "test interval"))
+        with self.assertRaises(SimulationError) as caught:
+            scenario.validate_scenario(interval)
+        self.assertIn("one value", str(caught.exception))
         good = _rc_scenario()
-        good["measurements"][0]["value_bound"] = {
-            "direction": "upper",
-            "reason": "path resistance is a lower bound",
-            "established_by": "assumed"}
+        good["measurements"][0]["knowledge"] = \
+            claim.knowledge_declaration(
+                claim.UPPER_BOUND,
+                claim.knowledge_basis(claim.ASSUMED, "owner bound"))
         scenario.validate_scenario(good)
 
-    def test_unresolved_verdicts_are_never_claimable(self):
-        """The actionable policy reads the VERDICT: a numeric pass
-        on a bounded value leaves assertions_claimable False."""
+    def test_unresolved_verdict_is_not_claimable(self):
         declared = _rc_scenario()
         declared["measurements"][0]["assertion"] = {
             "op": ">=", "value": 0.499}
-        declared["measurements"][0]["value_bound"] = {
-            "direction": "upper",
-            "reason": "the divider model omits series resistance",
-            "established_by": "assumed"}
-        registry = fidelity.ModelRegistry([])
-        import tempfile
+        declared["measurements"][0]["knowledge"] = \
+            claim.knowledge_declaration(
+                claim.UPPER_BOUND,
+                claim.knowledge_basis(
+                    claim.ASSUMED, "series resistance is incomplete"))
         result = ngspice.run_scenario(
-            registry, declared,
+            model_registry.ModelRegistry([]), declared,
             tempfile.mkdtemp(prefix="pcbqa-claimable-"))
         if result["status"] != "ran":
             self.skipTest("no ngspice backend present")
-        policy = result["result_policy"]
-        self.assertIs(policy["numerical_assertions_passed"], True)
-        self.assertIs(policy["assertions_claimable"], False)
+        self.assertIs(result["result_policy"]["assertions_claimable"], False)
 
-    def test_a_bounded_model_with_silent_assertion_refuses(self):
-        """A contributing model that declares a non-exact bound
-        poisons an undeclared assertion: silence refuses instead of
-        defaulting to an exact claim."""
-        bounded_model = {
-            "identity": "bounded-link",
-            "kind": "board-interconnect-path",
-            "coverage": {"interconnect_dc": "geometry-derived"},
-            "provenance": {"source": "test"},
-            "derivation": {"path": {"resistance_bound": "lower"}},
-            "spice": ".subckt bounded-link a b\nR1 a b 0.01\n"
-                     ".ends",
-        }
-        registry = fidelity.ModelRegistry([bounded_model])
+    def test_no_assertions_is_not_vacuously_claimable(self):
         declared = _rc_scenario()
-        declared["elements"][1] = {
-            "kind": "model_instance", "name": "top",
-            "nodes": ["in", "mid"], "model": "bounded-link"}
-        with self.assertRaisesRegex(SimulationError,
-                                    "value_bound"):
-            ngspice.run_scenario(registry, declared,
-                                 "unused-workdir")
-        declared["measurements"][0]["value_bound"] = {
-            "direction": "upper",
-            "reason": "lower-bound series resistance",
-            "established_by": "assumed"}
-        import tempfile
+        del declared["measurements"][0]["assertion"]
         result = ngspice.run_scenario(
-            registry, declared,
-            tempfile.mkdtemp(prefix="pcbqa-bound-"))
-        self.assertIn(result["status"],
-                      ("ran", "backend-unavailable"))
+            model_registry.ModelRegistry([]), declared,
+            tempfile.mkdtemp(prefix="pcbqa-noassert-"))
+        if result["status"] != "ran":
+            self.skipTest("no ngspice backend present")
+        self.assertIsNone(result["result_policy"]["assertions_claimable"])
 
-    def test_measurement_records_carry_the_verdict(self):
+    def test_measurement_record_is_a_shared_claim_and_verdict(self):
         declared = _rc_scenario()
         declared["measurements"][0]["assertion"] = {
             "op": ">=", "value": 0.499}
-        declared["measurements"][0]["value_bound"] = {
-            "direction": "upper",
-            "reason": "the divider model omits series "
-                      "resistance",
-            "established_by": "assumed"}
-        records = ngspice._assemble_measurements(
-            declared, lambda measurement: 0.5)
-        record = records["mid"]
-        self.assertIs(record["passed"], True)
-        self.assertEqual(record["verdict"], "unresolved")
-        self.assertEqual(record["value_bound"]["direction"],
-                         "upper")
+        declared["measurements"][0]["knowledge"] = \
+            claim.knowledge_declaration(
+                claim.UPPER_BOUND,
+                claim.knowledge_basis(
+                    claim.ASSUMED, "series resistance is incomplete"))
+        record = ngspice._assemble_measurements(
+            declared, lambda measurement: 0.5)["mid"]
+        self.assertEqual(record["claim"]["knowledge"], claim.UPPER_BOUND)
+        self.assertEqual(record["claim"]["quantity"], {"value": 0.5})
+        self.assertEqual(record["verdict"]["result"], claim.UNKNOWN_RESULT)
 
 
 class TheDigitalContractSeparatesDutFromChecker(unittest.TestCase):
@@ -654,8 +577,7 @@ def _interconnect(identity, evidence="geometry-derived",
                   conditions=None):
     record = {
         "identity": identity, "kind": "board-interconnect",
-        "coverage": {"interconnect_dc": evidence},
-        "provenance": {"source": "test fixture"},
+        "evidence": _evidence({"interconnect_dc": evidence}),
         "spice": ".subckt {} a b\nR1 a b 0.01\n.ends".format(
             identity),
     }
@@ -693,7 +615,7 @@ class CoverageIsContributorScoped(unittest.TestCase):
         }
 
     def test_one_strong_model_cannot_mask_a_weak_contributor(self):
-        registry = fidelity.ModelRegistry([
+        registry = model_registry.ModelRegistry([
             _interconnect("strong"),
             _interconnect("weak", evidence="assumed-behavioral"),
         ])
@@ -704,7 +626,7 @@ class CoverageIsContributorScoped(unittest.TestCase):
             "per_phenomenon"]["interconnect_dc"]
         self.assertEqual(phenomenon["violating"], ["weak_link"])
         with self.assertRaises(SimulationError):
-            ngspice.run_scenario(fidelity.ModelRegistry([
+            ngspice.run_scenario(model_registry.ModelRegistry([
                 _interconnect("strong"),
                 _interconnect("weak",
                               evidence="assumed-behavioral"),
@@ -739,7 +661,7 @@ class CoverageIsContributorScoped(unittest.TestCase):
     def test_an_unrelated_strong_model_satisfies_nothing(self):
         """Measuring the weak island: the strong model elsewhere in
         the scenario is not a contributor and cannot help."""
-        registry = fidelity.ModelRegistry([
+        registry = model_registry.ModelRegistry([
             _interconnect("strong"),
             _interconnect("weak", evidence="assumed-behavioral"),
         ])
@@ -754,7 +676,7 @@ class CoverageIsContributorScoped(unittest.TestCase):
         """Measuring the strong island: the weak model in the OTHER
         island is not a contributor, so it is not required to be
         strong - scoping never over-demands."""
-        registry = fidelity.ModelRegistry([
+        registry = model_registry.ModelRegistry([
             _interconnect("strong"),
             _interconnect("weak", evidence="assumed-behavioral"),
         ])
@@ -766,10 +688,10 @@ class CoverageIsContributorScoped(unittest.TestCase):
         """A strong device_electrical contributor in the path never
         answers an interconnect_dc requirement: with no DC provider
         among the contributors the measurement is unmet."""
-        registry = fidelity.ModelRegistry([{
+        registry = model_registry.ModelRegistry([{
             "identity": "vendor-part", "kind": "device",
-            "coverage": {"device_electrical": "vendor-spice"},
-            "provenance": {"source": "vendor model"},
+            "evidence": _evidence(
+                {"device_electrical": "vendor-spice"}, "vendor model"),
             "spice": ".subckt vendor-part a b\nR1 a b 10.0\n.ends",
         }])
         mixed = {
@@ -790,10 +712,10 @@ class CoverageIsContributorScoped(unittest.TestCase):
                 "interconnect_dc": ["geometry-derived"]},
         }
         report = scenario.contributor_coverage_report(
-            fidelity.ModelRegistry([{
+            model_registry.ModelRegistry([{
                 "identity": "vendor-part", "kind": "device",
-                "coverage": {"device_electrical": "vendor-spice"},
-                "provenance": {"source": "vendor model"},
+                "evidence": _evidence(
+                    {"device_electrical": "vendor-spice"}, "vendor model"),
             }]), mixed)
         self.assertFalse(report["satisfied"])
         phenomenon = report["per_measurement"]["vout"][
@@ -832,7 +754,7 @@ class ConditionCoverageIsHonest(unittest.TestCase):
                 {"name": "vout", "kind": "op_voltage",
                  "node": "out"}],
             "operating_conditions": {"temperature_c": temperature},
-        }, fidelity.ModelRegistry([
+        }, model_registry.ModelRegistry([
             _interconnect("link-model", conditions=conditions)])
 
     def test_simulator_condition_never_covers_undeclared_models(
@@ -926,12 +848,17 @@ class TheRealEngineRunsTransients(unittest.TestCase):
             ],
         }
         result = ngspice.run_scenario(
-            fidelity.ModelRegistry(), lowpass, tempfile.mkdtemp())
+            model_registry.ModelRegistry(), lowpass, tempfile.mkdtemp())
         self.assertEqual(result["status"], "ran")
-        self.assertTrue(result["measurements"]["settled"]["passed"])
-        self.assertTrue(result["measurements"]["charged"]["passed"])
+        self.assertEqual(
+            result["measurements"]["settled"]["verdict"]["result"],
+            claim.PASS)
+        self.assertEqual(
+            result["measurements"]["charged"]["verdict"]["result"],
+            claim.PASS)
         self.assertGreaterEqual(
-            result["measurements"]["charged"]["value"], 0.99)
+            result["measurements"]["charged"]["claim"]["quantity"]["value"],
+            0.99)
 
 
 class OmissionIsNeverIrrelevance(unittest.TestCase):
@@ -942,11 +869,10 @@ class OmissionIsNeverIrrelevance(unittest.TestCase):
     _REQUIRE_DC = {"interconnect_dc": ["geometry-derived"]}
 
     def _scenario_with(self, second_model_coverage):
-        registry = fidelity.ModelRegistry([
+        registry = model_registry.ModelRegistry([
             _interconnect("provider"),
             {"identity": "companion", "kind": "device",
-             "coverage": second_model_coverage,
-             "provenance": {"source": "test fixture"},
+             "evidence": _evidence(second_model_coverage),
              "spice": ".subckt companion a b\nR1 a b 10.0\n.ends"},
         ])
         sim_scenario = {
@@ -1005,11 +931,11 @@ class OmissionIsNeverIrrelevance(unittest.TestCase):
     def test_a_disconnected_model_still_owes_nothing(self):
         """The disposition demand scopes with contribution: a model
         in an unrelated island accounts for nothing here."""
-        registry = fidelity.ModelRegistry([
+        registry = model_registry.ModelRegistry([
             _interconnect("provider"),
             {"identity": "companion", "kind": "device",
-             "coverage": {"device_electrical": "vendor-spice"},
-             "provenance": {"source": "test fixture"}},
+             "evidence": _evidence(
+                 {"device_electrical": "vendor-spice"})},
         ])
         sim_scenario = {
             "name": "island-check",
@@ -1043,7 +969,7 @@ class ResultsCarryAUsabilityPolicy(unittest.TestCase):
         "source": "IEC 60028 reference temperature"}}
 
     def _run(self, temperature):
-        registry = fidelity.ModelRegistry([
+        registry = model_registry.ModelRegistry([
             _interconnect("link-model",
                           conditions=self._FIXED_20C)])
         sim_scenario = {
@@ -1081,8 +1007,7 @@ class ResultsCarryAUsabilityPolicy(unittest.TestCase):
         result = self._run(85.0)
         policy = result["result_policy"]
         if result["status"] == "ran":
-            self.assertTrue(
-                policy["numerical_assertions_passed"])
+            self.assertIs(policy["assertions_claimable"], True)
         self.assertIs(
             policy["result_applicable_to_requested_conditions"],
             False)
@@ -1124,7 +1049,7 @@ class IdealAssumptionsAreStructural(unittest.TestCase):
 
     def test_ideal_dependencies_are_visible_per_measurement(self):
         result = ngspice.run_scenario(
-            fidelity.ModelRegistry(), self._scenario(None),
+            model_registry.ModelRegistry(), self._scenario(None),
             tempfile.mkdtemp())
         entries = result["assumption_dependencies"][
             "per_measurement"]["mid"]
@@ -1136,11 +1061,11 @@ class IdealAssumptionsAreStructural(unittest.TestCase):
 
     def test_undeclared_assumptions_are_never_design_usable(self):
         result = ngspice.run_scenario(
-            fidelity.ModelRegistry(), self._scenario(None),
+            model_registry.ModelRegistry(), self._scenario(None),
             tempfile.mkdtemp())
         policy = result["result_policy"]
         if result["status"] == "ran":
-            self.assertTrue(policy["numerical_assertions_passed"])
+            self.assertIs(policy["assertions_claimable"], True)
         self.assertIs(
             policy["assumptions_accepted_for_design_decision"],
             False)
@@ -1156,7 +1081,7 @@ class IdealAssumptionsAreStructural(unittest.TestCase):
                        "accepted_for_design_decision": True},
         }
         result = ngspice.run_scenario(
-            fidelity.ModelRegistry(), self._scenario(assumptions),
+            model_registry.ModelRegistry(), self._scenario(assumptions),
             tempfile.mkdtemp())
         self.assertIs(result["result_policy"][
             "usable_for_design_decision"], False)

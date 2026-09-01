@@ -107,7 +107,7 @@ def _copy_project_safely(destination):
     import shutil
     shutil.copytree(_project(), destination,
                     ignore=shutil.ignore_patterns(
-                        ".git", "__pycache__", "out", "benchmark"))
+                        ".git", "__pycache__", "out"))
     for unwanted in ("verification", "build", "candidates"):
         path = os.path.join(destination, unwanted)
         if os.path.isdir(path):

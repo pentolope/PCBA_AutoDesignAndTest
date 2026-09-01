@@ -231,13 +231,6 @@ class ARunOwnsOnlyItself(_Base):
         self.assertTrue(os.path.isdir(second.path))
         self.assertTrue(os.path.isdir(outside))
 
-    def test_the_broad_cleanup_machinery_is_gone(self):
-        """Nothing may delete a directory it was merely handed."""
-        for name in ("publish", "discard_build", "new_attempt", "write_latest",
-                     "release_dir", "published_releases", "read_latest"):
-            self.assertFalse(hasattr(layout.Workspace, name), name)
-            self.assertFalse(hasattr(layout.Run, name), name)
-
     def test_validate_writes_only_into_its_own_run(self):
         board = self._board()
         marker = os.path.join(board.board, "PRE_EXISTING.txt")

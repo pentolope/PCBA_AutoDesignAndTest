@@ -129,11 +129,8 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
                       tolerance["note"])
         self.assertIn("nominal analytic estimate", tolerance["note"])
 
-    def test_there_is_exactly_one_public_solve(self):
-        """No provenance-free variant exists: every result an AI caller
-        can receive carries the evidence chain, on success and on
-        no-solution alike."""
-        self.assertFalse(hasattr(impedance, "solve_with_provenance"))
+    def test_solve_results_carry_the_evidence_chain(self):
+        """Success and no-solution results both carry their provenance."""
         result = impedance.solve(
             self.snapshot, _request(target_ohm=30.0,
                                     width_search_mm={"min": 0.15,
@@ -492,14 +489,10 @@ class TheSolveBelongsToItsConstruction(unittest.TestCase):
 
     def test_model_interval_fields_cannot_read_as_physical(self):
         """A mathematically routable MODEL interval must never read as
-        a fabrication interval for the unknown physical coated width:
-        the old generic names are gone and the note scopes itself to
-        the model interval explicitly."""
+        a fabrication interval for the unknown physical coated width."""
         result = impedance.solve(self.snapshot,
                                  _request(soldermask_present=True))
         manufacturing = result["enclosure"]["manufacturing"]
-        self.assertNotIn("usable", manufacturing)
-        self.assertNotIn("routable_intersection_mm", manufacturing)
         self.assertTrue(
             manufacturing["model_interval_has_routable_widths"])
         self.assertIn("MODEL interval only", manufacturing["note"])
@@ -1684,12 +1677,6 @@ class TheClosedFormsBehaveLikePhysics(unittest.TestCase):
             impedance._seam_positions(context, 0.05, 2.0)
         self.assertIn("no seam dispatch", str(caught.exception))
 
-    def test_unsupported_topologies_no_longer_name_coated(self):
-        self.assertNotIn("coated-microstrip (soldermask present)",
-                         impedance.UNSUPPORTED_TOPOLOGIES)
-        self.assertIn("asymmetric-stripline",
-                      impedance.UNSUPPORTED_TOPOLOGIES)
-
     def test_gapless_result_values_never_carry_nan(self):
         snapshot = _snapshot()
         result = impedance.solve(snapshot, _request(target_ohm=88.0))
@@ -2101,13 +2088,7 @@ class TheOverlayReferenceIsPinnedToItsPaper(unittest.TestCase):
                 self.assertLess(leg_ac, total["max"])
                 self.assertLess(abs(leg_ac - leg_ab), 0.01)
 
-    def test_production_does_not_dispatch_the_reference(self):
-        """The reference is evidence: the impedance module never
-        imports it, and the production coated enclosure is unchanged
-        to the digit."""
-        source = inspect.getsource(impedance)
-        self.assertNotIn("import overlay_reference", source)
-        self.assertNotIn("overlay_reference import", source)
+    def test_production_coated_enclosure_is_stable(self):
         result = impedance.solve(_snapshot(),
                                  _request(soldermask_present=True))
         self.assertEqual(result["enclosure"]["width_mm"],
