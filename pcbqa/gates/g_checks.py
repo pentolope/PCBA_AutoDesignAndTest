@@ -558,3 +558,86 @@ def suppressed(ctx, res):
             f"{len(offenders)} DRC and {len(erc_off)} ERC rule(s) disabled, "
             f"{len(exclusions) + len(erc_excl)} stored exclusion(s)")
     return res.passed("no rule is disabled outside the approved list")
+
+
+# ---------------------------------------------------------------------------
+# design-rule floors
+
+@gate("DRC.CONSTRAINT_FLOOR",
+      "No design rule is weaker than the floor the board declared",
+      requires=("checks.drc.constraint_floor", "sources.project"))
+def drc_constraint_floor(ctx, res):
+    """A disabled rule is loud; a loosened one is silent.
+
+    DRC.NO_SUPPRESSED_RULES catches a check switched off. It cannot catch a
+    check left on and quietly given a smaller number to measure against - and
+    that is the easier mistake to make, because tools that write a project
+    back (routers, plugins, an editor session) may lower a floor to match what
+    they produced and every checker afterwards, KiCad's own DRC included,
+    grades the board against the weakened value and reads clean.
+
+    The board declares its floors; this gate proves the project still carries
+    them. Declared values are minimums: a project value below one is a
+    weakened rule, an absent one cannot be proven at all.
+    """
+    floor = ctx.manifest.get("checks.drc.constraint_floor")
+    if not isinstance(floor, dict) or not floor:
+        return res.errored("checks.drc.constraint_floor declares no limits")
+
+    project_path = ctx.project_path()
+    if not os.path.isfile(project_path):
+        return res.failed("project not found: {}".format(project_path))
+    with open(project_path, "r", encoding="utf-8") as handle:
+        project = json.load(handle)
+
+    rules = (project.get("board", {}).get("design_settings", {})
+             .get("rules", {}))
+    classes = {entry.get("name"): entry
+               for entry in project.get("net_settings", {}).get("classes", [])}
+
+    checked = 0
+    for name, declared in sorted((floor.get("rules") or {}).items()):
+        checked += 1
+        limit = res.limit(ctx.manifest.constraint(
+            "checks.drc.constraint_floor.rules." + name, units="mm",
+            cid="drc.floor." + name))
+        _compare_floor(res, "rules." + name, rules.get(name), limit.value)
+    for class_name, wanted in sorted((floor.get("net_classes") or {}).items()):
+        entry = classes.get(class_name)
+        if entry is None:
+            res.finding(issue="net class absent from the project",
+                        net_class=class_name)
+            continue
+        for name, declared in sorted(wanted.items()):
+            checked += 1
+            limit = res.limit(ctx.manifest.constraint(
+                "checks.drc.constraint_floor.net_classes.{}.{}".format(
+                    class_name, name),
+                units="mm",
+                cid="drc.floor.{}.{}".format(class_name, name)))
+            _compare_floor(res, "net_classes.{}.{}".format(class_name, name),
+                           entry.get(name), limit.value)
+
+    if res.findings:
+        return res.failed(
+            "{} of {} declared design-rule floor(s) are missing or weaker in "
+            "the project".format(len(res.findings), checked),
+            project=os.path.basename(project_path), checked=checked)
+    return res.passed(
+        "every one of the {} declared design-rule floors is still carried by "
+        "the project".format(checked),
+        project=os.path.basename(project_path), checked=checked)
+
+
+def _compare_floor(res, key, effective, declared):
+    if effective is None:
+        res.finding(issue="rule absent from the project, so the floor cannot "
+                          "be proven", rule=key, declared_mm=declared)
+        return
+    if not isinstance(effective, (int, float)) or isinstance(effective, bool):
+        res.finding(issue="rule is not a number", rule=key,
+                    effective=effective, declared_mm=declared)
+        return
+    if effective < declared:
+        res.finding(issue="rule is weaker than the declared floor", rule=key,
+                    effective_mm=effective, declared_mm=declared)

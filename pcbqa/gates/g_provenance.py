@@ -290,3 +290,65 @@ def source_closure_covers_derivations(ctx, res):
         "schema, and both evidence files for each of the {} registry entries - "
         "are inside the {}-file source closure".format(
             len(covered), len(registry.entries), len(closure)))
+
+
+# ---------------------------------------------------------------------------
+# routing provenance
+
+@gate("ROUTE.PROVENANCE",
+      "The routed board in the tree is the candidate that was accepted",
+      requires=("routing.provenance",))
+def routing_provenance(ctx, res):
+    """Copper looks like copper: a board cannot show how it was produced.
+
+    Routing is a search that writes candidates, may transform one after the
+    router produced it, and promotes exactly one. Every step between "the
+    router wrote this" and "this is the design" is a place where the tree can
+    end up holding copper nothing judged - a later derivative the record does
+    not describe, an attempt routed on top of the previous one, a failing
+    candidate left behind when none was accepted, or an unnamed edit over the
+    router's output. This gate makes the record prove the chain and agree with
+    the board it claims to describe.
+    """
+    from .. import routing_record
+    from ..core import sha256_file
+
+    relative = ctx.manifest.get("routing.provenance")
+    path = ctx.manifest.resolve(relative)
+    if not os.path.isfile(path):
+        return res.failed(
+            "routing record {} is declared but absent".format(relative))
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            record = json.load(handle)
+    except ValueError as exc:
+        return res.failed("routing record {} does not parse: {}".format(
+            relative, exc))
+
+    try:
+        routing_record.validate(record)
+    except routing_record.RoutingRecordError as exc:
+        return res.failed("routing record {} is not acceptable: {}".format(
+            relative, exc))
+
+    board_sha256 = sha256_file(ctx.board_path())
+    problems = routing_record.compare_to_board(record, board_sha256)
+    for problem in problems:
+        res.finding(**problem)
+    if problems:
+        return res.failed(
+            "{} routing provenance problem(s): the board in the tree is not "
+            "the accepted candidate".format(len(problems)),
+            record=relative, board_sha256=board_sha256)
+
+    declared = routing_record.transforms(record)
+    return res.passed(
+        "the adopted board is the accepted candidate of {} recorded "
+        "attempt(s), every attempt started from the same declared source, and "
+        "each of the {} post-router transform(s) states what it changed"
+        .format(len(record["attempts"]), len(declared)),
+        record=relative,
+        board_sha256=board_sha256,
+        attempts=len(record["attempts"]),
+        accepted_attempt=record["accepted_attempt"],
+        post_router_transforms=[stage["stage"] for stage in declared])

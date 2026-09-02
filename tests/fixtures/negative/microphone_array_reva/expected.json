@@ -58,6 +58,16 @@
         "gate": "STACK.GERBER_PARITY",
         "measurement": "fresh_export_command",
         "why": "absolute attempt-directory paths"
+      },
+      {
+        "gate": "ROUTE.PROVENANCE",
+        "measurement": "new gate",
+        "why": "Rev A declares no routing.provenance record, so the gate cannot judge how its copper was produced and reports NOT_APPLICABLE with a reason rather than passing"
+      },
+      {
+        "gate": "DRC.CONSTRAINT_FLOOR",
+        "measurement": "new gate",
+        "why": "Rev A declares no checks.drc.constraint_floor, so there are no floors to prove the project still carries"
       }
     ],
     "unexplained_changes": 0,
@@ -95,7 +105,9 @@
     "VIA.IN_PAD_CONTACT": "FAIL",
     "VIA.MASK_CLEARANCE_PROCESS": "FAIL",
     "VIA.MASK_CLEARANCE_TARGET": "FAIL",
-    "VIA.NATIVE_GERBER_AGREEMENT": "PASS"
+    "VIA.NATIVE_GERBER_AGREEMENT": "PASS",
+    "ROUTE.PROVENANCE": "NOT_APPLICABLE",
+    "DRC.CONSTRAINT_FLOOR": "NOT_APPLICABLE"
   },
   "anchors": {
     "VIA.MASK_CLEARANCE_TARGET.vias_total": 184,
