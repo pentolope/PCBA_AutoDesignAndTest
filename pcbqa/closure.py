@@ -129,9 +129,23 @@ def source_closure(manifest, policy):
     return entries
 
 
+#: Where the line-ending policy a canonical digest depends on is declared.
+#: The first name is the general one; the second is what it was called when
+#: only fixtures used it, and a pinned consumer still names it that way.
+ATTRIBUTES_KEYS = ("closure.attributes_file", "fixture.attributes_file")
+
+
+def attributes_file(manifest):
+    for key in ATTRIBUTES_KEYS:
+        if manifest.has(key):
+            return manifest.resolve(manifest.get(key))
+    raise ClosureError(
+        "no line-ending policy is declared ({}), and a canonical digest "
+        "cannot be computed without one".format(" or ".join(ATTRIBUTES_KEYS)))
+
+
 def policy_for(manifest):
-    return canonical.AttributePolicy.load(
-        manifest.resolve(manifest.get("fixture.attributes_file")))
+    return canonical.AttributePolicy.load(attributes_file(manifest))
 
 
 def current(manifest):

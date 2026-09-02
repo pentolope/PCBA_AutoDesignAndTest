@@ -68,6 +68,21 @@
         "gate": "DRC.CONSTRAINT_FLOOR",
         "measurement": "new gate",
         "why": "Rev A declares no checks.drc.constraint_floor, so there are no floors to prove the project still carries"
+      },
+      {
+        "gate": "SIM.SCENARIOS",
+        "measurement": "new gate",
+        "why": "Rev A declares no simulation.stages, so there is no scenario to run and the gate reports NOT_APPLICABLE with a reason rather than passing"
+      },
+      {
+        "gate": "SIM.STAGE_COVERAGE",
+        "measurement": "new gate",
+        "why": "Rev A declares no simulation.required_stages, so no design stage claims to need simulation evidence"
+      },
+      {
+        "gate": "SIM.MODEL_PROVENANCE",
+        "measurement": "new gate",
+        "why": "Rev A declares no simulation.models, so no board-derived model exists whose recorded board digest could be checked"
       }
     ],
     "unexplained_changes": 0,
@@ -83,6 +98,7 @@
     "CPL.NATIVE_PARITY": "PASS",
     "CPL.ORIENTATION": "NOT_APPLICABLE",
     "DRC.AUTHORITATIVE": "FAIL",
+    "DRC.CONSTRAINT_FLOOR": "NOT_APPLICABLE",
     "DRC.NO_SUPPRESSED_RULES": "FAIL",
     "ERC.AUTHORITATIVE": "FAIL",
     "FAB.LAYER_IDENTITY": "NOT_APPLICABLE",
@@ -93,7 +109,11 @@
     "PROV.TIMING_MODELS": "NOT_APPLICABLE",
     "ROUTE.ANGLE_STYLE": "FAIL",
     "ROUTE.GEOMETRY_HYGIENE": "PASS",
+    "ROUTE.PROVENANCE": "NOT_APPLICABLE",
     "ROUTE.TINY_SEGMENTS": "FAIL",
+    "SIM.MODEL_PROVENANCE": "NOT_APPLICABLE",
+    "SIM.SCENARIOS": "NOT_APPLICABLE",
+    "SIM.STAGE_COVERAGE": "NOT_APPLICABLE",
     "STACK.GERBER_PARITY": "PASS",
     "STACK.NATIVE_VS_MANIFEST": "FAIL",
     "STACK.PHYSICAL": "NOT_APPLICABLE",
@@ -105,9 +125,7 @@
     "VIA.IN_PAD_CONTACT": "FAIL",
     "VIA.MASK_CLEARANCE_PROCESS": "FAIL",
     "VIA.MASK_CLEARANCE_TARGET": "FAIL",
-    "VIA.NATIVE_GERBER_AGREEMENT": "PASS",
-    "ROUTE.PROVENANCE": "NOT_APPLICABLE",
-    "DRC.CONSTRAINT_FLOOR": "NOT_APPLICABLE"
+    "VIA.NATIVE_GERBER_AGREEMENT": "PASS"
   },
   "anchors": {
     "VIA.MASK_CLEARANCE_TARGET.vias_total": 184,

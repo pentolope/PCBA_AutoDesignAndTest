@@ -45,7 +45,8 @@ def fixture_integrity(ctx, res):
     hash_file = ctx.manifest.resolve(ctx.manifest.get("fixture.hash_file"))
     res.evidence_file(hash_file)
     meta = json.load(open(hash_file, encoding="utf-8"))
-    policy_path = ctx.manifest.resolve(ctx.manifest.get("fixture.attributes_file"))
+    from .. import closure as closure_mod
+    policy_path = closure_mod.attributes_file(ctx.manifest)
     policy = canonical.AttributePolicy.load(policy_path)
     reject = res.limit(ctx.manifest.constraint(
         "fixture.reject_globs", units="path glob",

@@ -25,9 +25,12 @@ def _expand(root, patterns):
 # report freshness
 # ---------------------------------------------------------------------------
 
+from ..closure import ATTRIBUTES_KEYS as _ATTRIBUTES_KEYS
+
+
 @gate("PROV.REPORT_FRESHNESS", "Committed reports match the current sources",
       requires=("reports", "reports.source_closure",
-                "fixture.attributes_file"))
+                _ATTRIBUTES_KEYS))
 def report_freshness(ctx, res):
     """A report is fresh only if the inputs it was made from still hash the same.
 

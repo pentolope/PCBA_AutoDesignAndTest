@@ -53,7 +53,15 @@ _ANALYSIS_KEYS = {"op": {"kind"},
                   "tran": {"kind", "step_s", "stop_s"}}
 
 _MEASUREMENT_KEYS = {"name", "kind", "node", "assertion", "knowledge"}
-_MEASUREMENT_KINDS = ("op_voltage", "tran_final_voltage")
+# A transient's settled value is precisely the value that is not at issue
+# when the question is droop or overshoot: the excursion is the answer and
+# the endpoint hides it. The reduction each kind applies over its result
+# vector is declared once here and read by the engine.
+MEASUREMENT_REDUCTIONS = {"op_voltage": "last",
+                          "tran_final_voltage": "last",
+                          "tran_min_voltage": "min",
+                          "tran_max_voltage": "max"}
+_MEASUREMENT_KINDS = tuple(sorted(MEASUREMENT_REDUCTIONS))
 
 _ASSERTION_KEYS = {"<=": {"op", "value"},
                    ">=": {"op", "value"},

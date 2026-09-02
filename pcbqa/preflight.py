@@ -140,19 +140,62 @@ def _probe_kicad_cli(path):
             "ok": ok, "detail": detail, "tested_against": list(TESTED_KICAD)}
 
 
+def _probe_ngspice():
+    """The circuit simulator, which only a board that simulates needs.
+
+    Reported rather than required: a board declaring no simulation stage
+    is unaffected by its absence, and one that does declare a stage is
+    rejected by the simulation gates - loudly, at validation - rather than
+    here. Reporting it means that rejection is never a surprise.
+    """
+    from .sim.ngspice import backend_identity
+    try:
+        backend = backend_identity()
+    except Exception as exc:                       # noqa: BLE001
+        return {"name": "ngspice", "present": False, "version": None,
+                "path": None, "ok": False, "optional": True,
+                "detail": "could not be probed ({})".format(exc),
+                "ownership": "distribution package"}
+    return {
+        "name": "ngspice",
+        "present": bool(backend.get("available")),
+        "version": backend.get("version"),
+        "path": backend.get("path"),
+        "ok": bool(backend.get("available")),
+        "optional": True,
+        "detail": ("{} backend available".format(backend.get("mode"))
+                   if backend.get("available") else
+                   "absent; a board declaring simulation stages is rejected "
+                   "by the simulation gates, and one declaring none is "
+                   "unaffected"),
+        "ownership": "distribution package",
+    }
+
+
 def environment(kicad_cli=None):
-    """Structured description of the environment actually in use."""
-    rows = [_probe_python(), _probe_pcbnew(), _probe_shapely()]
+    """Structured description of the environment actually in use.
+
+    The verdict counts only what every board needs. An optional row is
+    reported in full and never decides the verdict, so a machine that will
+    never simulate is not told its environment is broken.
+    """
+    rows = [_probe_python(), _probe_pcbnew(), _probe_shapely(),
+            _probe_ngspice()]
     if kicad_cli is not None:
         rows.append(_probe_kicad_cli(kicad_cli))
-    return all(r["ok"] for r in rows), rows
+    return all(r["ok"] for r in rows if not r.get("optional")), rows
 
 
 def report(rows):
     width = max(len(r["name"]) for r in rows)
     lines = []
     for r in rows:
-        mark = "ok  " if r["ok"] else "FAIL"
+        if r["ok"]:
+            mark = "ok  "
+        elif r.get("optional"):
+            mark = "----"
+        else:
+            mark = "FAIL"
         lines.append(f"  [{mark}] {r['name'].ljust(width)}  {r['version'] or '-'}")
         if r.get("path"):
             lines.append(f"         {'':{width}}  path: {r['path']}")

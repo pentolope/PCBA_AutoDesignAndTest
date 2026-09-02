@@ -207,22 +207,30 @@ class _SharedNgspice:
                 # analysis: each command replaces the current plot,
                 # so a later analysis must never answer for an
                 # earlier one's measurements.
-                for name in vector_names:
-                    values[name] = self.last_real_value(name)
+                for name, reduction in vector_names:
+                    values[(name, reduction)] = self.real_value(
+                        name, reduction)
         return {"load_status": load_status,
                 "command_status": command_status,
                 "values": values,
                 "log": list(self._log)}
 
-    def last_real_value(self, vector_name):
-        """The final real value of one result vector, or None."""
+    def real_value(self, vector_name, reduction):
+        """One reduction of a result vector's real data, or None."""
         pointer = self._get_vector(vector_name.encode("utf-8"))
         if not pointer:
             return None
         vector = pointer.contents
         if vector.v_length <= 0 or not vector.v_realdata:
             return None
-        return float(vector.v_realdata[vector.v_length - 1])
+        if reduction == "last":
+            return float(vector.v_realdata[vector.v_length - 1])
+        return _reduce([float(vector.v_realdata[index])
+                        for index in range(vector.v_length)], reduction)
+
+    def last_real_value(self, vector_name):
+        """The final real value of one result vector, or None."""
+        return self.real_value(vector_name, "last")
 
 
 def _version_from_banner(text):
@@ -356,17 +364,33 @@ def generate_deck(registry, sim_scenario):
     for command in _analysis_commands(sim_scenario):
         lines.append(command)
         prefix = "op" if command == "op" else "tran"
-        kind = "op_voltage" if command == "op" \
-            else "tran_final_voltage"
-        for measurement in sim_scenario["measurements"]:
-            if measurement["kind"] == kind:
-                lines.append("wrdata {}_{}.data v({})".format(
-                    prefix, measurement["name"],
-                    measurement["node"]))
+        for measurement in _measurements_of(sim_scenario, command):
+            lines.append("wrdata {}_{}.data v({})".format(
+                prefix, measurement["name"], measurement["node"]))
     lines.append("quit")
     lines.append(".endc")
     lines.append(".end")
     return "\n".join(lines) + "\n"
+
+
+def _measurements_of(sim_scenario, command):
+    """The measurements one analysis command answers for.
+
+    A transient carries several reductions of the same run, so the
+    mapping is by analysis family rather than by a single kind: an
+    excursion and an endpoint are two questions about one waveform.
+    """
+    family = "op" if command == "op" else "tran"
+    return [measurement for measurement in sim_scenario["measurements"]
+            if _family_of(measurement["kind"]) == family]
+
+
+def _family_of(kind):
+    return "op" if kind == "op_voltage" else "tran"
+
+
+def _reduction_of(measurement):
+    return scenario_module.MEASUREMENT_REDUCTIONS[measurement["kind"]]
 
 
 def _analysis_commands(sim_scenario):
@@ -398,18 +422,33 @@ def _sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _read_last_column_value(path):
-    last = None
+def _read_column_value(path, reduction):
+    values = []
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
             parts = line.split()
             if len(parts) >= 2:
-                last = parts
-    if last is None:
+                values.append(float(parts[-1]))
+    if not values:
         raise SimulationError(
             "wrdata output {} carried no data rows".format(
                 os.path.basename(path)))
-    return float(last[-1])
+    return _reduce(values, reduction)
+
+
+def _reduce(values, reduction):
+    if reduction == "last":
+        return values[-1]
+    if reduction == "min":
+        return min(values)
+    if reduction == "max":
+        return max(values)
+    raise SimulationError(
+        "unknown measurement reduction {!r}".format(reduction))
+
+
+def _read_last_column_value(path):
+    return _read_column_value(path, "last")
 
 
 def _assemble_measurements(sim_scenario, value_of):
@@ -660,12 +699,10 @@ def _run_with_binary(backend, sim_scenario, workdir, deck_path,
         return result
 
     def value_of(measurement):
-        prefix = "op" if measurement["kind"] == "op_voltage" \
-            else "tran"
         data_path = os.path.join(
-            workdir, "{}_{}.data".format(prefix,
+            workdir, "{}_{}.data".format(_family_of(measurement["kind"]),
                                          measurement["name"]))
-        return _read_last_column_value(data_path)
+        return _read_column_value(data_path, _reduction_of(measurement))
 
     result.update({"status": "ran",
                    "measurements": _assemble_measurements(
@@ -682,11 +719,9 @@ def _run_with_shared_library(sim_scenario, deck, workdir, result):
             "and execution: {}".format(load_error))
     plan = []
     for command in _analysis_commands(sim_scenario):
-        kind = "op_voltage" if command == "op"             else "tran_final_voltage"
         plan.append((command, sorted({
-            measurement["node"].lower()
-            for measurement in sim_scenario["measurements"]
-            if measurement["kind"] == kind})))
+            (measurement["node"].lower(), _reduction_of(measurement))
+            for measurement in _measurements_of(sim_scenario, command)})))
     previous_directory = os.getcwd()
     os.chdir(workdir)
     try:
@@ -714,7 +749,8 @@ def _run_with_shared_library(sim_scenario, deck, workdir, result):
         return result
 
     def value_of(measurement):
-        return outcome["values"].get(measurement["node"].lower())
+        return outcome["values"].get(
+            (measurement["node"].lower(), _reduction_of(measurement)))
 
     result.update({"status": "ran",
                    "measurements": _assemble_measurements(

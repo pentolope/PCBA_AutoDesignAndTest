@@ -444,7 +444,9 @@ def gate(gate_id, title, requires=(), order=100):
     """Register a gate.
 
     `requires` lists manifest keys the gate needs; when any is absent the gate
-    reports NOT_APPLICABLE with the reason instead of silently passing.
+    reports NOT_APPLICABLE with the reason instead of silently passing. An
+    entry may itself be a tuple, meaning any one of those keys satisfies it -
+    which is how a key can be renamed without breaking a pinned consumer.
     """
     def wrap(fn):
         _REGISTRY.append({
@@ -453,6 +455,18 @@ def gate(gate_id, title, requires=(), order=100):
         })
         return fn
     return wrap
+
+
+def _satisfied(manifest, requirement):
+    if isinstance(requirement, tuple):
+        return any(manifest.has(key) for key in requirement)
+    return manifest.has(requirement)
+
+
+def _missing_label(requirement):
+    if isinstance(requirement, tuple):
+        return " or ".join(requirement)
+    return requirement
 
 
 def registered():
@@ -465,7 +479,8 @@ def run_all(context, only=None):
         if only and entry["id"] not in only:
             continue
         result = GateResult(entry["id"], entry["title"])
-        missing = [k for k in entry["requires"] if not context.manifest.has(k)]
+        missing = [_missing_label(k) for k in entry["requires"]
+                   if not _satisfied(context.manifest, k)]
         if missing:
             results.append(result.not_applicable(
                 "manifest does not declare " + ", ".join(sorted(missing))

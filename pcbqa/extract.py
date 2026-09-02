@@ -40,6 +40,7 @@ constant this module carries.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 
@@ -839,6 +840,30 @@ def interconnect_model_from_path(path_record, board_sha256,
                               "source": "IEC 60028 resistivity "
                                         "reference temperature"}}
     return record
+
+
+def aliased(record, alias):
+    """The same model under a name a scenario can be written against.
+
+    An extracted model's identity embeds the digests of the board and the
+    physical inputs it was measured from - which is what makes it honest,
+    and what makes it unusable as a reference in a stored scenario: the
+    name changes every time the copper does. The alias is the stable
+    handle; the measured identity stays in the derivation, so nothing
+    about where the number came from is lost.
+    """
+    if not isinstance(alias, str) or not alias.strip():
+        raise ExtractionError("a model alias must be a nonempty string")
+    if "identity" not in record or "spice" not in record:
+        raise ExtractionError(
+            "only a model carrying an identity and spice text can be "
+            "aliased")
+    renamed = copy.deepcopy(record)
+    renamed["spice"] = record["spice"].replace(record["identity"], alias)
+    renamed["identity"] = alias
+    derivation = renamed.setdefault("derivation", {})
+    derivation["extracted_identity"] = record["identity"]
+    return renamed
 
 
 def paths_from_validation(validation):

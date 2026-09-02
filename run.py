@@ -5,6 +5,7 @@
     python run.py selftest [--jobs auto|N]  run the validator's own test suite
     python run.py build <manifest>          generate the fabrication outputs
     python run.py validate <manifest> [-w]  validate; nonzero if rejected
+                       [--only=A,B]         run only these gates (diagnostic)
     python run.py release-check <manifest>  is this commit taggable as a release?
     python run.py gates                     list gate IDs
     python run.py fab <cmd>                 JLCPCB knowledge: refresh, select,
@@ -89,7 +90,8 @@ def _output_base(manifest=None):
 def _load_gates():
     from pcbqa.gates import (g_provenance, g_checks, g_geometry,   # noqa: F401
                              g_contracts, g_assembly, g_export_parity,
-                             g_fabrication, g_orientation, g_timing)
+                             g_fabrication, g_orientation, g_timing,
+                             g_simulation)
 
 
 def open_board(manifest_path):
@@ -124,12 +126,20 @@ def _emit(ctx, results, tag, directory=None):
     return doc, jpath, mpath
 
 
-def cmd_validate(manifest_path, write=False, quiet=False):
+def cmd_validate(manifest_path, write=False, quiet=False, only=None):
     """Validate a board: its sources and the exact artifacts committed with it.
 
     Read-only unless `write` is given, so ordinary development validation never
     touches the working tree. `--write` records the verdict at the path the
     manifest declares, which is the report a release commit carries.
+
+    `only` restricts the run to named gates. That exists for one reason: a
+    search - routing candidates, placement candidates - has to judge the
+    DESIGN, and the release-artifact gates cannot be satisfied mid-search
+    because the artifacts are generated from the design the search has not
+    finished choosing. A partial run is a diagnostic, never a verdict: it
+    refuses `--write`, and the document it produces is marked partial so
+    nothing downstream can mistake it for a validation.
     """
     from pcbqa import artifacts, core
     from pcbqa.core import Context, ManifestError
@@ -148,9 +158,27 @@ def cmd_validate(manifest_path, write=False, quiet=False):
     except Exception as exc:                                   # noqa: BLE001
         ctx.tool_versions["kicad"] = "UNAVAILABLE: {}".format(exc)
 
+    if only is not None:
+        known = {entry["id"] for entry in core.registered()}
+        unknown = sorted(set(only) - known)
+        if unknown:
+            print("REFUSED: no such gate(s): {}".format(unknown))
+            run.discard()
+            return 2, None, ctx
+        if write:
+            print("REFUSED: a partial run is a diagnostic, not a verdict; "
+                  "--only and --write are mutually exclusive")
+            run.discard()
+            return 2, None, ctx
+
     try:
-        results = core.run_all(ctx)
+        results = core.run_all(ctx, only=only)
         doc, jpath, mpath = _emit(ctx, results, "validation", run.path)
+        if only is not None:
+            doc["partial"] = {"only": sorted(only),
+                              "meaning": "a subset of the registered gates "
+                                         "was run; this document is not a "
+                                         "validation of the board"}
     except BaseException:
         # This run produced nothing usable; it owns its directory and takes it
         # with it.
@@ -169,6 +197,10 @@ def cmd_validate(manifest_path, write=False, quiet=False):
 
     if not quiet:
         print(core.to_markdown(doc))
+        if only is not None:
+            print(chr(10) + "PARTIAL RUN: {} of {} gate(s); this is a "
+                  "diagnostic, not a validation".format(
+                      len(only), len(core.registered())))
         print(chr(10) + "run:      " + run.path)
         print("JSON:     " + jpath)
         print("Markdown: " + mpath)
@@ -584,14 +616,25 @@ def main(argv):
             print("usage: run.py {} <manifest.json>{}".format(
                 cmd, " [--write]" if cmd == "validate" else ""))
             return 2
-        unknown = [f for f in flags
+        only = None
+        kept = []
+        for flag in flags:
+            if cmd == "validate" and flag.startswith("--only="):
+                only = [gate for gate in flag.split("=", 1)[1].split(",")
+                        if gate]
+                continue
+            kept.append(flag)
+        unknown = [f for f in kept
                    if not (cmd == "validate" and f in ("-w", "--write"))]
         if unknown:
             print("unknown option(s) for {}: {}".format(cmd, unknown))
             return 2
+        if only is not None and not only:
+            print("--only names no gate; run.py gates lists them")
+            return 2
         path = _find_manifest(rest[0])
         if cmd == "validate":
-            return cmd_validate(path, write=bool(flags))[0]
+            return cmd_validate(path, write=bool(kept), only=only)[0]
         if cmd == "build":
             return cmd_build(path)
         return cmd_release_check(path)
