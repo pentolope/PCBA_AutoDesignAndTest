@@ -934,13 +934,19 @@ def compose_two_layer_stackup(catalog, thickness_mm, outer_oz):
                                "millimetre. Solder mask is not deducted and "
                                "is not stated as part of this thickness",
         },
+        # Built through the model's own constructor, so a composed stackup
+        # is the same shape as a parsed one. Which catalog record supplied
+        # the permittivity is a fact about the composition, not about the
+        # layer, and it is already recorded under composed_from - a second
+        # copy inside the layer would be a field the schema does not define
+        # and would reach approved.json if a composed stack were ever
+        # stored.
         "layers": [
-            {"role": model.COPPER, "label": "Top Layer",
-             "thickness_mm": copper_mm},
-            {"role": model.DIELECTRIC, "form": model.CORE,
-             "thickness_mm": dielectric_mm, "material_key": identity},
-            {"role": model.COPPER, "label": "Bottom Layer",
-             "thickness_mm": copper_mm},
+            model.stackup_layer(model.COPPER, copper_mm, label="Top Layer"),
+            model.stackup_layer(model.DIELECTRIC, dielectric_mm,
+                                form=model.CORE),
+            model.stackup_layer(model.COPPER, copper_mm,
+                                label="Bottom Layer"),
         ],
     }
 
@@ -1006,6 +1012,10 @@ def export_physical_stackup(approved_snapshot, requirements,
                 stackup_id, ", ".join(candidates) if candidates
                 else "none"))
     stackup = composed if composed else catalog["stackups"][stackup_id]
+    # A composed stack resolved its material during composition; a published
+    # one is looked up the way its page names the layer.
+    composed_material_key = None if composed is None else \
+        composed["composed_from"]["dielectric_constant"]
     copper_names = list(copper_layer_names)
     if model.stackup_copper_count(stackup) != len(copper_names):
         raise SelectionError(
@@ -1038,11 +1048,8 @@ def export_physical_stackup(approved_snapshot, requirements,
             continue
         dielectric_index += 1
         form = layer.get("form")
-        # A published layer is looked up the way the page names it. A
-        # composed layer names the catalog record it was composed from,
-        # because the generic key would resolve to a different laminate.
-        if layer.get("material_key"):
-            material_key = layer["material_key"]
+        if composed_material_key is not None:
+            material_key = composed_material_key
         elif form == model.PREPREG:
             material_key = "prepreg {}".format(layer.get("material"))
         else:

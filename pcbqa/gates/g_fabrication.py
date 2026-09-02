@@ -41,7 +41,7 @@ REGION = re.compile(r"%?G3[67]\*", re.M)
 
 
 @gate("FAB.LAYER_IDENTITY",
-      "Four copper layers identifiable from filenames, without X2 metadata",
+      "Every copper layer identifiable from filenames, without X2 metadata",
       requires=("archive.zip", "fabrication_naming"))
 def layer_identity(ctx, res):
     spec = ctx.manifest.get("fabrication_naming")
@@ -59,14 +59,17 @@ def layer_identity(ctx, res):
                    for name in names}
     res.measurements["entries"] = sorted(names)
 
-    # 1. exactly the four copper files, told apart by name alone
+    # 1. exactly the declared copper files, told apart by name alone. How
+    #    many there are is the manifest's statement, not this gate's: a
+    #    count named here would be a claim about a board.
     present = [row["ship_as"] for row in copper if row["ship_as"] in names]
     res.measurements["copper_files"] = present
     res.measurements["copper_layer_count"] = len(present)
     if len(present) != len(copper):
         problems.append({
-            "issue": "the archive does not carry all four copper layers under "
-                     "the names the fab reads",
+            "issue": "the archive does not carry all {} declared copper "
+                     "layer(s) under the names the fab reads".format(
+                         len(copper)),
             "expected": [row["ship_as"] for row in copper], "found": present})
     if len(set(present)) != len(present):
         problems.append({"issue": "two copper layers share a filename",
@@ -109,8 +112,9 @@ def layer_identity(ctx, res):
         return res.failed("{} fabrication-identity problem(s)".format(
             len(problems)))
     return res.passed(
-        "four copper layers named {}, each with geometry, and no X2 attribute "
-        "or job file to read them by".format(", ".join(present)))
+        "{} copper layer(s) named {}, each with geometry, and no X2 "
+        "attribute or job file to read them by".format(
+            len(present), ", ".join(present)))
 
 
 def _inner_layers_are_native(ctx, res, spec, zpath):

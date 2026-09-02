@@ -12,7 +12,10 @@ else reads what is already committed, and nothing under `validate` or
     fab select           choose a fabrication profile for a requirements file
     fab impedance        solve a controlled-impedance geometry
     fab export-stackup   write a board physical-stackup supplement from a
-                         committed construction
+                         committed construction, or - where the fabricator
+                         publishes none at the board's layer count and the
+                         stack has no unpublished choice left in it -
+                         composed from stated values and labelled as such
 """
 
 from __future__ import annotations

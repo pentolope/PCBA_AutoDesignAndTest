@@ -885,6 +885,38 @@ class ExportedStackupsCarryTheirProvenance(unittest.TestCase):
                 snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
         self.assertIn("no unique construction", str(caught.exception))
 
+    def test_a_composed_stackup_is_the_same_shape_as_a_parsed_one(self):
+        """Everything downstream of the parsers works on one layer shape.
+        A composed stack that carried an extra field would be a second
+        shape, and it would reach approved.json the day one is stored."""
+        composed = selection.compose_two_layer_stackup(
+            self.approved["normalized"], 1.6, 1)
+        reference = set(model.stackup_layer(
+            model.DIELECTRIC, 1.0, label="x", material_name="y",
+            form=model.CORE, sheet_count=1, annotation="z"))
+        for layer in composed["layers"]:
+            self.assertEqual(set(layer) - reference, set(), layer)
+        model.validate_catalog({
+            "schema_version": model.SCHEMA_VERSION, "fabricator": "jlcpcb",
+            "capabilities": {}, "materials": {},
+            "stackups": {composed["name"]: composed}, "not_extracted": []})
+
+    def test_the_composed_material_is_named_where_it_belongs(self):
+        """Which record supplied the permittivity is a fact about the
+        composition, not a property of the layer - and the export has to
+        read it from there, or it would fall back to the generic core key
+        and dress the board in the multilayer laminate."""
+        composed = selection.compose_two_layer_stackup(
+            self.approved["normalized"], 1.6, 1)
+        self.assertEqual(composed["composed_from"]["dielectric_constant"],
+                         "core 2-layer (capabilities)")
+        document = selection.export_physical_stackup(
+            self.approved, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertEqual(document["layers"][1]["epsilon_r"], 4.5)
+        self.assertNotEqual(
+            document["layers"][1]["epsilon_r"],
+            self.approved["normalized"]["materials"]["core"]["dk"])
+
     def test_the_composed_identity_does_not_depend_on_json_spelling(self):
         """1 and 1.0 are the same thickness. Two identities for one
         construction would be two provenance strings for one thing."""
