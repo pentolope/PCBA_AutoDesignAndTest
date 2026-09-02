@@ -186,6 +186,22 @@ class TheParserReadsWhatJlcpcbPublishes(unittest.TestCase):
             "matches neither published form" in record["reason"]
             for record in catalog["not_extracted"]))
 
+    def test_the_block_scan_stops_at_the_block(self):
+        """The parse is anchored to one table row. A scan that ran past it
+        would collect anything page-shaped from the rest of the document -
+        a value stated about some other product, read as this board's."""
+        raw = _raw_sources()
+        raw["capabilities"] = raw["capabilities"].replace(
+            b"<div>Track width tolerance</div>",
+            b"<div>9.9 (2-Layer PCB)</div>\n"
+            b"<div>1080 Prepreg 9.8</div>\n"
+            b"<div>Track width tolerance</div>")
+        catalog = jlcpcb.parse(raw)
+        self.assertEqual(
+            catalog["materials"]["core 2-layer (capabilities)"]["dk"], 4.5)
+        self.assertNotIn("prepreg 1080 (capabilities)",
+                         catalog["materials"])
+
     def test_a_malformed_number_refuses_through_the_error_contract(self):
         """float() on a loose numeric pattern raises ValueError, which
         acquisition does not catch, so a restyled page would traceback
