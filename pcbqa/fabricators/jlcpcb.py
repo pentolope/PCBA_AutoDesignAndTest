@@ -531,8 +531,24 @@ def _parse_capabilities(html, catalog):
 #: The capability cell states a bare dielectric constant scoped to a board
 #: class; the description cell states them per prepreg. JLCPCB spells the
 #: word both ways in the same cell ("Prepreg", "Perpreg"), so both are read.
-_DK_BOARD_CLASS = re.compile(r"^([0-9.]+) \((\d+)-Layer PCB\)$")
-_DK_PREPREG = re.compile(r"^(\d{3,4}) P(?:re|er)preg ([0-9.]+)$")
+#: Strictly numeric: "[0-9.]+" also matches "4.5.1" and ".", which float()
+#: then raises a bare ValueError on - and acquisition catches only
+#: CatalogError, so a restyled page would traceback instead of reporting
+#: outcome "parse-failed".
+_DK = r"\d+(?:\.\d+)?"
+_DK_BOARD_CLASS = re.compile(r"^(" + _DK + r") \(([1-9]\d*)-Layer PCB\)$")
+_DK_PREPREG = re.compile(r"^(\d{3,4}) P(?:re|er)preg (" + _DK + r")$")
+
+#: A dielectric constant is a ratio to vacuum, so any real laminate is
+#: above 1. A value at or below it is not a weaker reading of the page, it
+#: is evidence the block no longer means what this parser thinks.
+_MINIMUM_PLAUSIBLE_DK = 1.0
+
+#: The block ends at the next feature row, so stopping is normal and not
+#: reportable. A line wearing the shape of one of the two published forms
+#: without matching either is a different thing: the page still means to
+#: state a dielectric constant there and this parser can no longer read it.
+_DK_SHAPED = re.compile(r"-Layer PCB|P(?:re|er)preg", re.I)
 
 
 def _parse_dielectric_constants(text, catalog):
@@ -556,39 +572,74 @@ def _parse_dielectric_constants(text, catalog):
                       "published; no dielectric constant is read from this "
                       "page and none is assumed"})
         return
+    def implausible(value, line):
+        if value > _MINIMUM_PLAUSIBLE_DK:
+            return False
+        catalog["not_extracted"].append({
+            "source": source, "field": "FR-4 dielectric constants",
+            "reason": "the line {!r} states a dielectric constant of {}, "
+                      "which is not above vacuum; it is not read as a "
+                      "material property".format(line[:80], value)})
+        return True
+
     lines = text[marker:].split("\n")[1:]
-    read = 0
+    read, board_classes = 0, 0
     for line in lines:
         board_class = _DK_BOARD_CLASS.match(line)
         if board_class:
+            read += 1
+            value = float(board_class.group(1))
+            if implausible(value, line):
+                continue
             layers = int(board_class.group(2))
             identity = "core {}-layer ({})".format(layers, source)
             catalog["materials"][identity] = model.material(
                 source, model.CORE, "{}-layer core".format(layers),
-                float(board_class.group(1)), excerpt=line,
+                value, excerpt=line,
                 context="FR-4 dielectric constants, capabilities page",
                 applies={"min_layers": layers, "max_layers": layers})
-            read += 1
+            board_classes += 1
             continue
         prepreg = _DK_PREPREG.match(line)
         if prepreg:
+            read += 1
+            value = float(prepreg.group(2))
+            if implausible(value, line):
+                continue
             identity = "prepreg {} ({})".format(prepreg.group(1), source)
             catalog["materials"][identity] = model.material(
                 source, model.PREPREG, prepreg.group(1),
-                float(prepreg.group(2)), excerpt=line,
+                value, excerpt=line,
                 context="FR-4 dielectric constants, capabilities page")
-            read += 1
             continue
         # The block ends at the next feature row, whose text states no
         # dielectric constant. Stopping on the first unreadable line keeps
         # the parse anchored instead of scanning the rest of the page.
         if read:
+            if _DK_SHAPED.search(line):
+                catalog["not_extracted"].append({
+                    "source": source, "field": "FR-4 dielectric constants",
+                    "reason": "the line {!r} is written as a dielectric "
+                              "constant but matches neither published "
+                              "form, so the block was left unread from "
+                              "there".format(line[:80])})
             break
         catalog["not_extracted"].append({
             "source": source, "field": "FR-4 dielectric constants",
             "reason": "the block's first line {!r} states no dielectric "
                       "constant in either published form".format(line[:80])})
         return
+    # Stopping early is how the block ends normally, so the stop itself is
+    # not reportable - but a block that named no board class at all is. It
+    # is the only place a two-layer laminate's permittivity is published,
+    # and losing it silently would leave a composed construction refusing
+    # with no record of what went missing.
+    if not board_classes:
+        catalog["not_extracted"].append({
+            "source": source, "field": "FR-4 dielectric constants",
+            "reason": "the block was read but states no per-board-class "
+                      "dielectric constant; {} other value(s) were "
+                      "read".format(read)})
 
 
 #: The page's board classes, as it words them, with the layer counts each

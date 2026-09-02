@@ -160,6 +160,53 @@ class TheParserReadsWhatJlcpcbPublishes(unittest.TestCase):
             record["field"] == "FR-4 dielectric constants"
             for record in catalog["not_extracted"]))
 
+    def test_losing_the_board_class_value_is_recorded_not_silent(self):
+        """The block can lose its board-class line while still yielding
+        prepregs. Reading three of four and reporting nothing would leave a
+        composed construction refusing with no record of what went
+        missing."""
+        raw = _raw_sources()
+        raw["capabilities"] = raw["capabilities"].replace(
+            b"<div>4.5 (2-Layer PCB)</div>\n", b"")
+        catalog = jlcpcb.parse(raw)
+        self.assertNotIn("core 2-layer (capabilities)", catalog["materials"])
+        self.assertTrue(any(
+            "no per-board-class" in record["reason"]
+            for record in catalog["not_extracted"]))
+
+    def test_a_dk_shaped_line_that_will_not_parse_is_recorded(self):
+        """Stopping at the next feature row is how the block ends. Stopping
+        at a line still written as a dielectric constant is not an ending,
+        it is a reading this parser can no longer perform."""
+        raw = _raw_sources()
+        raw["capabilities"] = raw["capabilities"].replace(
+            b"7628 Prepreg 4.4", b"7628 Prepreg 4.4.1")
+        catalog = jlcpcb.parse(raw)
+        self.assertTrue(any(
+            "matches neither published form" in record["reason"]
+            for record in catalog["not_extracted"]))
+
+    def test_a_malformed_number_refuses_through_the_error_contract(self):
+        """float() on a loose numeric pattern raises ValueError, which
+        acquisition does not catch, so a restyled page would traceback
+        instead of reporting a failed parse."""
+        for bad in (b"4.5.1 (2-Layer PCB)", b". (2-Layer PCB)"):
+            raw = _raw_sources()
+            raw["capabilities"] = raw["capabilities"].replace(
+                b"4.5 (2-Layer PCB)", bad)
+            catalog = jlcpcb.parse(raw)
+            self.assertNotIn("core 2-layer (capabilities)",
+                             catalog["materials"], bad)
+
+    def test_a_permittivity_at_or_below_vacuum_is_not_a_material(self):
+        raw = _raw_sources()
+        raw["capabilities"] = raw["capabilities"].replace(
+            b"4.5 (2-Layer PCB)", b"0 (2-Layer PCB)")
+        catalog = jlcpcb.parse(raw)
+        self.assertNotIn("core 2-layer (capabilities)", catalog["materials"])
+        self.assertTrue(any("not above vacuum" in record["reason"]
+                            for record in catalog["not_extracted"]))
+
     def test_the_default_stackup_is_evidence_not_invention(self):
         stackup = self.catalog["stackups"]["JLC-4L-no-requirement"]
         self.assertTrue(stackup["default_when_no_impedance_requirement"])
@@ -709,10 +756,80 @@ class ExportedStackupsCarryTheirProvenance(unittest.TestCase):
 
     def test_composition_stops_where_the_evidence_stops(self):
         """The ounce equivalence is what turns a stated weight into a stated
-        thickness. Without it there is no construction to compose."""
+        thickness. Without it there is no construction to compose - and the
+        refusal must say so, not fall through to the generic "no unique
+        construction" that a disabled feature would also produce."""
         snapshot = copy.deepcopy(self.approved)
         del snapshot["normalized"]["capabilities"][
             "copper_weight_equivalence_um_per_oz"]
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertIn("ounce-to-micrometre", str(caught.exception))
+
+    def test_an_unestablished_copper_weight_refuses_rather_than_raising(self):
+        """A catalog that stops publishing two-layer outer copper leaves the
+        profile feasible with no weight resolved. That must refuse as a
+        selection problem, not arrive at the arithmetic as None."""
+        snapshot = copy.deepcopy(self.approved)
+        capabilities = snapshot["normalized"]["capabilities"]
+        for identity in ("outer_copper_2layer_oz",
+                         "outer_copper_fr4_2layer_heavy_oz",
+                         "outer_copper_fr4_standard_oz"):
+            capabilities.pop(identity, None)
+        requirements = _two_layer_requirements()
+        del requirements["outer_copper_oz"]
+        del requirements["min_track_mm"]
+        del requirements["min_space_mm"]
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                snapshot, requirements, ["F.Cu", "B.Cu"])
+        self.assertIn("no outer copper weight", str(caught.exception))
+
+    def test_contradictory_permittivity_is_refused_not_sorted(self):
+        """Two records scoped to the same build that disagree are a real
+        disagreement. Returning whichever sorts first would settle it by
+        string ordering."""
+        snapshot = copy.deepcopy(self.approved)
+        materials = snapshot["normalized"]["materials"]
+        materials["core 2-layer (impedance)"] = dict(
+            materials["core 2-layer (capabilities)"],
+            source="impedance", dk=3.6)
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertIn("contradictory evidence", str(caught.exception))
+
+    def test_two_pages_agreeing_is_not_a_contradiction(self):
+        """Agreement is corroboration. Refusing it would make a second
+        witness a fault."""
+        snapshot = copy.deepcopy(self.approved)
+        materials = snapshot["normalized"]["materials"]
+        materials["core 2-layer (impedance)"] = dict(
+            materials["core 2-layer (capabilities)"], source="impedance")
+        document = selection.export_physical_stackup(
+            snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertEqual(document["layers"][1]["epsilon_r"], 4.5)
+
+    def test_a_conditioned_record_is_not_an_answer_about_a_build(self):
+        """A record carrying its own conditions describes a narrower thing
+        than the build. It must not be consumed as the build's value."""
+        snapshot = copy.deepcopy(self.approved)
+        materials = snapshot["normalized"]["materials"]
+        materials["core 2-layer (capabilities)"]["properties"] = {
+            "core_thickness_mm": 0.1}
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertIn("not borrowed", str(caught.exception))
+
+    def test_a_record_scoped_wider_than_the_build_is_not_an_answer(self):
+        """min_layers alone is not the scope: a record published for two
+        layers upward is a statement about a range, not about this build."""
+        snapshot = copy.deepcopy(self.approved)
+        materials = snapshot["normalized"]["materials"]
+        materials["core 2-layer (capabilities)"]["applies"] = {
+            "min_layers": 2, "max_layers": 8}
         with self.assertRaises(selection.SelectionError):
             selection.export_physical_stackup(
                 snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
@@ -731,13 +848,39 @@ class ExportedStackupsCarryTheirProvenance(unittest.TestCase):
         self.assertIn("no dielectric", str(caught.exception))
 
     def test_composition_never_displaces_a_published_construction(self):
-        """Composition is the answer to "nothing is published", not a
-        cheaper route around one that is."""
-        document = selection.export_physical_stackup(
-            self.approved, _requirements(),
-            ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
-        self.assertEqual(document["generated_from"]["stackup"],
-                         "JLC-4L-no-requirement")
+        """Composition answers "the fabricator publishes none here", not
+        "none matches this profile". A published two-layer construction the
+        profile's copper build rules out still means constructions ARE
+        published at two layers, and composing beside it would commit the
+        flat claim that none is - into a file a board pins."""
+        snapshot = copy.deepcopy(self.approved)
+        published = copy.deepcopy(
+            snapshot["normalized"]["stackups"]["JLC-4L-no-requirement"])
+        published["layers"] = [
+            {"role": model.COPPER, "thickness_mm": 0.07},
+            {"role": model.DIELECTRIC, "form": model.CORE,
+             "thickness_mm": 1.46},
+            {"role": model.COPPER, "thickness_mm": 0.07}]
+        published["applicability"] = {"nominal_thickness_mm": 1.6,
+                                      "outer_copper_weight_oz": 2.0}
+        snapshot["normalized"]["stackups"]["JLC02161-published"] = published
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertIn("no unique construction", str(caught.exception))
+
+    def test_the_composed_identity_does_not_depend_on_json_spelling(self):
+        """1 and 1.0 are the same thickness. Two identities for one
+        construction would be two provenance strings for one thing."""
+        integer = _two_layer_requirements()
+        integer["board_thickness_mm"] = 1
+        real = _two_layer_requirements()
+        real["board_thickness_mm"] = 1.0
+        names = {selection.export_physical_stackup(
+            self.approved, requirements,
+            ["F.Cu", "B.Cu"])["generated_from"]["stackup"]
+            for requirements in (integer, real)}
+        self.assertEqual(len(names), 1, names)
 
     def test_no_dk_is_borrowed_for_an_unlisted_material(self):
         snapshot = copy.deepcopy(self.approved)

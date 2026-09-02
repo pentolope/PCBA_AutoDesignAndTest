@@ -412,17 +412,9 @@ def select(catalog, requirements):
     # -- stackup candidates: the same configuration, or none ---------------
     stackup_id, candidates = _stackups(catalog, layers, thickness, impedance,
                                        outer_oz, inner_oz, explanations)
-    if stackup_id is None and not candidates and not impedance \
-            and layers == _COMPOSABLE_COPPER_LAYERS:
-        # Said here so `select` and `export-stackup` cannot disagree about
-        # what this profile can have: no construction is published, and a
-        # physical stackup is still obtainable because at two layers there
-        # is nothing left to publish.
-        explanations.append(
-            "a {}-layer construction is not published and is not a "
-            "candidate here, but one can be composed for this profile from "
-            "stated values, which is what export-stackup does".format(
-                _COMPOSABLE_COPPER_LAYERS))
+    composable = (stackup_id is None and not candidates and not impedance
+                  and layers == _COMPOSABLE_COPPER_LAYERS
+                  and not _publishes_construction_at(catalog, layers))
     if impedance:
         if not candidates:
             # A controlled-impedance build IS its construction: impedance
@@ -453,6 +445,17 @@ def select(catalog, requirements):
             "satisfies the requirements is preferred")
 
     feasible = not rejections
+    if composable and feasible:
+        # Said here so `select` and `export-stackup` cannot disagree about
+        # what this profile can have: nothing is published at this layer
+        # count, and a physical stackup is still obtainable because at two
+        # layers there is nothing left to publish. Only for a profile that
+        # survived every check - export refuses an infeasible one outright,
+        # and promising that one a construction would be a lie.
+        explanations.append(
+            "no {}-layer construction is published, but one can be "
+            "composed for this profile from stated values, which is what "
+            "export-stackup does".format(_COMPOSABLE_COPPER_LAYERS))
     checked = sorted(key for key in requirements
                      if requirements.get(key) is not None)
     return {
@@ -787,6 +790,20 @@ def _stackups(catalog, layers, thickness, impedance, outer_oz, inner_oz,
 _COMPOSABLE_COPPER_LAYERS = 2
 
 
+def _publishes_construction_at(catalog, layers):
+    """Whether the catalog carries ANY construction with this many coppers.
+
+    The question composition has to ask is not "is one a candidate for this
+    profile" but "does the fabricator publish one at all". A published
+    construction that this profile's copper build rules out still means the
+    fabricator publishes constructions here, and composing beside it would
+    put a flat falsehood - that none is published - into a file a board
+    commits and pins.
+    """
+    return any(model.stackup_copper_count(stackup) == layers
+               for stackup in catalog.get("stackups", {}).values())
+
+
 def _material_stated_for_layer_count(materials, kind, layers):
     """The one record stating this material's Dk for EXACTLY this build.
 
@@ -798,7 +815,15 @@ def _material_stated_for_layer_count(materials, kind, layers):
     record whose stated scope is this layer count and nothing else, and
     which carries no further conditions of its own; anything broader,
     narrower or conditioned is not an answer and returns none.
+
+    "The one" is enforced, not assumed. Two records scoped to the same
+    build that disagree are contradictory evidence, and returning whichever
+    sorts first would settle a real disagreement by string ordering - the
+    silent overwrite that keeping each page's records separate exists to
+    prevent. Agreement is not a contradiction: two pages stating the same
+    number are two witnesses, and the first is returned.
     """
+    found = []
     for identity in sorted(materials):
         record = materials[identity]
         if record.get("kind") != kind or record.get("properties"):
@@ -807,8 +832,18 @@ def _material_stated_for_layer_count(materials, kind, layers):
         if applies.get("min_layers") != layers \
                 or applies.get("max_layers") != layers:
             continue
-        return identity, record
-    return None, None
+        found.append((identity, record))
+    if not found:
+        return None, None
+    if len({record["dk"] for _identity, record in found}) > 1:
+        raise SelectionError(
+            "the approved catalog states different {} dielectric constants "
+            "for a {}-layer build ({}); contradictory evidence is refused, "
+            "not chosen from".format(
+                kind, layers,
+                ", ".join("{}={}".format(identity, record["dk"])
+                          for identity, record in found)))
+    return found[0]
 
 
 def compose_two_layer_stackup(catalog, thickness_mm, outer_oz):
@@ -833,6 +868,11 @@ def compose_two_layer_stackup(catalog, thickness_mm, outer_oz):
     missing its dielectric constant would be a stackup that silently
     stops supporting the analyses a board asked it for.
     """
+    if not isinstance(outer_oz, (int, float)) or isinstance(outer_oz, bool):
+        raise SelectionError(
+            "no outer copper weight was established for this profile, so "
+            "there is no foil thickness to take off the board thickness "
+            "and no construction can be composed")
     capabilities = catalog.get("capabilities", {})
     equivalence = capabilities.get("copper_weight_equivalence_um_per_oz")
     if equivalence is None:
@@ -857,7 +897,10 @@ def compose_two_layer_stackup(catalog, thickness_mm, outer_oz):
             "for one; without it a composed construction would carry no "
             "material property at all")
     return {
-        "name": "Composed {}L {} mm {} oz".format(
+        # Formatted, not interpolated raw: a requirements file spelling the
+        # thickness 1 rather than 1.0 must not mint a second identity and a
+        # second provenance string for one construction.
+        "name": "Composed {}L {:g} mm {} oz".format(
             _COMPOSABLE_COPPER_LAYERS, thickness_mm, which_weight(outer_oz)),
         "source": material["source"],
         "composed_from": {
@@ -880,11 +923,16 @@ def compose_two_layer_stackup(catalog, thickness_mm, outer_oz):
                                equivalence["source"]),
             "thickness_basis": "stated finished-thickness option; the "
                                "dielectric is that less both copper foils "
-                               "and is therefore arithmetic, not quoted - "
-                               "it does not deduct solder mask or plating, "
-                               "which the fabricator does not state "
-                               "separately and which its stated thickness "
-                               "tolerance dominates",
+                               "and is therefore arithmetic, not quoted. "
+                               "The foil deducted is the nominal weight at "
+                               "the stated um/oz equivalence, which is what "
+                               "the published constructions state for their "
+                               "own outer layers; the catalog separately "
+                               "states a larger FINISHED external copper, "
+                               "and deducting that instead would thin this "
+                               "dielectric by about a hundredth of a "
+                               "millimetre. Solder mask is not deducted and "
+                               "is not stated as part of this thickness",
         },
         "layers": [
             {"role": model.COPPER, "label": "Top Layer",
@@ -934,8 +982,10 @@ def export_physical_stackup(approved_snapshot, requirements,
     composed = None
     if stackup_id is None:
         stackup_id = result["stackup"]
-        if stackup_id is None and not candidates and \
-                profile["copper_layers"] == _COMPOSABLE_COPPER_LAYERS:
+        if stackup_id is None and not candidates \
+                and profile["copper_layers"] == _COMPOSABLE_COPPER_LAYERS \
+                and not _publishes_construction_at(
+                    catalog, _COMPOSABLE_COPPER_LAYERS):
             composed = compose_two_layer_stackup(
                 catalog, profile["board_thickness_mm"],
                 profile["outer_copper_oz"])
