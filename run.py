@@ -472,7 +472,9 @@ def cmd_gates():
     from pcbqa import core
     _load_gates()
     for entry in core.registered():
-        req = ", ".join(entry["requires"]) or "-"
+        req = ", ".join(
+            " OR ".join(key) if isinstance(key, tuple) else key
+            for key in entry["requires"]) or "-"
         print("{:32s} {}".format(entry["id"], entry["title"]))
         print("{:32s} requires: {}".format("", req))
     return 0
