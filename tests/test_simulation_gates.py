@@ -274,5 +274,63 @@ class AliasingKeepsTheMeasuredIdentity(unittest.TestCase):
             extract.aliased({"identity": "x"}, "handle")
 
 
+class ConnectorPositionsExcludeMechanicalPads(unittest.TestCase):
+    """A mounting hole is not a position on a connector."""
+
+    class _Pad:
+        def __init__(self, number, x=0.0, y=0.0):
+            self._number = number
+            self._x, self._y = x, y
+
+        def GetNumber(self):
+            return self._number
+
+        def GetPosition(self):
+            class P:
+                pass
+            point = P()
+            point.x, point.y = self._x * 1e6, self._y * 1e6
+            return point
+
+        def GetNetname(self):
+            return "N"
+
+    def _facts(self):
+        from pcbqa.rules import ConnectorContractRule
+
+        pads = [self._Pad("1", 0.0, 0.0), self._Pad("2", 1.27, 0.0),
+                self._Pad("", 3.0, 2.0), self._Pad("", 4.0, 2.0)]
+
+        class Footprint:
+            def Pads(inner):
+                return list(pads)
+
+            GetFPIDAsString = staticmethod(lambda: "lib:fp")
+            GetValue = staticmethod(lambda: "v")
+            GetLibDescription = staticmethod(lambda: "")
+            IsFlipped = staticmethod(lambda: False)
+            IsDNP = staticmethod(lambda: False)
+            IsExcludedFromBOM = staticmethod(lambda: False)
+            Models = staticmethod(lambda: [])
+
+        class Board:
+            FindFootprintByReference = staticmethod(lambda ref: Footprint())
+
+        rule = ConnectorContractRule(
+            {"id": "c", "reference": "J1", "required_positions": 2,
+             "required_pitch_mm": 1.27}, {})
+        return rule.evaluate(Board(), {})
+
+    def test_unnumbered_pads_are_not_counted_as_positions(self):
+        problems, facts = self._facts()
+        self.assertEqual(facts["positions"], 2)
+        self.assertEqual(facts["mechanical_pads"], 2)
+
+    def test_a_mounting_hole_does_not_set_the_measured_pitch(self):
+        problems, facts = self._facts()
+        self.assertAlmostEqual(facts["pitch_mm"], 1.27)
+        self.assertEqual(problems, [])
+
+
 if __name__ == "__main__":
     unittest.main()

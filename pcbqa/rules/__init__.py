@@ -188,7 +188,13 @@ class ConnectorContractRule:
         if fp is None:
             return [{"issue": "connector not present on the board",
                      "reference": ref}], {}
-        pads = {p.GetNumber(): p for p in fp.Pads()}
+        # A pad with no number is mechanical - a mounting hole, a locating
+        # peg - not a position on the connector. Counting it made
+        # required_positions mean something no datasheet states, and let a
+        # locating hole set the measured row count and pitch. They are
+        # reported, never counted.
+        numbered = [p for p in fp.Pads() if p.GetNumber()]
+        pads = {p.GetNumber(): p for p in numbered}
         facts = {
             "reference": ref,
             "footprint_id": fp.GetFPIDAsString(),
@@ -196,6 +202,7 @@ class ConnectorContractRule:
             "description": fp.GetLibDescription() or "",
             "side": "back" if fp.IsFlipped() else "front",
             "positions": len(pads),
+            "mechanical_pads": len(list(fp.Pads())) - len(numbered),
             "dnp": bool(fp.IsDNP()),
             "excluded_from_bom": bool(fp.IsExcludedFromBOM()),
             "models": [m.m_Filename for m in fp.Models()],

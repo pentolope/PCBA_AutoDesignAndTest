@@ -137,7 +137,8 @@ def _classify(annulus, centre, openings, target, process, contact_tol, tie_tol):
 
 @gate("VIA.NATIVE_GERBER_AGREEMENT",
       "Every via agrees between the native board and the export",
-      requires=("via_mask.design_target_mm", "artifacts.gerber_dir"))
+      requires=("via_mask.design_target_mm", "via_mask.process.limit_mm",
+                "artifacts.gerber_dir"))
 def via_export_parity(ctx, res):
     from .g_geometry import _via_survey
 
