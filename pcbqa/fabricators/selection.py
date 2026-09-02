@@ -412,6 +412,17 @@ def select(catalog, requirements):
     # -- stackup candidates: the same configuration, or none ---------------
     stackup_id, candidates = _stackups(catalog, layers, thickness, impedance,
                                        outer_oz, inner_oz, explanations)
+    if stackup_id is None and not candidates and not impedance \
+            and layers == _COMPOSABLE_COPPER_LAYERS:
+        # Said here so `select` and `export-stackup` cannot disagree about
+        # what this profile can have: no construction is published, and a
+        # physical stackup is still obtainable because at two layers there
+        # is nothing left to publish.
+        explanations.append(
+            "a {}-layer construction is not published and is not a "
+            "candidate here, but one can be composed for this profile from "
+            "stated values, which is what export-stackup does".format(
+                _COMPOSABLE_COPPER_LAYERS))
     if impedance:
         if not candidates:
             # A controlled-impedance build IS its construction: impedance
@@ -767,6 +778,125 @@ def _stackups(catalog, layers, thickness, impedance, outer_oz, inner_oz,
 # feeding the timing/SI system
 # ---------------------------------------------------------------------------
 
+#: A construction has unpublished degrees of freedom - how the dielectric
+#: splits into cores and prepreg sheets, how many sheets, what inner foil -
+#: as soon as it carries an inner layer, and the fabricator publishes those
+#: tables for the builds it offers impedance control on. A two-layer board
+#: has none: it is one copper-clad laminate, so its stack follows from the
+#: finished thickness and the copper weight alone.
+_COMPOSABLE_COPPER_LAYERS = 2
+
+
+def _material_stated_for_layer_count(materials, kind, layers):
+    """The one record stating this material's Dk for EXACTLY this build.
+
+    Deliberately not a general "best match" lookup. A catalog carries
+    several kinds of core record - a stackup page's generic statement, an
+    impedance model's thickness-conditioned values, a class-scoped laminate
+    - and a resolver that ranked them would sooner or later answer a
+    question about one with the value of another. So this accepts only a
+    record whose stated scope is this layer count and nothing else, and
+    which carries no further conditions of its own; anything broader,
+    narrower or conditioned is not an answer and returns none.
+    """
+    for identity in sorted(materials):
+        record = materials[identity]
+        if record.get("kind") != kind or record.get("properties"):
+            continue
+        applies = record.get("applies") or {}
+        if applies.get("min_layers") != layers \
+                or applies.get("max_layers") != layers:
+            continue
+        return identity, record
+    return None, None
+
+
+def compose_two_layer_stackup(catalog, thickness_mm, outer_oz):
+    """The single construction a two-layer board at this profile can have.
+
+    The fabricator publishes layer-by-layer tables only for the builds it
+    offers controlled impedance on, which start at four layers, so no
+    two-layer construction is published and none can be read. What IS
+    published is every quantity one is made of: the finished thickness, the
+    outer copper weight, the ounce-to-micrometre equivalence, and a
+    dielectric constant stated for a two-layer board specifically.
+
+    Composing those is not the inference the adapter refuses elsewhere.
+    Refused there is a construction whose interior the fabricator never
+    published and cannot be derived - the core/prepreg split of a
+    multilayer build. Here there is no interior: two copper layers bound a
+    single laminate, and its thickness is the finished thickness less the
+    two foils. The one quantity that is arithmetic rather than quoted says
+    so in its own basis string.
+
+    Raises rather than returning a partial stack: a composed construction
+    missing its dielectric constant would be a stackup that silently
+    stops supporting the analyses a board asked it for.
+    """
+    capabilities = catalog.get("capabilities", {})
+    equivalence = capabilities.get("copper_weight_equivalence_um_per_oz")
+    if equivalence is None:
+        raise SelectionError(
+            "the approved catalog states no ounce-to-micrometre copper "
+            "equivalence, so a copper weight cannot be turned into a "
+            "thickness and no construction can be composed")
+    copper_mm = round(outer_oz * float(equivalence["value"]) / 1000.0, 6)
+    dielectric_mm = round(thickness_mm - 2 * copper_mm, 6)
+    if dielectric_mm <= 0:
+        raise SelectionError(
+            "{} oz outer copper on both faces is {} mm, which leaves no "
+            "dielectric inside a {} mm board; the fabricator states both "
+            "options but this combination is not a construction".format(
+                which_weight(outer_oz), 2 * copper_mm, thickness_mm))
+    identity, material = _material_stated_for_layer_count(
+        catalog.get("materials", {}), model.CORE, _COMPOSABLE_COPPER_LAYERS)
+    if material is None:
+        raise SelectionError(
+            "the approved catalog states no dielectric constant for a "
+            "two-layer board, and the multilayer core's is not borrowed "
+            "for one; without it a composed construction would carry no "
+            "material property at all")
+    return {
+        "name": "Composed {}L {} mm {} oz".format(
+            _COMPOSABLE_COPPER_LAYERS, thickness_mm, which_weight(outer_oz)),
+        "source": material["source"],
+        "composed_from": {
+            "reason": "the fabricator publishes no two-layer construction; "
+                      "a two-layer board is one copper-clad laminate, so "
+                      "its stack follows from stated values with no "
+                      "unpublished choice remaining",
+            "copper_weight_equivalence": equivalence["source"],
+            "dielectric_constant": identity,
+        },
+        "layer_count_section": _COMPOSABLE_COPPER_LAYERS,
+        "default_when_no_impedance_requirement": True,
+        "applicability": {
+            "nominal_thickness_mm": thickness_mm,
+            "outer_copper_weight_oz": outer_oz,
+            "outer_basis": "stated {} oz outer copper at the stated {} "
+                           "um/oz equivalence [{}]".format(
+                               which_weight(outer_oz),
+                               float(equivalence["value"]),
+                               equivalence["source"]),
+            "thickness_basis": "stated finished-thickness option; the "
+                               "dielectric is that less both copper foils "
+                               "and is therefore arithmetic, not quoted - "
+                               "it does not deduct solder mask or plating, "
+                               "which the fabricator does not state "
+                               "separately and which its stated thickness "
+                               "tolerance dominates",
+        },
+        "layers": [
+            {"role": model.COPPER, "label": "Top Layer",
+             "thickness_mm": copper_mm},
+            {"role": model.DIELECTRIC, "form": model.CORE,
+             "thickness_mm": dielectric_mm, "material_key": identity},
+            {"role": model.COPPER, "label": "Bottom Layer",
+             "thickness_mm": copper_mm},
+        ],
+    }
+
+
 def export_physical_stackup(approved_snapshot, requirements,
                             copper_layer_names, stackup_id=None):
     """A board-supplement physical stackup from one approved construction.
@@ -800,9 +930,17 @@ def export_physical_stackup(approved_snapshot, requirements,
             "so no construction can be exported as describing them: {}".format(
                 "; ".join(r["issue"] for r in result["rejections"][:3])))
     candidates = result["stackup_candidates"]
+    profile = result["profile"]
+    composed = None
     if stackup_id is None:
         stackup_id = result["stackup"]
-        if stackup_id is None:
+        if stackup_id is None and not candidates and \
+                profile["copper_layers"] == _COMPOSABLE_COPPER_LAYERS:
+            composed = compose_two_layer_stackup(
+                catalog, profile["board_thickness_mm"],
+                profile["outer_copper_oz"])
+            stackup_id = composed["name"]
+        elif stackup_id is None:
             raise SelectionError(
                 "no unique construction describes this profile ({}); "
                 "name one of the selection's own candidates explicitly, or "
@@ -817,7 +955,7 @@ def export_physical_stackup(approved_snapshot, requirements,
             "for its configuration".format(
                 stackup_id, ", ".join(candidates) if candidates
                 else "none"))
-    stackup = catalog["stackups"][stackup_id]
+    stackup = composed if composed else catalog["stackups"][stackup_id]
     copper_names = list(copper_layer_names)
     if model.stackup_copper_count(stackup) != len(copper_names):
         raise SelectionError(
@@ -827,12 +965,14 @@ def export_physical_stackup(approved_snapshot, requirements,
     materials = catalog.get("materials", {})
     provenance = (
         "{fab} approved catalog {digest}, source {source}, retrieved {when}, "
-        "stackup {stackup}".format(
+        "stackup {stackup}{composed}".format(
             fab=catalog.get("fabricator"),
             digest=approved_snapshot["normalized_sha256"][:12],
             source=stackup["source"],
             when=approved_snapshot["retrieved_utc"][:10],
-            stackup=stackup_id))
+            stackup=stackup_id,
+            composed="" if composed is None else
+            " (composed from stated values, not a published construction)"))
 
     layers = []
     copper_index = 0
@@ -848,7 +988,12 @@ def export_physical_stackup(approved_snapshot, requirements,
             continue
         dielectric_index += 1
         form = layer.get("form")
-        if form == model.PREPREG:
+        # A published layer is looked up the way the page names it. A
+        # composed layer names the catalog record it was composed from,
+        # because the generic key would resolve to a different laminate.
+        if layer.get("material_key"):
+            material_key = layer["material_key"]
+        elif form == model.PREPREG:
             material_key = "prepreg {}".format(layer.get("material"))
         else:
             material_key = "core"
@@ -869,10 +1014,25 @@ def export_physical_stackup(approved_snapshot, requirements,
                 "{!r}".format(material_key))
         layers.append(entry)
 
+    notes = [
+        "Every value here restates the approved fabricator catalog "
+        "entry named in `provenance`; none is measured from a board and "
+        "none is a general-knowledge default.",
+        "Loss tangent is not published by these sources and is left "
+        "null rather than assumed.",
+    ]
+    if composed is not None:
+        notes.append(
+            "This construction is composed, not published: {}. Its "
+            "dielectric thickness is the stated finished thickness less "
+            "both stated copper foils.".format(
+                composed["composed_from"]["reason"]))
+
     return {
         "schema_version": 1,
-        "title": "Physical stackup exported from the approved {} "
-                 "catalog".format(catalog.get("fabricator")),
+        "title": "Physical stackup {} the approved {} catalog".format(
+            "composed from" if composed is not None else "exported from",
+            catalog.get("fabricator")),
         "provenance": provenance,
         "generated_from": {
             "fabricator": catalog.get("fabricator"),
@@ -884,12 +1044,6 @@ def export_physical_stackup(approved_snapshot, requirements,
                          ("id", "url", "sha256_raw")}
                         for source in approved_snapshot["sources"]],
         },
-        "notes": [
-            "Every value here restates the approved fabricator catalog "
-            "entry named in `provenance`; none is measured from a board and "
-            "none is a general-knowledge default.",
-            "Loss tangent is not published by these sources and is left "
-            "null rather than assumed.",
-        ],
+        "notes": notes,
         "layers": layers,
     }

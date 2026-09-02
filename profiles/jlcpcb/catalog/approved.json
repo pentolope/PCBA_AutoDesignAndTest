@@ -1,5 +1,5 @@
 {
-  "approved_utc": "2026-08-25T21:09:31.770999+00:00",
+  "approved_utc": "2026-09-02T14:47:54+00:00",
   "declared_source_ids": [
     "impedance",
     "capabilities",
@@ -951,6 +951,18 @@
         "name": "core",
         "source": "impedance"
       },
+      "core 2-layer (capabilities)": {
+        "applies": {
+          "max_layers": 2,
+          "min_layers": 2
+        },
+        "context": "FR-4 dielectric constants, capabilities page",
+        "dk": 4.5,
+        "excerpt": "4.5 (2-Layer PCB)",
+        "kind": "core",
+        "name": "2-layer core",
+        "source": "capabilities"
+      },
       "core NP-155F 0.08mm (impedance-calculator)": {
         "applies": {
           "max_layers": 8,
@@ -1418,6 +1430,14 @@
         },
         "source": "impedance-calculator"
       },
+      "prepreg 2116 (capabilities)": {
+        "context": "FR-4 dielectric constants, capabilities page",
+        "dk": 4.16,
+        "excerpt": "2116 Perpreg 4.16",
+        "kind": "prepreg",
+        "name": "2116",
+        "source": "capabilities"
+      },
       "prepreg 2313 (S1000-2M, impedance-calculator)": {
         "applies": {
           "max_layers": null,
@@ -1460,6 +1480,14 @@
         },
         "source": "impedance-calculator"
       },
+      "prepreg 3313 (capabilities)": {
+        "context": "FR-4 dielectric constants, capabilities page",
+        "dk": 4.1,
+        "excerpt": "3313 Perpreg 4.1",
+        "kind": "prepreg",
+        "name": "3313",
+        "source": "capabilities"
+      },
       "prepreg 7628": {
         "dk": 4.4,
         "excerpt": "7628 -> 4.4",
@@ -1483,6 +1511,14 @@
           "resin_content_percent": 49.0
         },
         "source": "impedance-calculator"
+      },
+      "prepreg 7628 (capabilities)": {
+        "context": "FR-4 dielectric constants, capabilities page",
+        "dk": 4.4,
+        "excerpt": "7628 Prepreg 4.4",
+        "kind": "prepreg",
+        "name": "7628",
+        "source": "capabilities"
       },
       "soldermask (impedance-calculator)": {
         "context": "impedance-calculator model",
@@ -4244,13 +4280,13 @@
       }
     }
   },
-  "normalized_sha256": "f7cd05e75e1f9d6d015276986a43c13f2e2162ded30eea61f0362f999a97918c",
+  "normalized_sha256": "953f02eab19f914ef0017b2ebb614de43d16ebc857a424d6cce2afdc09e5da65",
   "outcome": "complete",
   "parser": {
     "id": "pcbqa.fabricators.jlcpcb",
-    "version": "6"
+    "version": "7"
   },
-  "replaced_normalized_sha256": "21c904a74d3f14ece2144333366be0bc37cde4b1b777590006d7d23e7277fe68",
+  "replaced_normalized_sha256": "f7cd05e75e1f9d6d015276986a43c13f2e2162ded30eea61f0362f999a97918c",
   "retrieved_utc": "2026-08-25T21:09:17.739495+00:00",
   "schema_version": 3,
   "sources": [

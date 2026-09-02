@@ -89,6 +89,15 @@ def _approved_store(tag):
     return CatalogStore(root)
 
 
+def _two_layer_requirements():
+    """A board the fabricator publishes no construction for."""
+    return {"copper_layers": 2, "board_thickness_mm": 1.6,
+            "outer_copper_oz": 1, "material": "FR4",
+            "impedance_control": False,
+            "min_track_mm": 0.2, "min_space_mm": 0.15,
+            "min_drill_mm": 0.3, "min_via_diameter_mm": 0.6}
+
+
 def _rewrite_json(path, mutate):
     with open(path, encoding="utf-8") as handle:
         document = json.load(handle)
@@ -114,6 +123,42 @@ class TheParserReadsWhatJlcpcbPublishes(unittest.TestCase):
         self.assertEqual(materials["prepreg 3313"]["dk"], 4.1)
         self.assertEqual(materials["prepreg 1080"]["dk"], 3.91)
         self.assertEqual(materials["core"]["dk"], 4.6)
+
+    def test_the_two_layer_dielectric_constant_is_read_with_its_scope(self):
+        """The impedance page states dielectric constants for the builds it
+        publishes, which start at four layers. The capabilities page is the
+        only place a two-layer board's is stated, and it is kept scoped to
+        two layers so nothing else can consume it."""
+        materials = self.catalog["materials"]
+        two_layer = materials["core 2-layer (capabilities)"]
+        self.assertEqual(two_layer["dk"], 4.5)
+        self.assertEqual(two_layer["applies"],
+                         {"min_layers": 2, "max_layers": 2})
+        self.assertEqual(two_layer["excerpt"], "4.5 (2-Layer PCB)")
+        self.assertEqual(materials["core"]["dk"], 4.6)
+
+    def test_the_two_pages_dielectric_constants_stay_distinct(self):
+        """Both pages state a value for 7628. They agree today; keeping them
+        as separate records is what makes a future disagreement visible
+        instead of letting one overwrite the other."""
+        materials = self.catalog["materials"]
+        self.assertEqual(materials["prepreg 7628"]["source"], "impedance")
+        self.assertEqual(
+            materials["prepreg 7628 (capabilities)"]["source"],
+            "capabilities")
+        self.assertEqual(materials["prepreg 7628"]["dk"],
+                         materials["prepreg 7628 (capabilities)"]["dk"])
+
+    def test_a_missing_dielectric_block_is_recorded_not_guessed(self):
+        raw = _raw_sources()
+        raw["capabilities"] = raw["capabilities"].replace(
+            b"FR-4 Dielectric Constants", b"FR-4 Dielectric Values")
+        catalog = jlcpcb.parse(raw)
+        self.assertNotIn("core 2-layer (capabilities)",
+                         catalog["materials"])
+        self.assertTrue(any(
+            record["field"] == "FR-4 dielectric constants"
+            for record in catalog["not_extracted"]))
 
     def test_the_default_stackup_is_evidence_not_invention(self):
         stackup = self.catalog["stackups"]["JLC-4L-no-requirement"]
@@ -615,6 +660,84 @@ class ExportedStackupsCarryTheirProvenance(unittest.TestCase):
             stackup_id=result["stackup_candidates"][0])
         self.assertEqual(document["generated_from"]["stackup"],
                          result["stackup_candidates"][0])
+
+    def test_a_two_layer_board_gets_the_construction_it_can_only_have(self):
+        """The fabricator publishes no two-layer stackup, so one is composed
+        from what it does state: the finished thickness, the outer copper
+        weight, the ounce equivalence, and the dielectric constant stated
+        for a two-layer board. Nothing about the composition is optional -
+        two copper layers bound one laminate - so the result is the only
+        construction the profile can have."""
+        from pcbqa import stackup_physical
+        document = selection.export_physical_stackup(
+            self.approved, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        declared = stackup_physical.from_declaration(document)
+        self.assertEqual(declared.copper_layer_names, ["F.Cu", "B.Cu"])
+        self.assertEqual(declared.layer("F.Cu").thickness_mm, 0.035)
+        self.assertEqual(declared.layer("B.Cu").thickness_mm, 0.035)
+        self.assertEqual(declared.layer("dielectric 1").thickness_mm, 1.53)
+        self.assertEqual(declared.layer("dielectric 1").epsilon_r, 4.5)
+
+    def test_a_composed_construction_says_that_it_is_composed(self):
+        """A composed stack must never read as a published one: a reviewer
+        who cannot tell them apart cannot audit either."""
+        document = selection.export_physical_stackup(
+            self.approved, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertIn("composed", document["title"])
+        self.assertIn("not a published construction", document["provenance"])
+        self.assertTrue(any("composed, not published" in note
+                            for note in document["notes"]))
+        published = selection.export_physical_stackup(
+            self.approved, _requirements(),
+            ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
+        self.assertNotIn("composed", published["title"])
+        self.assertNotIn("composed", published["provenance"])
+
+    def test_the_multilayer_core_is_not_borrowed_for_two_layers(self):
+        """The catalog states 4.6 for the cores of the constructions it
+        publishes and 4.5 for a two-layer board. They are different
+        laminates; without the two-layer statement the composition refuses
+        rather than reaching for the nearer number."""
+        snapshot = copy.deepcopy(self.approved)
+        materials = snapshot["normalized"]["materials"]
+        self.assertEqual(materials["core"]["dk"], 4.6)
+        del materials["core 2-layer (capabilities)"]
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertIn("not borrowed", str(caught.exception))
+
+    def test_composition_stops_where_the_evidence_stops(self):
+        """The ounce equivalence is what turns a stated weight into a stated
+        thickness. Without it there is no construction to compose."""
+        snapshot = copy.deepcopy(self.approved)
+        del snapshot["normalized"]["capabilities"][
+            "copper_weight_equivalence_um_per_oz"]
+        with self.assertRaises(selection.SelectionError):
+            selection.export_physical_stackup(
+                snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+
+    def test_copper_that_fills_the_board_is_not_a_construction(self):
+        """No pair of currently stated options reaches this, which is why
+        the arithmetic is guarded rather than trusted: a later catalog is
+        free to state a heavier foil, and a stack with no dielectric left
+        in it must refuse instead of being emitted."""
+        snapshot = copy.deepcopy(self.approved)
+        snapshot["normalized"]["capabilities"][
+            "copper_weight_equivalence_um_per_oz"]["value"] = 900.0
+        with self.assertRaises(selection.SelectionError) as caught:
+            selection.export_physical_stackup(
+                snapshot, _two_layer_requirements(), ["F.Cu", "B.Cu"])
+        self.assertIn("no dielectric", str(caught.exception))
+
+    def test_composition_never_displaces_a_published_construction(self):
+        """Composition is the answer to "nothing is published", not a
+        cheaper route around one that is."""
+        document = selection.export_physical_stackup(
+            self.approved, _requirements(),
+            ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
+        self.assertEqual(document["generated_from"]["stackup"],
+                         "JLC-4L-no-requirement")
 
     def test_no_dk_is_borrowed_for_an_unlisted_material(self):
         snapshot = copy.deepcopy(self.approved)

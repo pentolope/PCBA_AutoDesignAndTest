@@ -12,7 +12,9 @@ Three official pages carry the knowledge this adapter extracts:
     manufacturing capability statements: layer counts, FR-4 thickness
     options, copper weights and their stated default, the copper-weight- and
     layer-class-conditioned trace/space table, the separate trace-coil
-    limits, drill and via limits.
+    limits, drill and via limits, and the FR-4 dielectric constants - the
+    only place a two-layer board's is stated, the impedance page covering
+    only the layer counts it offers impedance control on.
   * ``copper-weight`` - https://jlcpcb.com/help/article/jlcpcb-copper-weight
     - JLCPCB's own copper-weight guide: the stated 1 oz = 35 um equivalence,
     the available weights per layer position, and a second copper-weight-
@@ -61,7 +63,7 @@ from .model import FABRICATOR                             # noqa: F401
 
 #: Bump when extraction logic changes meaning. A changed parser version with
 #: unchanged raw sources explains a changed normalized catalog by itself.
-PARSER_VERSION = "6"
+PARSER_VERSION = "7"
 
 SOURCES = (
     {"id": "impedance", "kind": "official-stackup-page",
@@ -519,10 +521,74 @@ def _parse_capabilities(html, catalog):
             "page has been restructured and this parse cannot be "
             "trusted".format(matched, len(probes)))
 
+    _parse_dielectric_constants(text, catalog)
     _parse_traces_table(text, catalog)
     _parse_trace_coils(text, catalog)
     _parse_layer_counts(text, catalog)
     _parse_drills_and_vias(text, catalog)
+
+
+#: The capability cell states a bare dielectric constant scoped to a board
+#: class; the description cell states them per prepreg. JLCPCB spells the
+#: word both ways in the same cell ("Prepreg", "Perpreg"), so both are read.
+_DK_BOARD_CLASS = re.compile(r"^([0-9.]+) \((\d+)-Layer PCB\)$")
+_DK_PREPREG = re.compile(r"^(\d{3,4}) P(?:re|er)preg ([0-9.]+)$")
+
+
+def _parse_dielectric_constants(text, catalog):
+    """The capabilities page's FR-4 dielectric constants, as it scopes them.
+
+    The impedance page states core and prepreg dielectric constants for the
+    builds it publishes, which start at four layers. This block is the only
+    place JLCPCB states one for a two-layer board, and a two-layer board
+    cannot borrow the multilayer core's: they are different laminates and
+    the page distinguishes them. Kept under source-qualified keys so the
+    impedance page's records stay exactly what they were, and so a future
+    disagreement between the two pages surfaces as a difference rather than
+    as one silently overwriting the other.
+    """
+    source = "capabilities"
+    marker = text.find("FR-4 Dielectric Constants\n")
+    if marker < 0:
+        catalog["not_extracted"].append({
+            "source": source, "field": "FR-4 dielectric constants",
+            "reason": "the block heading is not where it was last "
+                      "published; no dielectric constant is read from this "
+                      "page and none is assumed"})
+        return
+    lines = text[marker:].split("\n")[1:]
+    read = 0
+    for line in lines:
+        board_class = _DK_BOARD_CLASS.match(line)
+        if board_class:
+            layers = int(board_class.group(2))
+            identity = "core {}-layer ({})".format(layers, source)
+            catalog["materials"][identity] = model.material(
+                source, model.CORE, "{}-layer core".format(layers),
+                float(board_class.group(1)), excerpt=line,
+                context="FR-4 dielectric constants, capabilities page",
+                applies={"min_layers": layers, "max_layers": layers})
+            read += 1
+            continue
+        prepreg = _DK_PREPREG.match(line)
+        if prepreg:
+            identity = "prepreg {} ({})".format(prepreg.group(1), source)
+            catalog["materials"][identity] = model.material(
+                source, model.PREPREG, prepreg.group(1),
+                float(prepreg.group(2)), excerpt=line,
+                context="FR-4 dielectric constants, capabilities page")
+            read += 1
+            continue
+        # The block ends at the next feature row, whose text states no
+        # dielectric constant. Stopping on the first unreadable line keeps
+        # the parse anchored instead of scanning the rest of the page.
+        if read:
+            break
+        catalog["not_extracted"].append({
+            "source": source, "field": "FR-4 dielectric constants",
+            "reason": "the block's first line {!r} states no dielectric "
+                      "constant in either published form".format(line[:80])})
+        return
 
 
 #: The page's board classes, as it words them, with the layer counts each
