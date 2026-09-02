@@ -78,14 +78,24 @@ def _registry(ctx):
 
 
 def _extracted(ctx):
-    """Models measured from the board under validation, or nothing."""
+    """Models measured from the board under validation, or nothing.
+
+    The copper traversal is live - it reads the board being validated, so
+    no earlier file can describe copper that is no longer there. The
+    PHYSICAL inputs it needs are not a property of the board at all: they
+    are the fabricator's finished copper and board thickness, and they are
+    read here as committed parameter records, each carrying its own source
+    type and evidence digest. Resolving them from the fabricator catalog is
+    deliberately not done here - validation must not be able to reach the
+    network even by accident - so a board freezes them once, outside a
+    gate, and this refuses anything that is not a valid parameter record.
+    """
     def build():
         if not ctx.manifest.has("simulation.extracted_models"):
             return []
         import pcbnew
 
         from .. import extract, geom
-        from ..fabricators.store import CatalogStore
 
         spec = ctx.manifest.get("simulation.extracted_models")
         paths = spec.get("paths") or {}
@@ -93,29 +103,22 @@ def _extracted(ctx):
             raise ValueError(
                 "simulation.extracted_models declares no paths; an empty "
                 "declaration measures nothing")
+        with open(ctx.manifest.resolve(spec["physical_inputs"]),
+                  encoding="utf-8") as handle:
+            physical = json.load(handle)
+        if set(physical) != {"copper_thickness_mm", "board_thickness_mm"}:
+            raise ValueError(
+                "physical inputs carry exactly copper_thickness_mm and "
+                "board_thickness_mm")
+        copper = {layer: extract.validate_parameter(
+                      record, "copper thickness on {}".format(layer))
+                  for layer, record in physical["copper_thickness_mm"].items()}
+        extract.validate_parameter(physical["board_thickness_mm"],
+                                   "board thickness")
         geom.configure(ctx.manifest.geometry_profile()
                        .tolerance("polygon_chord_error_mm").value)
-        with open(ctx.manifest.resolve(
-                spec["physical_from_requirements"]), "rb") as handle:
-            raw = handle.read()
-        requirements = json.loads(raw.decode("utf-8"))
         board_path = ctx.board_path()
         board = pcbnew.LoadBoard(board_path)
-        stack = [board.GetLayerName(layer)
-                 for layer in board.GetEnabledLayers().CuStack()]
-        approved = CatalogStore(_catalog_root()).approved()
-        if approved is None:
-            raise ValueError(
-                "no approved fabricator catalog, so the physical inputs an "
-                "extraction needs cannot be resolved from evidence")
-        copper = extract.approved_finished_copper(
-            approved,
-            extract.copper_assignments_from_requirements(requirements, stack))
-        physical = {
-            "copper_thickness_mm": copper,
-            "board_thickness_mm": extract.requirements_board_thickness(
-                requirements, sha256_bytes(raw)),
-        }
         board_sha256 = sha256_file(board_path)
         records = []
         for alias in sorted(paths):
@@ -128,17 +131,6 @@ def _extracted(ctx):
                     traced, board_sha256, physical), alias))
         return records
     return ctx.cache("simulation_extracted", build)
-
-
-def _catalog_root():
-    return os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), "profiles", "jlcpcb")
-
-
-def sha256_bytes(data):
-    import hashlib
-    return hashlib.sha256(data).hexdigest()
 
 
 def _stages(ctx):
