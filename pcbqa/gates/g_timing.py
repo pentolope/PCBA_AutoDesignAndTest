@@ -244,6 +244,18 @@ def stackup(ctx):
         if supplement:
             import json
             full = ctx.manifest.resolve(supplement)
+            root = os.path.realpath(ctx.manifest.resolve("."))
+            resolved = os.path.realpath(full)
+            try:
+                inside = os.path.commonpath((root, resolved)) == root
+            except ValueError:
+                inside = False
+            if not inside:
+                raise StackupError(
+                    "timing.physical_stackup.supplement resolves outside "
+                    "the project this manifest describes ({} -> {}); a "
+                    "verdict input lives with the design it "
+                    "shapes".format(supplement, resolved))
             if not os.path.isfile(full):
                 raise StackupError(
                     "timing.physical_stackup.supplement names {}, which does "

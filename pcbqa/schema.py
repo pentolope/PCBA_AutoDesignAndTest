@@ -138,6 +138,15 @@ def _check_supported(node, root, where):
         if unknown:
             raise SchemaError(
                 f"{where} uses unimplemented schema keyword(s) {unknown}")
+        # A property of the SCHEMA, checked at load time: an unimplemented
+        # format value gated on the instance's type would silently pass
+        # whenever no string happened to reach the node.
+        declared_format = node.get("format")
+        if declared_format is not None and declared_format != "date-time":
+            raise SchemaError(
+                f"{where} declares format {declared_format!r}, which is not "
+                f"implemented; an unimplemented format must not silently "
+                f"pass")
         for key, value in node.items():
             if key in ("properties", "definitions", "patternProperties"):
                 for sub, subschema in value.items():
@@ -181,6 +190,16 @@ def validate(document, schema, root=None, where="$"):
             raise ValidationError(
                 f"{where}: {document!r} does not match the required form "
                 f"{schema['pattern']!r}")
+
+    if "format" in schema and isinstance(document, str):
+        # Only date-time reaches here: _check_supported refuses any other
+        # format value when the schema itself is loaded.
+        import datetime
+        try:
+            datetime.datetime.fromisoformat(document.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValidationError(
+                f"{where}: {document!r} is not a date-time") from None
 
     if isinstance(document, dict):
         for key in schema.get("required", []):
@@ -274,9 +293,39 @@ def _reject_constant(token):
         f"are not JSON and cannot be compared against any tolerance")
 
 
+def _require_finite(document):
+    """Refuse any non-finite float, wherever it sits.
+
+    `parse_constant` only sees the bare NaN/Infinity tokens; an overflowing
+    decimal literal like 1e400 is ordinary JSON grammar that `json.loads`
+    converts to inf without asking. Finiteness is a property of loading,
+    not of which subtrees a schema happens to visit. Iterative on purpose:
+    a walk that recursed would turn a deeply nested but otherwise legal
+    document into a RecursionError traceback where `json.loads` itself had
+    already accepted it.
+    """
+    import math
+    stack = [(document, "$")]
+    while stack:
+        node, where = stack.pop()
+        if isinstance(node, float) and not math.isfinite(node):
+            raise ValueError(
+                f"{where}: {node!r} is not a finite number (an overflowing "
+                f"literal?); a non-finite value can never be compared "
+                f"against any tolerance or waiver")
+        if isinstance(node, dict):
+            stack.extend((value, f"{where}.{key}")
+                         for key, value in node.items())
+        elif isinstance(node, list):
+            stack.extend((value, f"{where}[{index}]")
+                         for index, value in enumerate(node))
+
+
 def loads(text):
-    """`json.loads` that refuses NaN, Infinity and -Infinity."""
-    return json.loads(text, parse_constant=_reject_constant)
+    """`json.loads` that refuses every non-finite number, however spelled."""
+    document = json.loads(text, parse_constant=_reject_constant)
+    _require_finite(document)
+    return document
 
 
 def load_report(path):

@@ -118,7 +118,8 @@ and the source closure it came from.
 `validate` exits nonzero on a blocking result. It is read-only unless `--write`
 is given, so ordinary development validation never touches the working tree.
 
-`release-check` writes nothing and changes no Git state. It exits zero only when
+`release-check` writes nothing durable (its scratch run is discarded) and
+changes no Git state. It exits zero only when
 Git can say the tree is exactly the commit (submodules included), every release
 artifact and every piece of required evidence is tracked, every mandatory gate
 passes now, and the committed verdict is about this same design. Creating the

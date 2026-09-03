@@ -112,160 +112,139 @@ class Workspace:
         Two processes generating into one board's tree at the same time leave
         it holding a mixture neither of them produced. Tree-writing commands
         take this hold; a second holder is refused by name rather than
-        silently interleaved. A hold left by a dead process on this host is
-        broken and taken over; one held by a live process, or by another
-        host, stands.
+        silently interleaved. The lock is a kernel `flock` held for the
+        hold's whole duration, so a crashed holder's claim is released with
+        its process by the kernel itself - there is no staleness heuristic
+        and nothing for a human to remove.
         """
-        return Hold(self, purpose)
+        return Hold(os.path.join(self.board, ".hold"), purpose)
+
+
+def tree_hold(directory, board_id, purpose):
+    """The hold for tree-writing commands, anchored to the tree itself.
+
+    The lock file lives in the project directory being written, not under
+    the relocatable output base: two invocations that differ only in
+    `PCBQA_OUTPUT_ROOT` write the same project tree, so they must contend
+    for the same lock. The board id names the lock so two boards sharing
+    one directory do not exclude each other.
+    """
+    if not valid_board_id(board_id):
+        raise LayoutError(
+            "refusing to build a hold path from board id {!r}".format(
+                board_id))
+    return Hold(os.path.join(os.path.realpath(directory),
+                             ".pcbqa-hold-" + board_id), purpose)
 
 
 class Hold:
-    """Context manager for Workspace.hold. Advisory, single-file, atomic."""
+    """Advisory exclusive hold on a directory tree, via a kernel lock.
 
-    def __init__(self, workspace, purpose):
-        self.workspace = workspace
+    `flock` on a lock file that stays open for the hold's duration. The
+    kernel releases a dead holder's lock with its process, so no liveness
+    guessing and no takeover protocol exist to race. The file's CONTENT is
+    only the refusal message's material - who holds it and why; exclusion
+    never depends on it, so a truncated, garbage or empty lock file changes
+    nothing. The file is unlinked on release; a leftover one (from a crash)
+    is inert FOR LOCKING and the next claimant reuses and then removes it -
+    but until that next claim it sits on disk, so a consumer project should
+    ignore `.pcbqa-hold-*` the way it ignores its output scratch, or a
+    crash dirties the release gate's clean-tree check.
+    """
+
+    def __init__(self, path, purpose):
+        self.path = path
         self.purpose = purpose
-        self.path = os.path.join(workspace.board, ".hold")
         self._fd = None
 
-    def _record(self, purpose):
+    def _record(self):
         import socket
         return {"pid": os.getpid(), "host": socket.gethostname(),
-                "purpose": purpose, "created_utc": _stamp()}
+                "purpose": self.purpose, "created_utc": _stamp()}
 
-    def _write_atomic(self, path, record):
-        """Create `path` with `record` in one step, or FileExistsError.
-
-        A hold file must never be observable empty: an unreadable hold is
-        treated as abandoned, so an empty window would let a concurrent
-        claimant break a live hold mid-claim.
-        """
-        import json
-        import tempfile
-        os.makedirs(self.workspace.board, exist_ok=True)
-        fd, staged = tempfile.mkstemp(dir=self.workspace.board,
-                                      prefix=".hold-tmp-")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(record, handle)
-            os.link(staged, path)           # atomic; FileExistsError = taken
-        finally:
-            os.unlink(staged)
-
-    def _claim(self):
-        self._write_atomic(self.path, self._record(self.purpose))
-        self._fd = True
-
-    def _holder(self):
+    @staticmethod
+    def _read(fd):
         import json
         try:
-            with open(self.path, encoding="utf-8") as handle:
-                return json.load(handle)
+            os.lseek(fd, 0, os.SEEK_SET)
+            return json.loads(os.read(fd, 65536).decode("utf-8"))
         except (OSError, ValueError):
             return {}
 
-    def _stale(self, holder):
-        import socket
-        pid = holder.get("pid")
-        if not isinstance(pid, int):
-            # An unreadable hold cannot name a live owner; treat it as
-            # abandoned rather than wedging every future run behind it.
-            return True
-        if holder.get("host") != socket.gethostname():
-            return False
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return True
-        except OSError:
-            return False
-        return False
-
     def __enter__(self):
-        try:
-            self._claim()
-            return self
-        except FileExistsError:
-            holder = self._holder()
-            if self._stale(holder):
-                self._break_stale()
-                return self
-            raise LayoutError(
-                "the workspace for this board is held by pid {} on {} "
-                "({!r} since {}); a second writer would interleave with it - "
-                "remove {} only if that process is truly gone".format(
-                    holder.get("pid"), holder.get("host"),
-                    holder.get("purpose"), holder.get("created_utc"),
-                    self.path))
-
-    def _break_stale(self):
-        """Replace a stale hold, serialized so two breakers cannot race.
-
-        Without the break lock, two claimants can both observe the same
-        stale hold; the slower one then unlinks the faster one's freshly
-        installed LIVE hold and takes the workspace alongside it.
-        """
+        import fcntl
         import json
-        breaker = self.path + "-break"
-        for attempt in (1, 2):
-            try:
-                self._write_atomic(breaker,
-                                   self._record("breaking a stale hold"))
-                break
-            except FileExistsError:
-                try:
-                    with open(breaker, encoding="utf-8") as handle:
-                        other = json.load(handle)
-                except (OSError, ValueError):
-                    other = {}
-                if attempt == 1 and self._stale(other):
-                    # The previous breaker died mid-break; clear its lock
-                    # and try once more.
-                    try:
-                        os.unlink(breaker)
-                    except FileNotFoundError:
-                        pass
-                    continue
-                raise LayoutError(
-                    "another writer is already breaking the stale hold on "
-                    "this board's workspace; rerun when it "
-                    "finishes") from None
         try:
-            holder = self._holder()
-            if holder and not self._stale(holder):
-                raise LayoutError(
-                    "the hold on this board's workspace was retaken by a "
-                    "live writer while it was being broken; rerun when it "
-                    "finishes")
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        except OSError as exc:
+            raise LayoutError(
+                "the hold file's directory cannot be created ({}): "
+                "{}".format(self.path, exc)) from exc
+        for _ in range(64):
             try:
-                os.unlink(self.path)
-            except FileNotFoundError:
-                pass
-            try:
-                self._claim()
-            except FileExistsError:
+                fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+            except OSError as exc:
+                # A project root the caller cannot write is a refusal in the
+                # caller's terms, never a traceback out of the CLI.
                 raise LayoutError(
-                    "the stale hold on this board's workspace was broken, "
-                    "but another writer claimed it first; rerun when it "
+                    "the hold file cannot be created ({}): {}".format(
+                        self.path, exc)) from exc
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                holder = self._read(fd)
+                os.close(fd)
+                if holder:
+                    raise LayoutError(
+                        "this board's tree is held by pid {} on {} ({!r} "
+                        "since {}); a second writer would interleave with "
+                        "it - rerun when it finishes (a crashed holder's "
+                        "lock is released by the kernel, so a standing "
+                        "refusal means the process is live)".format(
+                            holder.get("pid"), holder.get("host"),
+                            holder.get("purpose"),
+                            holder.get("created_utc"))) from None
+                raise LayoutError(
+                    "this board's tree is held by another process (its "
+                    "record is not yet written); rerun when it "
                     "finishes") from None
-        finally:
+            # A releasing holder unlinks the file while we may already have
+            # it open: a lock on that dangling inode excludes nobody who
+            # opens the path afresh, so the claim only stands if the path
+            # still names the inode we locked.
             try:
-                os.unlink(breaker)
+                current = os.stat(self.path)
             except FileNotFoundError:
-                pass
+                os.close(fd)
+                continue
+            mine = os.fstat(fd)
+            if (mine.st_dev, mine.st_ino) != (current.st_dev,
+                                              current.st_ino):
+                os.close(fd)
+                continue
+            os.ftruncate(fd, 0)
+            os.write(fd, json.dumps(self._record()).encode("utf-8"))
+            self._fd = fd
+            return self
+        raise LayoutError(
+            "could not settle a claim on {}: the lock file kept being "
+            "replaced underneath the claim".format(self.path))
 
     def __exit__(self, exc_type, exc, tb):
-        if self._fd:
-            import socket
-            holder = self._holder()
-            # Release only a hold that is still ours: if something broke and
-            # replaced it, unlinking here would strip the new writer's hold.
-            if holder.get("pid") == os.getpid() \
-                    and holder.get("host") == socket.gethostname():
-                try:
+        if self._fd is not None:
+            # Unlink only while still holding the lock, and only if the
+            # path still names our inode - never strip a file some other
+            # actor put there.
+            try:
+                current = os.stat(self.path)
+                mine = os.fstat(self._fd)
+                if (mine.st_dev, mine.st_ino) == (current.st_dev,
+                                                  current.st_ino):
                     os.unlink(self.path)
-                except FileNotFoundError:
-                    pass
+            except OSError:
+                pass
+            os.close(self._fd)               # releases the flock
+            self._fd = None
         return False
 
 

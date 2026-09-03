@@ -61,7 +61,17 @@ work.)
 - `build` installs all of its output or none of it: a build that could not
   produce a complete set leaves the previous artifacts alone.
 - `release-check` exits nonzero unless every requirement is met, and it never
-  creates a tag. It writes nothing and changes no Git state.
+  creates a tag. It changes no Git state and writes nothing durable: the
+  scratch run directory its validation uses is discarded before it returns.
+- Tree-writing commands (`build`, `validate --write`) hold an advisory
+  kernel lock (`flock`) anchored to the project tree itself, so two writers
+  are refused by name rather than interleaved - including two invocations
+  that differ only in their output root. A crashed holder's lock is released
+  by the kernel with its process; there is no staleness heuristic to race
+  and no manual takeover protocol. The leftover `.pcbqa-hold-<board_id>`
+  file a crash leaves is inert and the next writer reuses then removes it;
+  consumer projects gitignore that pattern so a crash cannot dirty the
+  release gate's clean-tree check.
 
 ## A release is a Git tag
 
@@ -230,8 +240,11 @@ an unwatched screen freezes an autonomous run (KiCad's debug asserts
 - e.g. `PCB_VIA::GetWidth()` without a layer argument - become
 blocking wxWidgets alerts whenever a GUI application object exists
 and a display is reachable). Every entry point calls
-`pcbqa.headless.suppress_blocking_ui()` first (`run.py` does this
-for all commands); long-running consumer scripts must do the same.
+`pcbqa.headless.suppress_blocking_ui()` first: `run.py` does this
+for all commands, and the gates library (`pcbqa.gates.load()` /
+`evaluate()`) arms it itself, because a search loop embedded in
+KiCad never passes through `run.py`. Long-running consumer scripts
+must do the same.
 When no wx application exists a `wx.AppConsole` is created - never a
 GUI `wx.App`, which terminates the whole process outright when
 $DISPLAY is unset or unreachable, before any handler runs - so every
@@ -283,6 +296,9 @@ python3 run.py release-check <manifest>
 The manifest is checked against `schemas/manifest.v2.json` before any command
 runs: a key the toolkit does not implement is refused by name. Board-local
 data lives under `x_`-prefixed keys; `description`, `note`, `why` and
-`rationale` are annotation strings, allowed at every level. Keep the schema
-exactly as wide as what `pcbqa/` reads — a key added to one must be added to
-the other in the same change.
+`rationale` are annotation strings, allowed inside closed objects (inside an
+open-key map or an undescribed subtree every key is data, and they are
+refused). Keep the schema exactly as wide as what `pcbqa/` reads — a key
+added to one must be added to the other in the same change; the selftest's
+`SchemaVocabulary` enforces both directions mechanically (every admitted key
+appears in the source, and no object node is left wide open).

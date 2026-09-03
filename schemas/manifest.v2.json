@@ -177,22 +177,66 @@
           "type": "object", "additionalProperties": false,
           "properties": {
             "model": {"type": "string"},
-            "via_delay_model": {"type": ["string", "object"]},
-            "declared_layers": {},
-            "reference_discontinuity": {"type": ["array", "object"]}
+            "via_delay_model": {
+              "type": ["string", "object"],
+              "additionalProperties": false,
+              "required": ["model"],
+              "properties": {
+                "model": {"type": "string"},
+                "justification": {"type": "string"},
+                "max_delay_ps": {"type": "number"},
+                "provenance": {"type": "string"}
+              }
+            },
+            "declared_layers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                  "epsilon_effective": {"type": "number"},
+                  "ps_per_mm": {"type": "number"},
+                  "provenance": {"type": "string"},
+                  "reference_layers": {"$ref": "#/definitions/strings"}
+                }
+              }
+            },
+            "reference_discontinuity": {
+              "type": ["array", "object"],
+              "items": {"$ref": "#/definitions/discontinuity_entry"},
+              "additionalProperties": false,
+              "required": ["treatment"],
+              "properties": {
+                "treatment": {"type": "string"},
+                "up_to_mm": {"type": "number"},
+                "justification": {"type": "string"},
+                "reference_layers": {"$ref": "#/definitions/strings"},
+                "signal_layers": {"$ref": "#/definitions/strings"},
+                "paths": {"type": "string"}
+              }
+            }
           }
         },
         "physical_stackup": {
           "type": "object", "additionalProperties": false,
           "properties": {"reference_nets": {"$ref": "#/definitions/strings"},
                          "require_complete": {"type": "boolean"},
-                         "supplement": {}}
+                         "supplement": {"$ref": "#/definitions/relpath"}}
         },
         "device_timing": {
           "type": "object", "additionalProperties": false,
           "properties": {
-            "receivers": {"type": "object",
-                          "additionalProperties": {"type": "object"}}
+            "receivers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                  "source_clock_relationship": {"type": "string"},
+                  "source_tco_ps": {"type": "number"},
+                  "receiver_setup_ps": {"type": "number"},
+                  "receiver_hold_ps": {"type": "number"}
+                }
+              }
+            }
           }
         },
         "models": {
@@ -503,7 +547,7 @@
       "type": "object", "additionalProperties": false,
       "properties": {
         "expected_path_count": {"type": "integer"},
-        "required_component_crossings": {},
+        "required_component_crossings": {"type": "integer"},
         "max_unreferenced_mm": {"type": "number"},
         "limits": {"type": "object",
                    "additionalProperties": {"type": "number"}},
@@ -524,7 +568,13 @@
             "paths": {"type": "array",
                       "items": {"$ref": "#/definitions/timing_path"}},
             "template": {"$ref": "#/definitions/timing_path"},
-            "bindings": {"type": "array", "items": {"type": "object"}}
+            "bindings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {"type": ["string", "number"]}
+              }
+            }
           }
         }
       }
@@ -532,11 +582,57 @@
     "timing_path": {
       "type": "object", "additionalProperties": false,
       "required": ["id", "steps"],
-      "properties": {"id": {"type": "string"},
-                     "steps": {"type": "array", "items": {"type": "object"}}}
+      "properties": {
+        "id": {"type": "string"},
+        "steps": {"type": "array",
+                  "items": {"$ref": "#/definitions/timing_step"}}
+      }
+    },
+    "discontinuity_entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["treatment"],
+      "properties": {
+        "treatment": {"type": "string"},
+        "up_to_mm": {"type": "number"},
+        "justification": {"type": "string"},
+        "reference_layers": {"$ref": "#/definitions/strings"},
+        "signal_layers": {"$ref": "#/definitions/strings"},
+        "paths": {"type": "string"}
+      }
+    },
+    "timing_step": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string"},
+        "net": {"type": "string"},
+        "from": {"type": "string"},
+        "to": {"type": "string"},
+        "source_selection": {"type": "string"},
+        "reference": {"type": "string"},
+        "from_pad": {"type": "string"},
+        "to_pad": {"type": "string"},
+        "assume_populated": {
+          "type": "object", "additionalProperties": false,
+          "required": ["justification"],
+          "properties": {"justification": {"type": "string"}}
+        },
+        "delay_model": {
+          "type": "object", "additionalProperties": false,
+          "required": ["model"],
+          "properties": {
+            "model": {"type": "string"},
+            "justification": {"type": "string"},
+            "max_delay_ps": {"type": "number"},
+            "delay_ps": {"type": "number"},
+            "provenance": {"type": "string"}
+          }
+        }
+      }
     },
     "orientation_entry": {
       "type": "object", "additionalProperties": false,
+      "description": "Exactly the fields pcbqa/orientation.py and the orientation gate read. Review provenance the toolkit does not consume (review basis, margins, pairing notes) belongs under x_-prefixed keys.",
       "properties": {
         "lcsc": {"type": "string"},
         "mpn": {"type": "string"},
@@ -544,19 +640,9 @@
         "kicad_footprint": {"type": "string"},
         "offset_deg": {"type": "number"},
         "review_status": {"type": "string"},
-        "review_basis": {"type": "string"},
-        "references": {"$ref": "#/definitions/strings"},
         "evidence_file": {"$ref": "#/definitions/relpath"},
         "evidence_sha256": {"type": "string"},
-        "raw_file": {"$ref": "#/definitions/relpath"},
-        "pairing": {"type": "string"},
-        "margin_over_runner_up_deg": {"type": "number"},
-        "worst_pad_disagreement_deg": {"type": "number"},
-        "best_offset_deg": {"type": "number"},
-        "best_worst_deg": {"type": "number"},
-        "margin_deg": {"type": "number"},
-        "decisive": {"type": "boolean"},
-        "evidence_problems": {}
+        "raw_file": {"$ref": "#/definitions/relpath"}
       }
     },
     "waiver": {

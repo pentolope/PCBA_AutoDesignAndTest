@@ -817,12 +817,33 @@ def to_markdown(doc):
     lines.append(f"- KiCad: `{doc['tooling']['kicad_version']}`")
     lines.append(f"- Generated: {doc['generated_utc']}")
     lines.append("")
-    lines.append(f"## Verdict: **{doc['summary']['verdict']}**")
-    lines.append("")
+    if "partial" in doc or "board_override" in doc:
+        # The human-facing file must carry the same stamps the JSON does: a
+        # page headed "Verdict: ACCEPTED" pasted into a review IS the
+        # downstream mistake the stamps exist to prevent.
+        lines.append("## Diagnostic - NOT a validation of the board")
+        lines.append("")
+        partial = doc.get("partial")
+        if partial:
+            lines.append("- Partial run: only {}".format(
+                ", ".join(f"`{g}`" for g in partial.get("only", []))))
+        override = doc.get("board_override")
+        if override:
+            lines.append("- Judged a candidate board in place of the "
+                         "declared sources: `{}`".format(
+                             override.get("board_path")))
+        lines.append("- Gate outcome within this selection: "
+                     "{}".format(doc["summary"]["verdict"]))
+        lines.append("")
+    else:
+        lines.append(f"## Verdict: **{doc['summary']['verdict']}**")
+        lines.append("")
     counts = doc["summary"]["counts"]
     lines.append("| Status | Gates |")
     lines.append("|---|---:|")
-    for key in (Status.PASS, Status.FAIL, Status.ERROR, Status.NOT_APPLICABLE):
+    preferred = (Status.PASS, Status.FAIL, Status.ERROR, Status.ADVISORY,
+                 Status.NOT_APPLICABLE)
+    for key in preferred + tuple(sorted(set(counts) - set(preferred))):
         if key in counts:
             lines.append(f"| {key} | {counts[key]} |")
     lines.append("")
@@ -837,7 +858,10 @@ def to_markdown(doc):
         lines.append(f"| `{g['gate']}` | {g['status']} | {detail} |")
     lines.append("")
     for g in doc["gates"]:
-        if g["status"] not in Status.BLOCKING or not g["findings"]:
+        # ADVISORY renders too: the demotion keeps the measurement on the
+        # record, and a record the Markdown hides is half a record.
+        rendered = Status.BLOCKING + (Status.ADVISORY,)
+        if g["status"] not in rendered or not g["findings"]:
             continue
         lines.append(f"### `{g['gate']}` - {g['title']}")
         lines.append("")

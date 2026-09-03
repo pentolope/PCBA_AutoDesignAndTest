@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 
@@ -132,7 +133,8 @@ def _emit(ctx, results, tag, directory=None, extra=None):
     return doc, jpath, mpath
 
 
-def cmd_validate(manifest_path, write=False, quiet=False, only=None):
+def cmd_validate(manifest_path, write=False, quiet=False, only=None,
+                 keep_run=True):
     """Validate a board: its sources and the exact artifacts committed with it.
 
     Read-only unless `write` is given, so ordinary development validation never
@@ -150,7 +152,7 @@ def cmd_validate(manifest_path, write=False, quiet=False, only=None):
     downstream can mistake it for a validation.
     """
     from pcbqa.core import ManifestError
-    from pcbqa.layout import LayoutError
+    from pcbqa.layout import LayoutError, tree_hold
 
     try:
         manifest, workspace = open_board(manifest_path)
@@ -158,17 +160,22 @@ def cmd_validate(manifest_path, write=False, quiet=False, only=None):
         return _refuse(exc), None, None
 
     if not write:
-        return _validate(manifest, workspace, write, quiet, only)
+        return _validate(manifest, workspace, write, quiet, only,
+                         keep_run=keep_run)
     # A verdict that will be recorded in the tree is about a tree nothing
-    # else is rewriting while it is read.
+    # else is rewriting while it is read. The hold is anchored to the tree
+    # being written, so two invocations that differ only in their output
+    # root still contend for the same lock.
     try:
-        with workspace.hold("validate --write"):
-            return _validate(manifest, workspace, write, quiet, only)
+        with tree_hold(manifest.resolve("."), manifest.board_id,
+                       "validate --write"):
+            return _validate(manifest, workspace, write, quiet, only,
+                             keep_run=keep_run)
     except LayoutError as exc:
         return _refuse(exc), None, None
 
 
-def _validate(manifest, workspace, write, quiet, only):
+def _validate(manifest, workspace, write, quiet, only, keep_run=True):
     from pcbqa import artifacts, core
     from pcbqa.core import Context
 
@@ -246,6 +253,11 @@ def _validate(manifest, workspace, write, quiet, only):
         print("Markdown: " + mpath)
         if recorded:
             print("Recorded: " + recorded)
+    if not keep_run:
+        # The caller wants the verdict, not the scratch: release-check runs
+        # this quietly and must leave nothing behind, or "writes nothing"
+        # becomes one abandoned run directory per invocation.
+        run.discard()
     return (1 if doc["summary"]["blocking"] else 0), doc, ctx
 
 
@@ -258,7 +270,7 @@ def cmd_build(manifest_path):
     complete set installs none of it and leaves the previous outputs alone.
     """
     from pcbqa.core import ManifestError
-    from pcbqa.layout import LayoutError
+    from pcbqa.layout import LayoutError, tree_hold
 
     try:
         manifest, workspace = open_board(manifest_path)
@@ -275,7 +287,7 @@ def cmd_build(manifest_path):
         return 2
 
     try:
-        with workspace.hold("build"):
+        with tree_hold(manifest.resolve("."), manifest.board_id, "build"):
             return _build(manifest, workspace)
     except LayoutError as exc:
         return _refuse(exc)
@@ -313,7 +325,26 @@ def _build(manifest, workspace):
         print("What this build did produce, for diagnosis: " + run.path)
         return 1
 
-    installed = builder.install()
+    try:
+        installed = builder.install()
+    except build_mod.BuildError as exc:
+        # The prove pass refused before a byte moved: the previous outputs
+        # are exactly as they were.
+        print(chr(10) + "BUILD BLOCKED at install: {}".format(exc))
+        print("Nothing was installed; the previous fabrication outputs are "
+              "untouched.")
+        print("What this build did produce, for diagnosis: " + run.path)
+        return 1
+    except KeyboardInterrupt:
+        print(chr(10) + "BUILD ABANDONED while installing; the artifact set "
+              "may be incomplete - run build again to restore a coherent "
+              "set")
+        return 130
+    except OSError as exc:
+        print(chr(10) + "BUILD FAILED while installing ({}: {}); the "
+              "artifact set may be incomplete - run build again to restore "
+              "a coherent set".format(type(exc).__name__, exc))
+        return 1
     # The artifacts are in the tree and committed from there; the staged
     # design and the scratch it was built in have nothing left to say.
     run.discard()
@@ -322,6 +353,8 @@ def _build(manifest, workspace):
     root = manifest.resolve(".")
     for path in installed:
         print("  " + os.path.relpath(path, root))
+    for path in getattr(builder, "pruned", []):
+        print("  pruned stale file: " + path)
     print("source closure: " + str(record["source_closure_sha256"])[:16])
     print(chr(10) + "These are ordinary files. Commit them, then run "
                     "`release-check`.")
@@ -374,7 +407,7 @@ def cmd_release_check(manifest_path):
         blockers.append(("git:" + str(problem.get("file", "repository")),
                          "ERROR", detail))
 
-    code, doc, _ctx = cmd_validate(manifest_path, quiet=True)
+    code, doc, _ctx = cmd_validate(manifest_path, quiet=True, keep_run=False)
     if doc is None:
         blockers.append(("validate", "ERROR", "validation could not run"))
     else:
@@ -473,17 +506,52 @@ def _committed_verdict(manifest, doc):
         return [("release:validation_report", "ERROR",
                  "the committed validation report is not readable JSON: "
                  "{}".format(exc))]
+    # The stamps a partial or candidate-override run writes into its
+    # document say in plain words that it is not a validation. This reader
+    # is the downstream those stamps exist for, so it refuses them by name
+    # - no toolkit command can commit such a file itself, but a board
+    # script or a stray copy can.
+    for marker in ("partial", "board_override"):
+        if marker in committed:
+            blockers.append((
+                "release:validation_report", "ERROR",
+                "the committed report carries the {!r} stamp: it is a "
+                "diagnostic, not a validation of the board".format(marker)))
     verdict = (committed.get("summary") or {}).get("verdict")
     if verdict != "ACCEPTED":
         blockers.append(("release:validation_report", "ERROR",
                          "the committed verdict is {!r}".format(verdict)))
+    # The binding to the current design is a comparison of two DIGESTS.
+    # When the closure cannot be computed, both sides degrade to the same
+    # "UNAVAILABLE: ..." error string - two identical error messages are
+    # not two identical designs, so anything that is not a digest blocks.
+    hex64 = re.compile(r"\A[0-9a-f]{64}\Z")
     was = committed.get("source_closure_sha256")
     now = doc.get("source_closure_sha256")
-    if was != now:
+    digests = True
+    for label, value in (("committed", was), ("current", now)):
+        if not isinstance(value, str) or not hex64.match(value):
+            digests = False
+            blockers.append((
+                "release:validation_report", "ERROR",
+                "the {} source closure is not a digest ({!r}), so the "
+                "committed verdict cannot be bound to the current "
+                "design".format(label, str(value)[:80])))
+    # Reported whenever both sides ARE digests, independently of any other
+    # blocker: an operator fixing a stamp should learn in the same run that
+    # the design moved too.
+    if digests and was != now:
         blockers.append((
             "release:validation_report", "ERROR",
             "the committed verdict is about a different design ({} vs "
             "{})".format(str(was)[:16], str(now)[:16])))
+    recorded_manifest = (committed.get("manifest") or {}).get("sha256")
+    if recorded_manifest != manifest.sha256:
+        blockers.append((
+            "release:validation_report", "ERROR",
+            "the committed verdict was recorded against a different "
+            "manifest ({} vs {}); re-run validate --write".format(
+                str(recorded_manifest)[:12], manifest.sha256[:12])))
     return blockers
 
 
@@ -635,20 +703,37 @@ def cmd_check_board(manifest_path):
     external touched the tree, and a pre-commit hook can afford to ask every
     time: is the board in the tree the routing candidate that was accepted;
     were the committed fabrication artifacts generated from the design as it
-    stands now (naming which input moved when not); and does any KiCad file
-    the design does not reach - another project's artifact, an autosave - sit
-    beside the design. Read-only; exits nonzero on any finding.
+    stands now (naming which input moved when not); does the fabrication
+    record account for every non-dotfile in the declared gerber and reports
+    directories (recursively - names the build's own enumeration can never
+    record, the dotfiles, are out of scope); and does any KiCad file the
+    design does not reach - another project's artifact, an autosave - sit in
+    the directories the design occupies. Read-only; exits nonzero on any
+    finding, 2 on a refusal.
     """
-    from pcbqa import closure as closure_mod
-    from pcbqa import routing_record
-    from pcbqa.core import (DESIGN_SUFFIXES, ManifestError, design_inputs,
-                            sha256_file)
+    from pcbqa.core import ManifestError
     from pcbqa.layout import LayoutError
 
     try:
         manifest, _workspace = open_board(manifest_path)
     except (ManifestError, LayoutError) as exc:
         return _refuse(exc)
+    try:
+        return _check_board(manifest)
+    except ManifestError as exc:
+        # A manifest whose declarations cannot be followed at the command
+        # level is a refusal, not a traceback. (One raised inside a checked
+        # area - the fabrication block - still surfaces as that area's
+        # finding.)
+        print("BOARD CHECK REFUSED: " + str(exc))
+        return 2
+
+
+def _check_board(manifest):
+    from pcbqa import closure as closure_mod
+    from pcbqa import routing_record
+    from pcbqa.core import (DESIGN_SUFFIXES, ManifestError, design_inputs,
+                            sha256_file)
 
     problems = []
     checked = []
@@ -701,6 +786,43 @@ def cmd_check_board(manifest_path):
                         report("fabrication", "artifact {} has changed since "
                                               "its digest was "
                                               "recorded".format(name))
+                # Every file in a declared gerber/reports directory must be
+                # one the record accounts for: an unrecorded file there
+                # ships alongside the recorded set with no digest anyone
+                # checked. Recursive, because a subdirectory is invisible
+                # to the build's own enumeration and would otherwise ship
+                # unseen forever. Dotfiles are out of scope: the build's
+                # record is produced through glob, which can never match
+                # them, so flagging a committed .gitkeep would be a finding
+                # no rebuild could ever clear.
+                from pcbqa import artifacts as artifacts_mod
+                declared = artifacts_mod.paths(manifest)
+                exempt = {os.path.realpath(path)
+                          for path in (declared.get("fabrication_manifest"),
+                                       declared.get("validation_report"))
+                          if path}
+                recorded_names = set(record.get("artifacts") or {})
+                for role in ("gerber_dir", "reports_dir"):
+                    directory = declared.get(role)
+                    if not directory or not os.path.isdir(directory):
+                        continue
+                    for dirpath, dirs, names in os.walk(directory):
+                        dirs[:] = [d for d in sorted(dirs)
+                                   if not d.startswith(".")]
+                        for name in sorted(names):
+                            if name.startswith("."):
+                                continue
+                            full = os.path.join(dirpath, name)
+                            if not os.path.isfile(full) or \
+                                    os.path.realpath(full) in exempt:
+                                continue
+                            key = os.path.relpath(full, base) \
+                                .replace("\\", "/")
+                            if key not in recorded_names:
+                                report("fabrication",
+                                       "{} sits in the release directory "
+                                       "but the fabrication record does "
+                                       "not account for it".format(key))
                 entries, now = closure_mod.current(manifest)
                 was = record.get("source_closure_sha256")
                 if was != now:

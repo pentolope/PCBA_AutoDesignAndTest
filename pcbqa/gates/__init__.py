@@ -17,7 +17,15 @@ import tempfile
 
 
 def load():
-    """Import every gate module, populating the registry exactly once."""
+    """Import every gate module, populating the registry exactly once.
+
+    Arms the headless protection first: this is a library entry point, and
+    the discipline says every entry point does - a search loop running
+    inside an embedding KiCad (a GUI wx.App in dialog assert mode) would
+    otherwise freeze on the first debug assert a gate module trips.
+    """
+    from .. import headless
+    headless.suppress_blocking_ui()
     from . import (g_provenance, g_checks, g_geometry,        # noqa: F401
                    g_contracts, g_assembly, g_export_parity,
                    g_fabrication, g_orientation, g_timing,
@@ -44,7 +52,9 @@ def evaluate(manifest, only=None, board_path=None, workdir=None):
     run's intermediate output.
     """
     from ..core import Context, load_manifest, run_all, select_gates
+    from .. import headless
 
+    headless.suppress_blocking_ui()
     load()
     if isinstance(manifest, str):
         manifest = load_manifest(manifest)

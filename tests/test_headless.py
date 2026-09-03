@@ -62,8 +62,11 @@ class NothingBlocksOnADialog(unittest.TestCase):
         unreachable - before any exception handler runs - which made
         every CLI command die in a genuinely headless environment.
         The console strategy must hold with no display, a dead one,
-        and a live one alike."""
-        for display in (None, ":63.7"):
+        and - when the environment offers one - a live one alike."""
+        displays = [None, ":63.7"]
+        if os.environ.get("DISPLAY"):
+            displays.append(os.environ["DISPLAY"])
+        for display in displays:
             environment = dict(os.environ)
             environment.pop("DISPLAY", None)
             if display is not None:
@@ -75,6 +78,31 @@ class NothingBlocksOnADialog(unittest.TestCase):
             self.assertEqual(completed.returncode, 0,
                              (display, completed.stderr[-400:]))
             self.assertIn("ROUTE.GEOMETRY_HYGIENE", completed.stdout)
+
+    def test_the_gates_library_arms_the_protection_itself(self):
+        """`gates.load()`/`evaluate()` are entry points for search loops
+        that never touch run.py - the panel demonstrated gates.load()
+        freezing on a modal assert inside a dialog-mode wx.App. The
+        library must arm the protection without being asked."""
+        probe = ("import sys; sys.path.insert(0, {toolkit!r}); "
+                 "from pcbqa import gates, headless; gates.load(); "
+                 "state = headless.protection_state(); "
+                 "sys.exit(0 if state['modal_unreachable'] else 3)"
+                 ).format(toolkit=HERE)
+        environment = dict(os.environ)
+        environment.pop("DISPLAY", None)
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, text=True, timeout=120, env=environment)
+        self.assertEqual(completed.returncode, 0,
+                         completed.stderr[-400:])
+
+    def test_wx_log_output_is_pinned_to_stderr(self):
+        """A logger that can raise a message box is the same freeze by
+        another door; the pinning line had no coverage at all."""
+        headless.suppress_blocking_ui()
+        import wx
+        self.assertIsInstance(wx.Log.GetActiveTarget(), wx.LogStderr)
 
     def test_state_first_canary_demands_the_report(self):
         """State is asserted BEFORE the trigger, so a protection

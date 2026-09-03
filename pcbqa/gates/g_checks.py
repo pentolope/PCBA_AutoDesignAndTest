@@ -447,10 +447,16 @@ def _run(ctx, res, kind, gate_id):
     res.measurements["report_findings_sha256"] = report_hash
 
     problems = []
-    if os.path.basename(str(meta["source"])) != os.path.basename(source):
+    # The tool was handed the STAGED copy, which always carries the declared
+    # source name - a candidate override is installed under that name so the
+    # project's own rules apply. The report must name the file the tool was
+    # given; comparing against the candidate's own basename would fail every
+    # differently-named candidate on its filename alone. The candidate's
+    # identity is bound by source/source_sha256 above, not by its name.
+    if os.path.basename(str(meta["source"])) != os.path.basename(working):
         problems.append({"issue": "report names a different source than we checked",
                          "report_source": meta["source"],
-                         "checked": os.path.basename(source)})
+                         "checked": os.path.basename(working)})
     if meta["ignored_checks"]:
         problems.append({"issue": "run ignored one or more checks",
                          "ignored": meta["ignored_checks"]})

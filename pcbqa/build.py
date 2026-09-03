@@ -24,6 +24,11 @@ class BuildError(Exception):
     """The build cannot proceed, and nothing may be installed."""
 
 
+#: The suffix install() stages each artifact under before renaming it into
+#: place. Destinations may not use it; see install()'s prove pass.
+TEMP_SUFFIX = ".pcbqa-installing"
+
+
 #: Declared capabilities whose application step only runs when another key is
 #: also declared. Declaring the first without the second used to be a silent
 #: skip - a reviewed orientation registry that the build never applied shipped
@@ -91,6 +96,23 @@ def clobbered_inputs(manifest):
             hits.append((role, protected[os.path.realpath(target)]))
         elif os.path.normpath(target) in protected:
             hits.append((role, protected[os.path.normpath(target)]))
+    # The committed validation report is protected like a design input from
+    # here on: it is the one committed file `generated_files` excludes, so a
+    # build role aimed at it would overwrite the verdict, and a prune over a
+    # directory holding it would delete it.
+    verdict = declared.get("validation_report")
+    if verdict:
+        for role in artifacts.FILE_ROLES:
+            target = declared.get(role)
+            if not target or role == "validation_report":
+                continue
+            if os.path.realpath(target) == os.path.realpath(verdict) or \
+                    os.path.normpath(target) == os.path.normpath(verdict):
+                hits.append((role, "the committed validation report"))
+        protected[os.path.normpath(verdict)] = \
+            "the committed validation report"
+        protected.setdefault(os.path.realpath(verdict),
+                             "the committed validation report")
     for role in ("gerber_dir", "reports_dir"):
         directory = declared.get(role)
         if not directory:
@@ -101,6 +123,29 @@ def clobbered_inputs(manifest):
             if os.path.dirname(path) in surfaces:
                 hits.append((role, rel))
     return sorted(set(hits))
+
+
+def duplicate_destinations(manifest):
+    """Declared file roles that resolve to one path. Statically checkable.
+
+    Two roles installing to one file means the build ships one fewer
+    artifact than it reports, with the survivor holding whichever content
+    was copied last - a completely silent loss, because the record collapses
+    the duplicate into one entry and every digest then matches.
+    """
+    declared = artifacts.paths(manifest)
+    by_target = {}
+    hits = []
+    for role in artifacts.FILE_ROLES:
+        target = declared.get(role)
+        if not target:
+            continue
+        key = os.path.realpath(target)
+        if key in by_target:
+            hits.append((by_target[key], role, declared[role]))
+        else:
+            by_target[key] = role
+    return hits
 
 
 def canonical_argv(args):
@@ -522,7 +567,24 @@ class Build:
                     "the build produced {!r}, which the manifest declares no "
                     "destination for".format(
                         os.path.relpath(staged, self.staged)))
+        self._distinct_destinations(mapping)
         return mapping
+
+    @staticmethod
+    def _distinct_destinations(mapping):
+        """Refuse two staged files installing to one path - the mirror of
+        `declared_outputs`: a collapsed destination is a build reporting
+        success over an incomplete artifact set."""
+        by_target = {}
+        for staged, target in sorted(mapping.items()):
+            key = os.path.realpath(target)
+            if key in by_target:
+                raise BuildError(
+                    "two artifacts declare one destination {!r}: {} and {}; "
+                    "the survivor would silently replace the other".format(
+                        target, os.path.basename(by_target[key]),
+                        os.path.basename(staged)))
+            by_target[key] = staged
 
     def fabrication_manifest(self):
         self.destination_map = self.destinations()
@@ -568,29 +630,92 @@ class Build:
 
     # -- 8: install into the tree -----------------------------------------
     def install(self):
-        """Replace the declared release locations with what was staged."""
+        """Replace the declared release locations with what was staged.
+
+        Prove, then commit: every destination is validated before a single
+        byte moves - contained, distinct, and either absent or a plain file
+        (a directory sitting where an artifact belongs would swallow the
+        copy; a symlink would aim it elsewhere) - so a refusal leaves the
+        previous outputs exactly as they were. The commit itself writes
+        every file to a sibling temp name first and then renames, with the
+        fabrication record renamed last, so the record never describes a
+        set that was not fully installed before it.
+        """
         declared = artifacts.paths(self.manifest)
         mapping = dict(self.destination_map)
         mapping[self.record_staged] = declared["fabrication_manifest"]
-        installed = []
+        self._distinct_destinations(mapping)
+        resolved = {}
         for staged, target in sorted(mapping.items()):
-            target = self._installable(target)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            shutil.copy2(staged, target)
-            installed.append(target)
+            proven = self._installable(target)
+            if proven.endswith(TEMP_SUFFIX):
+                # The commit phase stages every artifact at
+                # `<target>TEMP_SUFFIX`; a destination spelled with that
+                # suffix would sit in the installer's own namespace and be
+                # overwritten or deleted by the machinery itself.
+                raise BuildError(
+                    "the destination {!r} ends with {!r}, a name the "
+                    "installer reserves for its own staging".format(
+                        target, TEMP_SUFFIX))
+            if os.path.islink(target) or (
+                    os.path.exists(proven) and not os.path.isfile(proven)):
+                raise BuildError(
+                    "the destination {!r} exists and is not a plain file; "
+                    "installing onto it would not produce the declared "
+                    "artifact".format(target))
+            resolved[staged] = proven
+        pending = []
+        remaining = set()
+        try:
+            for staged, target in sorted(resolved.items()):
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                temp = target + TEMP_SUFFIX
+                shutil.copy2(staged, temp)
+                pending.append((staged, temp, target))
+                remaining.add(temp)
+            installed = []
+            record_last = sorted(
+                pending, key=lambda row: (row[0] == self.record_staged,
+                                          row[0]))
+            for _staged, temp, target in record_last:
+                os.replace(temp, target)
+                # Renamed away: the cleanup below must never touch the path
+                # again, or a destination that aliased a temp name would be
+                # installed and then deleted on the success path.
+                remaining.discard(temp)
+                installed.append(target)
+        finally:
+            for temp in remaining:
+                if os.path.exists(temp):
+                    os.unlink(temp)
+        self.pruned = []
         for role in ("gerber_dir", "reports_dir"):
-            self._prune(declared.get(role), installed)
+            self.pruned += self._prune(declared.get(role), installed)
         return sorted(installed)
 
     def _prune(self, directory, keep):
-        """Remove files a previous build left that this one did not produce."""
+        """Remove files a previous build left that this one did not produce.
+
+        The committed validation report and the fabrication record are never
+        pruned: `clobbered_inputs` refuses such a layout up front, and this
+        is the second lock on the same door. Returns what it removed, so the
+        caller can say so - a deletion the output never mentions reads as a
+        file that vanished.
+        """
         if not directory or not os.path.isdir(directory):
-            return
+            return []
         self._installable(directory)
+        declared = artifacts.paths(self.manifest)
         kept = {os.path.realpath(p) for p in keep}
+        kept |= {os.path.realpath(declared[role])
+                 for role in ("validation_report", "fabrication_manifest")
+                 if role in declared}
+        removed = []
         for path in sorted(glob.glob(os.path.join(directory, "*"))):
             if os.path.isfile(path) and os.path.realpath(path) not in kept:
                 os.unlink(path)
+                removed.append(os.path.relpath(path, self.origin))
+        return removed
 
     def _installable(self, path):
         target = os.path.realpath(path)
@@ -628,6 +753,13 @@ class Build:
                 "artifacts.{} would destroy design input {}: installing "
                 "there overwrites or prunes a source of the design being "
                 "released".format(role, rel)))
+        for role_a, role_b, target in duplicate_destinations(self.manifest):
+            self.blockers.append((
+                "build:destinations", "ERROR",
+                "artifacts.{} and artifacts.{} both install to {}: one of "
+                "them would silently replace the other and the build would "
+                "report success over an incomplete set".format(
+                    role_a, role_b, target)))
         if self.blockers:
             raise BuildError(
                 "artifact destinations collide with design inputs")

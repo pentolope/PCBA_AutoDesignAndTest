@@ -136,6 +136,30 @@ def readiness(manifest):
                                   "them".format(len(untracked)),
                          "paths": untracked[:12]})
 
+    # The design inputs themselves: a tag that does not carry a file the
+    # build staged for ERC/DRC names a commit that cannot reproduce its own
+    # verdict. Untracked here has actually happened - a gitignored
+    # .kicad_prl that every check silently read.
+    from .core import ManifestError, design_inputs
+    try:
+        inputs = [manifest.resolve(rel) for rel in design_inputs(manifest)]
+    except ManifestError as exc:
+        inputs = []
+        problems.append({"file": "design inputs",
+                         "issue": "the design inputs cannot be enumerated: "
+                                  "{}".format(exc)})
+    facts["design_inputs"] = len(inputs)
+    present = tracked(root, inputs)
+    untracked_inputs = [os.path.relpath(p, root) for p in inputs
+                        if os.path.isfile(p) and not present.get(p)]
+    if untracked_inputs:
+        problems.append({"file": "design inputs",
+                         "issue": "{} design input(s) are not tracked by "
+                                  "Git, so the tag would not carry the "
+                                  "design that was checked".format(
+                                      len(untracked_inputs)),
+                         "paths": untracked_inputs[:12]})
+
     evidence = required_evidence(manifest)
     facts["required_evidence"] = len(evidence)
     present = tracked(root, evidence)

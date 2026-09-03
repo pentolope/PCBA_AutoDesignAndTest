@@ -45,12 +45,24 @@ def paths(manifest):
 
 
 def report_files(manifest):
-    """The check reports the build produces, by the steps that produce them."""
+    """The check reports the build produces, by the steps that produce them.
+
+    A required step with no generation output raises: silently dropping it
+    would leave a declared requirement with no trace in any result - a
+    manifest key that can mean nothing (the caller is a gate, so this
+    surfaces as a fail-closed ERROR with the step named).
+    """
+    from .core import ManifestError
+
     out = []
     for step in manifest.get("reports.required_steps", []):
         key = "release_generation.{}.output".format(step)
-        if manifest.has(key):
-            out.append(manifest.get(key))
+        if not manifest.has(key):
+            raise ManifestError(
+                "reports.required_steps names {!r}, but {} does not exist; "
+                "a required report no build step generates cannot be "
+                "required".format(step, key))
+        out.append(manifest.get(key))
     return out
 
 

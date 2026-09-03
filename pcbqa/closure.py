@@ -104,8 +104,8 @@ def source_closure(manifest, policy):
     """Canonical digests of every input a check result depends on.
 
     Glob-matched project files minus an explicit exclusion list, the declared
-    `sources` by name, the toolkit that judged them, and the manifest's
-    configuration identity.
+    `sources` by name, every design input the toolkit itself stages, the
+    toolkit that judged them, and the manifest's configuration identity.
     """
     root = manifest.resolve(".")
     excluded = manifest.get("reports.source_closure_exclude", [])
@@ -128,6 +128,25 @@ def source_closure(manifest, policy):
                 "cannot cover the design it selects".format(role, declared))
         rel = os.path.relpath(path, root).replace("\\", "/")
         entries[rel] = canonical.digest(path, policy.classify(rel))
+
+    # Everything `stage_design` copies for ERC and DRC, unconditionally:
+    # symbol libraries, lib tables and sibling settings change what a check
+    # sees, so a closure without them keeps reporting fresh after an
+    # ERC-visible edit. Same precedent as the declared sources above. An
+    # exclusion pattern that matches one is refused rather than silently
+    # overridden - a declaration that reads as evaluated but is not would
+    # be the manifest lying to its author.
+    for rel in design_inputs(manifest):
+        rel = rel.replace("\\", "/")
+        if matches(rel, excluded):
+            raise ClosureError(
+                "reports.source_closure_exclude matches design input {}; a "
+                "design input can never leave the closure, so remove the "
+                "pattern or the declaration is a no-op wearing an effect's "
+                "name".format(rel))
+        path = os.path.join(root, rel)
+        if os.path.isfile(path):
+            entries[rel] = canonical.digest(path, policy.classify(rel))
 
     entries.update(implementation_identity())
     entries["<configuration>"] = configuration_identity(manifest)

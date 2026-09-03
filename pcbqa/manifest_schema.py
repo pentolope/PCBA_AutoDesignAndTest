@@ -89,9 +89,22 @@ def _strip(node, schema_node, root, where, problems):
                     "a string, not {}".format(where, key,
                                               type(value).__name__))
             continue
-        # An opaque subtree the schema does not describe, or an unknown key
-        # in a closed object: kept verbatim, so the validator can refuse the
-        # latter by name.
+        if not closed:
+            # An opaque subtree the schema deliberately leaves undescribed:
+            # its keys are data some reader consumes wholesale, so
+            # annotations and x_ keys are refused exactly as in an open-key
+            # map - stripping them here would delete data, and keeping them
+            # would feed prose to the reader.
+            if annotation or extension:
+                problems.append(
+                    "{}.{}: inside a subtree the schema leaves undescribed "
+                    "every key is data, so annotations and x_ keys are not "
+                    "permitted here".format(where, key))
+                continue
+            out[key] = value
+            continue
+        # An unknown key in a closed object: kept verbatim, so the
+        # validator can refuse it by name.
         out[key] = value
     return out
 
