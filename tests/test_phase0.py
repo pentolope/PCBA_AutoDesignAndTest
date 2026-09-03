@@ -197,6 +197,29 @@ class ManifestSchemaPreflight(unittest.TestCase):
         with self.assertRaisesRegex(ManifestError, "non-JSON constant"):
             Manifest(path)
 
+    def test_a_misspelled_waiver_field_is_refused_not_ignored(self):
+        # A waiver is the one manifest object that WEAKENS a check, so a
+        # typo silently ignored is a waiver that never applies - or worse,
+        # one that cannot be audited. Every field is enumerated.
+        waiver = {"gate": "DRC.AUTHORITATIVE", "rule": "clearance",
+                  "category": "design_rules", "reason": "reviewed",
+                  "reviewed_by": "someone", "reviewed_utc": "2026-01-01",
+                  "approved_source_sha256": "0" * 64,
+                  "approved_rules_sha256": "0" * 64,
+                  "approved_command_sha256": "0" * 64,
+                  "approved_report_sha256": "0" * 64,
+                  "items": [{"description": "item",
+                             "location_mm": [1.0, 2.0]}]}
+        Manifest(write_manifest(minimal_manifest({"waivers": [waiver]}),
+                                self.work))
+        for typo in ({"gaet": "DRC.AUTHORITATIVE"}, {"rul": "clearance"}):
+            broken = dict(waiver)
+            broken.update(typo)
+            doc = minimal_manifest({"waivers": [broken]})
+            with self.assertRaisesRegex(ManifestError,
+                                        next(iter(typo))):
+                Manifest(write_manifest(doc, self.work))
+
     def test_an_unread_leaf_the_schema_once_permitted_is_now_refused(self):
         for extra in ({"reports": {"tolerance_seconds": 0}},
                       {"via_mask": {"contact_semantics": "prose"}},
@@ -322,6 +345,16 @@ class OutputPathSafety(unittest.TestCase):
             os.path.join(self.work, "run"))
         with self.assertRaisesRegex(build_mod.BuildError, "same output"):
             builder.generate()
+        # The archive is a declared output like any other: a zip named after
+        # the BOM would truncate it and ship an incomplete set as success.
+        doc["release_generation"]["bom"]["output"] = "bom.csv"
+        doc["release_generation"]["archive"]["zip"] = "bom.csv"
+        manifest = Manifest(write_manifest(doc, self.work))
+        builder = build_mod.Build(
+            Context(manifest, os.path.join(self.work, "ctx2")),
+            os.path.join(self.work, "run2"))
+        with self.assertRaisesRegex(build_mod.BuildError, "same output"):
+            builder.declared_outputs()
 
     def test_a_symlinked_input_inside_an_install_directory_is_protected(self):
         # `_prune` unlinks lexically; the guard must therefore protect the
@@ -485,6 +518,42 @@ class WorkspaceHold(unittest.TestCase):
             with self.assertRaisesRegex(LayoutError, "another writer"):
                 with self.workspace.hold("racer"):
                     pass
+
+    def test_two_breakers_serialize_on_the_break_lock(self):
+        # Both observe the same stale hold; without the break lock the
+        # second breaker unlinks the first one's freshly installed LIVE
+        # hold and both write into one tree.
+        gone = subprocess.Popen([PYTHON, "-c", "pass"])
+        gone.wait()
+        import socket
+        os.makedirs(self.workspace.board, exist_ok=True)
+        with open(os.path.join(self.workspace.board, ".hold"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"pid": gone.pid, "host": socket.gethostname(),
+                       "purpose": "crashed"}, fh)
+        with open(os.path.join(self.workspace.board, ".hold-break"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"pid": os.getpid(), "host": socket.gethostname(),
+                       "purpose": "breaking a stale hold"}, fh)
+        with self.assertRaisesRegex(LayoutError, "already breaking"):
+            with self.workspace.hold("second-breaker"):
+                pass
+        os.unlink(os.path.join(self.workspace.board, ".hold-break"))
+
+    def test_a_dead_breakers_lock_is_cleared_and_the_break_proceeds(self):
+        gone = subprocess.Popen([PYTHON, "-c", "pass"])
+        gone.wait()
+        import socket
+        os.makedirs(self.workspace.board, exist_ok=True)
+        for name in (".hold", ".hold-break"):
+            with open(os.path.join(self.workspace.board, name), "w",
+                      encoding="utf-8") as fh:
+                json.dump({"pid": gone.pid, "host": socket.gethostname(),
+                           "purpose": "crashed"}, fh)
+        with self.workspace.hold("recover"):
+            pass
+        self.assertFalse(os.path.exists(
+            os.path.join(self.workspace.board, ".hold-break")))
 
     def test_release_leaves_a_hold_that_is_no_longer_ours(self):
         import socket

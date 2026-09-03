@@ -228,20 +228,26 @@ No commit, push or tag without explicit authorisation from the user.
 No code path may raise a dialog a human must dismiss: a modal box on
 an unwatched screen freezes an autonomous run (KiCad's debug asserts
 - e.g. `PCB_VIA::GetWidth()` without a layer argument - become
-blocking wxWidgets alerts whenever a display is reachable). Every
-entry point calls
+blocking wxWidgets alerts whenever a GUI application object exists
+and a display is reachable). Every entry point calls
 `pcbqa.headless.suppress_blocking_ui()` first (`run.py` does this
 for all commands); long-running consumer scripts must do the same.
-Asserts are routed to LOG mode - printed to stderr and continued,
-never modal and never silent (an assert is a report point, not a
-control-flow guard; the continue path is the same one the dialog's
-own button took). The protection is QUERYABLE STATE
-(`headless.protection_state()`): the canary asserts the wx assert
-mode BEFORE triggering anything, so a
-regression fails in milliseconds by name - dialogs are never
-detected or excluded by timeouts - and only then triggers the known
-misuse to prove the assert is REPORTED on stderr, not silenced. Via
-geometry reads always pass a layer argument.
+When no wx application exists a `wx.AppConsole` is created - never a
+GUI `wx.App`, which terminates the whole process outright when
+$DISPLAY is unset or unreachable, before any handler runs - so every
+command works identically with no display, a dead one, and a live
+one. A console application's assert handler has no dialog branch:
+asserts are printed to stderr and continued, never modal and never
+silent (an assert is a report point, not a control-flow guard; the
+continue path is the same one the dialog's own button took). When a
+GUI application already exists - this interpreter embedded in KiCad
+itself - its assert mode is routed to LOG instead. The protection is
+QUERYABLE STATE (`headless.protection_state()`): the canary asserts
+`modal_unreachable` BEFORE triggering anything, so a regression
+fails in milliseconds by name - dialogs are never detected or
+excluded by timeouts - and only then triggers the known misuse to
+prove the assert is REPORTED on stderr, not silenced. Via geometry
+reads always pass a layer argument.
 
 ## Running
 

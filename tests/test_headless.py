@@ -31,11 +31,11 @@ from pcbqa import headless
 applied = headless.suppress_blocking_ui()
 state = headless.protection_state()
 print("STATE", state)
-if state["wx_assert_mode_is_log"] is not True:
-    # Refuse to trigger anything: with an unknown or dialog assert
-    # mode, the trigger itself could raise the modal box this test
-    # exists to prevent. The state IS the failure.
-    print("STATE-BAD: wx assert mode is not log")
+if state["modal_unreachable"] is not True:
+    # Refuse to trigger anything: with the modal path not provably
+    # unreachable, the trigger itself could raise the very box this
+    # test exists to prevent. The state IS the failure.
+    print("STATE-BAD:", state["strategy"])
     sys.exit(3)
 import pcbnew
 board = pcbnew.CreateEmptyBoard()
@@ -51,9 +51,30 @@ print("CANARY-OK", value)
 class NothingBlocksOnADialog(unittest.TestCase):
 
     def test_protection_is_queryable_state(self):
-        headless.suppress_blocking_ui()
+        applied = headless.suppress_blocking_ui()
         state = headless.protection_state()
-        self.assertIs(state["wx_assert_mode_is_log"], True)
+        self.assertIs(state["modal_unreachable"], True, state)
+        self.assertIn(applied["strategy"],
+                      (headless.CONSOLE_APP, headless.GUI_LOG_MODE))
+
+    def test_commands_run_with_no_display_at_all(self):
+        """A GUI wx.App exits the process when $DISPLAY is unset or
+        unreachable - before any exception handler runs - which made
+        every CLI command die in a genuinely headless environment.
+        The console strategy must hold with no display, a dead one,
+        and a live one alike."""
+        for display in (None, ":63.7"):
+            environment = dict(os.environ)
+            environment.pop("DISPLAY", None)
+            if display is not None:
+                environment["DISPLAY"] = display
+            completed = subprocess.run(
+                [sys.executable, os.path.join(HERE, "run.py"), "gates"],
+                capture_output=True, text=True, timeout=120,
+                env=environment, cwd=HERE)
+            self.assertEqual(completed.returncode, 0,
+                             (display, completed.stderr[-400:]))
+            self.assertIn("ROUTE.GEOMETRY_HYGIENE", completed.stdout)
 
     def test_state_first_canary_demands_the_report(self):
         """State is asserted BEFORE the trigger, so a protection

@@ -20,7 +20,7 @@
       "additionalProperties": {"$ref": "#/definitions/relpath"}
     },
     "documentation_globs": {"$ref": "#/definitions/strings"},
-    "waivers": {"type": "array", "items": {"type": "object"}},
+    "waivers": {"type": "array", "items": {"$ref": "#/definitions/waiver"}},
     "advisory_gates": {
       "type": "array",
       "items": {
@@ -557,6 +557,38 @@
         "margin_deg": {"type": "number"},
         "decisive": {"type": "boolean"},
         "evidence_problems": {}
+      }
+    },
+    "waiver": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate", "rule", "category", "items", "reason",
+                   "reviewed_by", "reviewed_utc", "approved_source_sha256",
+                   "approved_rules_sha256", "approved_command_sha256",
+                   "approved_report_sha256"],
+      "properties": {
+        "id": {"type": "string"},
+        "gate": {"type": "string"},
+        "rule": {"type": "string"},
+        "category": {"type": "string"},
+        "reason": {"type": "string"},
+        "reviewed_by": {"type": "string"},
+        "reviewed_utc": {"type": "string"},
+        "approved_source_sha256": {"type": "string"},
+        "approved_rules_sha256": {"type": "string"},
+        "approved_command_sha256": {"type": "string"},
+        "approved_report_sha256": {"type": "string"},
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["description", "location_mm"],
+            "properties": {
+              "description": {"type": "string"},
+              "location_mm": {"$ref": "#/definitions/numbers"},
+              "uuid": {"type": "string"}
+            }
+          }
+        }
       }
     },
     "archive_rule": {

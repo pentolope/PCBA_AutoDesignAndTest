@@ -128,25 +128,32 @@ class Hold:
         self.path = os.path.join(workspace.board, ".hold")
         self._fd = None
 
-    def _claim(self):
-        import json
+    def _record(self, purpose):
         import socket
+        return {"pid": os.getpid(), "host": socket.gethostname(),
+                "purpose": purpose, "created_utc": _stamp()}
+
+    def _write_atomic(self, path, record):
+        """Create `path` with `record` in one step, or FileExistsError.
+
+        A hold file must never be observable empty: an unreadable hold is
+        treated as abandoned, so an empty window would let a concurrent
+        claimant break a live hold mid-claim.
+        """
+        import json
         import tempfile
         os.makedirs(self.workspace.board, exist_ok=True)
-        record = {"pid": os.getpid(), "host": socket.gethostname(),
-                  "purpose": self.purpose, "created_utc": _stamp()}
-        # Written complete, then linked into place: a hold file must never be
-        # observable empty, because an unreadable hold is treated as
-        # abandoned and an empty window would let a concurrent claimant
-        # break a live hold mid-claim.
         fd, staged = tempfile.mkstemp(dir=self.workspace.board,
-                                      prefix=".hold-")
+                                      prefix=".hold-tmp-")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(record, handle)
-            os.link(staged, self.path)      # atomic; FileExistsError = taken
+            os.link(staged, path)           # atomic; FileExistsError = taken
         finally:
             os.unlink(staged)
+
+    def _claim(self):
+        self._write_atomic(self.path, self._record(self.purpose))
         self._fd = True
 
     def _holder(self):
@@ -181,17 +188,7 @@ class Hold:
         except FileExistsError:
             holder = self._holder()
             if self._stale(holder):
-                try:
-                    os.unlink(self.path)
-                except FileNotFoundError:
-                    pass
-                try:
-                    self._claim()
-                except FileExistsError:
-                    raise LayoutError(
-                        "the stale hold on this board's workspace was "
-                        "broken, but another writer claimed it first; "
-                        "rerun when it finishes") from None
+                self._break_stale()
                 return self
             raise LayoutError(
                 "the workspace for this board is held by pid {} on {} "
@@ -200,6 +197,62 @@ class Hold:
                     holder.get("pid"), holder.get("host"),
                     holder.get("purpose"), holder.get("created_utc"),
                     self.path))
+
+    def _break_stale(self):
+        """Replace a stale hold, serialized so two breakers cannot race.
+
+        Without the break lock, two claimants can both observe the same
+        stale hold; the slower one then unlinks the faster one's freshly
+        installed LIVE hold and takes the workspace alongside it.
+        """
+        import json
+        breaker = self.path + "-break"
+        for attempt in (1, 2):
+            try:
+                self._write_atomic(breaker,
+                                   self._record("breaking a stale hold"))
+                break
+            except FileExistsError:
+                try:
+                    with open(breaker, encoding="utf-8") as handle:
+                        other = json.load(handle)
+                except (OSError, ValueError):
+                    other = {}
+                if attempt == 1 and self._stale(other):
+                    # The previous breaker died mid-break; clear its lock
+                    # and try once more.
+                    try:
+                        os.unlink(breaker)
+                    except FileNotFoundError:
+                        pass
+                    continue
+                raise LayoutError(
+                    "another writer is already breaking the stale hold on "
+                    "this board's workspace; rerun when it "
+                    "finishes") from None
+        try:
+            holder = self._holder()
+            if holder and not self._stale(holder):
+                raise LayoutError(
+                    "the hold on this board's workspace was retaken by a "
+                    "live writer while it was being broken; rerun when it "
+                    "finishes")
+            try:
+                os.unlink(self.path)
+            except FileNotFoundError:
+                pass
+            try:
+                self._claim()
+            except FileExistsError:
+                raise LayoutError(
+                    "the stale hold on this board's workspace was broken, "
+                    "but another writer claimed it first; rerun when it "
+                    "finishes") from None
+        finally:
+            try:
+                os.unlink(breaker)
+            except FileNotFoundError:
+                pass
 
     def __exit__(self, exc_type, exc, tb):
         if self._fd:

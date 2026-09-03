@@ -163,6 +163,47 @@ class Build:
             os.makedirs(path, exist_ok=True)
         self.log.append({"step": "stage", "files": len(staged)})
 
+    def declared_outputs(self):
+        """Every staged file a manifest-declared name selects, collision-free.
+
+        Includes the archive and the fabrication record: a zip named after
+        another step's output would truncate it, and `destinations()` would
+        then silently collapse the duplicate - a build reporting success
+        over an incomplete artifact set.
+        """
+        cfg = self.cfg
+        outputs = {
+            "erc": self._scratch(self.reports, cfg["erc"]["output"],
+                                 "erc output"),
+            "drc": self._scratch(self.reports, cfg["drc"]["output"],
+                                 "drc output"),
+            "cpl": self._scratch(self.staged, cfg["cpl"]["output"],
+                                 "cpl output"),
+            "bom": self._scratch(self.staged, cfg["bom"]["output"],
+                                 "bom output"),
+            "archive": self._scratch(self.staged, cfg["archive"]["zip"],
+                                     "archive name"),
+        }
+        declared = artifacts.paths(self.manifest)
+        if "fabrication_manifest" in declared:
+            outputs["fabrication"] = self._scratch(
+                self.staged, artifacts.leaf(declared["fabrication_manifest"]),
+                "fabrication record name")
+        for name, path in outputs.items():
+            if name in ("erc", "drc"):
+                continue
+            for reserved in (self.gerbers, self.reports):
+                reserved = os.path.realpath(reserved)
+                if os.path.commonpath([path, reserved]) == reserved:
+                    raise BuildError(
+                        "{} output {!r} lands inside a directory another "
+                        "step owns".format(name, os.path.basename(path)))
+        if len(set(outputs.values())) != len(outputs):
+            raise BuildError(
+                "two generation steps declare the same output file; each "
+                "output is one step's alone")
+        return outputs
+
     # -- 2: run every generation step -------------------------------------
     def generate(self):
         from .gates.g_checks import VIOLATIONS_EXIT_CODE, required_options
@@ -171,25 +212,7 @@ class Build:
         sch = os.path.join(self.project, self.manifest.get("sources.schematic"))
         cfg = self.cfg
         bom, cpl = cfg["bom"], cfg["cpl"]
-        outputs = {
-            "erc": self._scratch(self.reports, cfg["erc"]["output"],
-                                 "erc output"),
-            "drc": self._scratch(self.reports, cfg["drc"]["output"],
-                                 "drc output"),
-            "cpl": self._scratch(self.staged, cpl["output"], "cpl output"),
-            "bom": self._scratch(self.staged, bom["output"], "bom output"),
-        }
-        for name in ("cpl", "bom"):
-            for reserved in (self.gerbers, self.reports):
-                reserved = os.path.realpath(reserved)
-                if os.path.commonpath([outputs[name], reserved]) == reserved:
-                    raise BuildError(
-                        "{} output {!r} lands inside a directory another "
-                        "step owns".format(name, cfg[name]["output"]))
-        if len(set(outputs.values())) != len(outputs):
-            raise BuildError(
-                "two generation steps declare the same output file; each "
-                "output is one step's alone")
+        outputs = self.declared_outputs()
         commands = [
             ("erc", [cli, "sch", "erc", "--output", outputs["erc"],
                      "--format", "json"]
@@ -225,7 +248,10 @@ class Build:
                      "exit {}: {}".format(proc.returncode,
                                           (proc.stderr or "").strip()[:120])))
 
-        missing = [n for n, p in outputs.items() if not os.path.isfile(p)]
+        # Only what THIS step's tools were asked to write: the archive and
+        # the fabrication record are produced by later steps.
+        missing = [n for n in ("erc", "drc", "cpl", "bom")
+                   if not os.path.isfile(outputs[n])]
         if not glob.glob(os.path.join(self.export, "*")):
             missing.append("gerbers")
         for name in missing:
@@ -428,8 +454,7 @@ class Build:
                 os.unlink(path)
                 continue
             chosen.append(path)
-        zpath = self._scratch(self.staged, self.cfg["archive"]["zip"],
-                              "archive name")
+        zpath = self.declared_outputs()["archive"]
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
             for path in chosen:
                 zf.write(path, os.path.basename(path))
@@ -528,8 +553,7 @@ class Build:
             "artifacts": dict(sorted(recorded.items())),
             "excluded_layers": self.excluded_layers,
         }
-        self.record_staged = os.path.join(self.staged, artifacts.leaf(
-            artifacts.paths(self.manifest)["fabrication_manifest"]))
+        self.record_staged = self.declared_outputs()["fabrication"]
         with open(self.record_staged, "w", encoding="utf-8") as fh:
             json.dump(document, fh, indent=2, sort_keys=False)
             fh.write("\n")
