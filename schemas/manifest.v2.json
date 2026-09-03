@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "pcbqa board manifest, schema_version 2",
-  "description": "Every key this toolkit implements. Validation refuses a key that is not here: a declaration the toolkit would ignore is a declaration that silently does nothing. Board-local data lives under keys prefixed x_, permitted at every level; description, note, why and rationale are annotation strings, also permitted at every level. Both are stripped before this schema is applied.",
+  "description": "Every key this toolkit implements. Validation refuses a key that is not here: a declaration the toolkit would ignore is a declaration that silently does nothing. Board-local data lives under keys prefixed x_, and description, note, why and rationale are annotation strings; both are permitted only inside closed objects, where they are stripped before this schema is applied - inside an open-key map every key is data and they are refused.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "board_id"],
@@ -385,8 +385,7 @@
         "date_field": {"type": "string"},
         "source_hash_field": {"type": "string"},
         "closure_field": {"type": "string"},
-        "require_source_hash": {"type": "boolean"},
-        "tolerance_seconds": {"type": "number"}
+        "require_source_hash": {"type": "boolean"}
       }
     },
     "archive": {
@@ -405,7 +404,6 @@
         "design_target_mm": {"type": "number"},
         "metric": {"type": "string"},
         "mask_dam_rule": {"type": "string"},
-        "contact_semantics": {"type": "string"},
         "pad_contact": {
           "type": "object", "additionalProperties": false,
           "properties": {
@@ -455,8 +453,7 @@
       "type": "object", "additionalProperties": false,
       "properties": {"hash_file": {"$ref": "#/definitions/relpath"},
                      "attributes_file": {"type": "string"},
-                     "reject_globs": {"$ref": "#/definitions/strings"},
-                     "inventory_policy": {"type": "string"}}
+                     "reject_globs": {"$ref": "#/definitions/strings"}}
     },
     "closure": {
       "type": "object", "additionalProperties": false,

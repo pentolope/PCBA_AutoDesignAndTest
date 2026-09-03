@@ -131,12 +131,22 @@ class Hold:
     def _claim(self):
         import json
         import socket
+        import tempfile
         os.makedirs(self.workspace.board, exist_ok=True)
         record = {"pid": os.getpid(), "host": socket.gethostname(),
                   "purpose": self.purpose, "created_utc": _stamp()}
-        fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(record, handle)
+        # Written complete, then linked into place: a hold file must never be
+        # observable empty, because an unreadable hold is treated as
+        # abandoned and an empty window would let a concurrent claimant
+        # break a live hold mid-claim.
+        fd, staged = tempfile.mkstemp(dir=self.workspace.board,
+                                      prefix=".hold-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(record, handle)
+            os.link(staged, self.path)      # atomic; FileExistsError = taken
+        finally:
+            os.unlink(staged)
         self._fd = True
 
     def _holder(self):
@@ -175,7 +185,13 @@ class Hold:
                     os.unlink(self.path)
                 except FileNotFoundError:
                     pass
-                self._claim()          # a second racer gets FileExistsError
+                try:
+                    self._claim()
+                except FileExistsError:
+                    raise LayoutError(
+                        "the stale hold on this board's workspace was "
+                        "broken, but another writer claimed it first; "
+                        "rerun when it finishes") from None
                 return self
             raise LayoutError(
                 "the workspace for this board is held by pid {} on {} "
@@ -187,10 +203,16 @@ class Hold:
 
     def __exit__(self, exc_type, exc, tb):
         if self._fd:
-            try:
-                os.unlink(self.path)
-            except FileNotFoundError:
-                pass
+            import socket
+            holder = self._holder()
+            # Release only a hold that is still ours: if something broke and
+            # replaced it, unlinking here would strip the new writer's hold.
+            if holder.get("pid") == os.getpid() \
+                    and holder.get("host") == socket.gethostname():
+                try:
+                    os.unlink(self.path)
+                except FileNotFoundError:
+                    pass
         return False
 
 

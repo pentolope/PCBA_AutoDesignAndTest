@@ -348,8 +348,11 @@ class Manifest:
         except OSError as exc:
             raise ManifestError(f"{path}: cannot be read: {exc}") from exc
         self.sha256 = sha256_bytes(raw)
+        from . import schema as schema_mod
         try:
-            self.data = json.loads(raw.decode("utf-8"))
+            # The strict loader: NaN and Infinity are not JSON, and a value
+            # the schema's typed leaves never visit must still be finite.
+            self.data = schema_mod.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             raise ManifestError(f"{self.path}: not valid JSON: {exc}") from exc
         if not isinstance(self.data, dict):
@@ -609,6 +612,11 @@ class Context:
             self._cache[key] = factory()
         return self._cache[key]
 
+    @property
+    def board_override(self):
+        """The candidate board judged in place of the declared one, or None."""
+        return self._board_override
+
     def board_path(self):
         if self._board_override:
             return self._board_override
@@ -783,6 +791,19 @@ def to_json(results, context, extra=None):
         },
         "gates": [r.to_dict() for r in results],
     }
+    override = getattr(context, "board_override", None)
+    if override:
+        # The override changes WHAT was judged; a document that did not say
+        # so would claim the closure of copper the gates never read.
+        doc["board_override"] = {
+            "board_path": override,
+            "board_sha256": (sha256_file(override)
+                             if os.path.isfile(override) else None),
+            "meaning": "the gates judged this candidate board in place of "
+                       "the declared sources; the source closure above "
+                       "still describes the tree, and this document is a "
+                       "diagnostic, never a verdict",
+        }
     if extra:
         doc.update(extra)
     return doc

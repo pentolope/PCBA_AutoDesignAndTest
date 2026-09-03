@@ -270,7 +270,7 @@ def _is_type(value, expected):
 
 def _reject_constant(token):
     raise ValueError(
-        f"report contains the non-JSON constant {token!r}; NaN and Infinity "
+        f"document contains the non-JSON constant {token!r}; NaN and Infinity "
         f"are not JSON and cannot be compared against any tolerance")
 
 

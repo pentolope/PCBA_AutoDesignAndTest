@@ -33,8 +33,7 @@
       "*~",
       "*.kicad_pcb-bak",
       "*.kicad_sch-bak"
-    ],
-    "inventory_policy": "exact: every recorded file must be present and unchanged, and every present file must be recorded"
+    ]
   },
   "artifacts": {
     "gerber_dir": "generated/release/gerbers",
@@ -84,7 +83,6 @@
     "source_field": "source",
     "date_field": "date",
     "require_source_hash": true,
-    "tolerance_seconds": 0,
     "source_closure": [
       "*.kicad_sch",
       "**/*.kicad_sch",
@@ -130,7 +128,7 @@
       ],
       "require_paste": true
     },
-    "contact_semantics": "annulus_contacts counts zero-distance tangency as contact; annulus_strict_overlaps counts positive shared area only",
+    "note": "annulus_contacts counts zero-distance tangency as contact; annulus_strict_overlaps counts positive shared area only",
     "mask_dam_rule": "contact"
   },
   "routing": {

@@ -70,24 +70,37 @@ def clobbered_inputs(manifest):
     from .core import design_inputs
 
     root = os.path.realpath(manifest.resolve("."))
-    protected = {os.path.realpath(os.path.join(root, rel)): rel
-                 for rel in design_inputs(manifest)}
+    # Both spellings of every input: the lexical path is what `_prune`
+    # actually unlinks and what the tree holds; the realpath is what a
+    # symlinked input resolves to. Guarding only one lets the other be
+    # destroyed - a library reached through an in-project symlink inside
+    # `gerber_dir` is deleted lexically while its realpath looks safe.
+    protected = {}
+    for rel in design_inputs(manifest):
+        lexical = os.path.normpath(os.path.join(root, rel))
+        protected[lexical] = rel
+        protected.setdefault(os.path.realpath(lexical), rel)
     protected[os.path.realpath(manifest.path)] = "the manifest itself"
     hits = []
     declared = artifacts.paths(manifest)
     for role in artifacts.FILE_ROLES:
         target = declared.get(role)
-        if target and os.path.realpath(target) in protected:
+        if not target:
+            continue
+        if os.path.realpath(target) in protected:
             hits.append((role, protected[os.path.realpath(target)]))
+        elif os.path.normpath(target) in protected:
+            hits.append((role, protected[os.path.normpath(target)]))
     for role in ("gerber_dir", "reports_dir"):
         directory = declared.get(role)
         if not directory:
             continue
-        real = os.path.realpath(directory)
+        surfaces = {os.path.realpath(directory),
+                    os.path.normpath(directory)}
         for path, rel in sorted(protected.items()):
-            if os.path.dirname(path) == real:
+            if os.path.dirname(path) in surfaces:
                 hits.append((role, rel))
-    return hits
+    return sorted(set(hits))
 
 
 def canonical_argv(args):
@@ -114,23 +127,25 @@ class Build:
         self.excluded_layers = []
 
     def _scratch(self, base, name, label):
-        """Join a manifest-declared output name into this run's scratch.
+        """Join a manifest-declared output name into the directory it names.
 
         `os.path.join` returns the second operand verbatim when it is
         absolute, so a declared output name could otherwise aim a KiCad
-        export anywhere on the machine. Every joined output must resolve
-        back inside the run's own root.
+        export anywhere on the machine - and `..` could land one step's
+        output on another step's, to be read back as if the tool wrote it.
+        The joined path must stay inside the base directory the step owns.
         """
         joined = os.path.realpath(os.path.join(base, str(name)))
-        root = os.path.realpath(self.root)
+        base = os.path.realpath(base)
         try:
-            inside = os.path.commonpath([joined, root]) == root
+            inside = os.path.commonpath([joined, base]) == base
         except ValueError:
             inside = False
-        if not inside or joined == root:
+        if not inside or joined == base:
             raise BuildError(
-                "{} {!r} resolves outside the build scratch ({}); output "
-                "names are scratch-relative".format(label, name, joined))
+                "{} {!r} resolves outside its own output directory ({}); "
+                "output names are relative to the step that writes "
+                "them".format(label, name, joined))
         return joined
 
     # -- 1: stage the design; tools never open the authoritative files -----
@@ -164,6 +179,17 @@ class Build:
             "cpl": self._scratch(self.staged, cpl["output"], "cpl output"),
             "bom": self._scratch(self.staged, bom["output"], "bom output"),
         }
+        for name in ("cpl", "bom"):
+            for reserved in (self.gerbers, self.reports):
+                reserved = os.path.realpath(reserved)
+                if os.path.commonpath([outputs[name], reserved]) == reserved:
+                    raise BuildError(
+                        "{} output {!r} lands inside a directory another "
+                        "step owns".format(name, cfg[name]["output"]))
+        if len(set(outputs.values())) != len(outputs):
+            raise BuildError(
+                "two generation steps declare the same output file; each "
+                "output is one step's alone")
         commands = [
             ("erc", [cli, "sch", "erc", "--output", outputs["erc"],
                      "--format", "json"]

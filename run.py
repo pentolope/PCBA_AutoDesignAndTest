@@ -224,6 +224,14 @@ def _validate(manifest, workspace, write, quiet, only):
             print("REFUSED: --write needs artifacts.validation_report in the "
                   "manifest to say where the verdict belongs")
             return 2, doc, ctx
+        # validate --write is a tree writer, so it obeys the same two rules
+        # build does: the destination stays inside the project, and it is
+        # never a design input - a verdict that overwrote the board it
+        # judged would be the toolkit destroying its own subject.
+        problem = _unwritable(manifest, recorded)
+        if problem:
+            print("REFUSED: " + problem)
+            return 2, doc, ctx
         os.makedirs(os.path.dirname(recorded), exist_ok=True)
         shutil.copy2(jpath, recorded)
 
@@ -413,6 +421,38 @@ def cmd_release_check(manifest_path):
     return 0
 
 
+def _unwritable(manifest, target):
+    """Why `target` must not be written, or None if it may be.
+
+    The same discipline the build applies to installs: contained inside the
+    project this manifest describes, and never a file the design is made of.
+    """
+    from pcbqa.core import ManifestError, design_inputs
+
+    root = os.path.realpath(manifest.resolve("."))
+    resolved = os.path.realpath(target)
+    if not _inside(root, resolved) or resolved == root:
+        return ("artifacts.validation_report resolves outside the project "
+                "this manifest describes: {}".format(resolved))
+    try:
+        # Both spellings of every input: the lexical path is what the tree
+        # actually holds, the realpath is what a symlink resolves to.
+        protected = set()
+        for rel in design_inputs(manifest):
+            lexical = os.path.normpath(os.path.join(root, rel))
+            protected.add(lexical)
+            protected.add(os.path.realpath(lexical))
+    except ManifestError as exc:
+        return ("the design inputs cannot be enumerated, so the write "
+                "target cannot be proven safe: {}".format(exc))
+    protected.add(os.path.realpath(manifest.path))
+    if resolved in protected or os.path.normpath(target) in protected:
+        return ("artifacts.validation_report names a design input; writing "
+                "the verdict there would destroy part of the design it "
+                "judged: {}".format(target))
+    return None
+
+
 def _committed_verdict(manifest, doc):
     """The validation report committed beside the artifacts must accept them."""
     from pcbqa import artifacts
@@ -559,6 +599,13 @@ def cmd_gates(argv):
             if rows:
                 print("\ndeclared, but NOT_APPLICABLE at the last recorded "
                       "validation:")
+                recorded_sha = ((doc or {}).get("manifest") or {}).get("sha256")
+                if recorded_sha != manifest.sha256:
+                    # Nothing is believed because a report says so: these
+                    # reasons came from a different manifest and may be stale.
+                    print("{:32s} (recorded against a different manifest, "
+                          "{}...; re-run validate --write to "
+                          "refresh)".format("", str(recorded_sha)[:12]))
                 for g in rows:
                     print("{:32s} {}".format(g["gate"],
                                              str(g.get("reason", ""))[:90]))
@@ -640,6 +687,20 @@ def cmd_check_board(manifest_path):
             try:
                 with open(path, encoding="utf-8") as fh:
                     record = json.load(fh)
+                # The recorded artifact digests, not only the closure: a
+                # tampered gerber changes no source, so only its own digest
+                # can say it moved.
+                base = os.path.dirname(path)
+                for name, digest in sorted(
+                        (record.get("artifacts") or {}).items()):
+                    full = os.path.join(base, name)
+                    if not os.path.isfile(full):
+                        report("fabrication", "recorded artifact {} is "
+                                              "absent".format(name))
+                    elif sha256_file(full) != digest:
+                        report("fabrication", "artifact {} has changed since "
+                                              "its digest was "
+                                              "recorded".format(name))
                 entries, now = closure_mod.current(manifest)
                 was = record.get("source_closure_sha256")
                 if was != now:

@@ -177,6 +177,34 @@ class ManifestSchemaPreflight(unittest.TestCase):
         with self.assertRaisesRegex(ManifestError, "min_segment_mm"):
             Manifest(write_manifest(doc, self.work))
 
+    def test_annotations_inside_an_open_key_map_are_data_and_refused(self):
+        # `connector_gender_tokens` is iterated wholesale: a stripped `note`
+        # would otherwise become a gender whose tokens are prose characters.
+        for extra in ({"connector_gender_tokens": {"note": ["prose"]}},
+                      {"connector_gender_tokens": {"note": "prose"}},
+                      {"sources": {"x_spare": "/etc/passwd"}}):
+            doc = minimal_manifest(extra)
+            with self.assertRaisesRegex(ManifestError, "open-key map"):
+                Manifest(write_manifest(doc, self.work))
+
+    def test_non_finite_numbers_cannot_enter_the_manifest(self):
+        # Even inside a subtree the schema types as an opaque object, where
+        # the validator's finite check never visits.
+        path = os.path.join(self.work, "manifest.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"schema_version": 2, "board_id": "phase0_case", '
+                     '"waivers": [{"limit": Infinity}]}')
+        with self.assertRaisesRegex(ManifestError, "non-JSON constant"):
+            Manifest(path)
+
+    def test_an_unread_leaf_the_schema_once_permitted_is_now_refused(self):
+        for extra in ({"reports": {"tolerance_seconds": 0}},
+                      {"via_mask": {"contact_semantics": "prose"}},
+                      {"fixture": {"inventory_policy": "prose"}}):
+            doc = minimal_manifest(extra)
+            with self.assertRaises(ManifestError):
+                Manifest(write_manifest(doc, self.work))
+
 
 class BuildCoherence(unittest.TestCase):
     """A declared capability no build step would apply refuses the build."""
@@ -260,17 +288,68 @@ class OutputPathSafety(unittest.TestCase):
             with self.assertRaisesRegex(ManifestError, key):
                 Manifest(write_manifest(doc, self.work))
 
-    def test_a_scratch_output_cannot_escape_the_run(self):
+    def test_a_scratch_output_cannot_escape_its_own_directory(self):
         doc = minimal_manifest({"release_generation": {}})
         manifest = Manifest(write_manifest(doc, self.work))
         builder = build_mod.Build(
             Context(manifest, os.path.join(self.work, "ctx")),
             os.path.join(self.work, "run"))
         inside = builder._scratch(builder.reports, "drc.json", "drc output")
-        self.assertTrue(inside.startswith(os.path.realpath(builder.root)))
-        for hostile in ("/etc/passwd", "../../../elsewhere.json"):
+        self.assertTrue(inside.startswith(os.path.realpath(builder.reports)))
+        # Not merely inside the run: `../bom.csv` from the gerber directory
+        # would land on another step's staged output and be read back as if
+        # that step's tool wrote it.
+        for hostile in ("/etc/passwd", "../../../elsewhere.json",
+                        "../bom.csv"):
             with self.assertRaises(build_mod.BuildError):
-                builder._scratch(builder.reports, hostile, "drc output")
+                builder._scratch(builder.gerbers, hostile, "fab file name")
+
+    def test_two_steps_cannot_declare_one_output_file(self):
+        doc = minimal_manifest({
+            "sources": {"pcb": "case.kicad_pcb",
+                        "schematic": "case.kicad_sch"},
+            "artifacts": {"gerber_export_flags": []},
+            "release_generation": {
+                "erc": {"output": "erc.json"}, "drc": {"output": "drc.json"},
+                "drill": {"flags": []},
+                "cpl": {"output": "same.csv", "flags": []},
+                "bom": {"output": "same.csv", "fields": [], "labels": [],
+                        "group_by": [], "flags": []},
+                "archive": {"zip": "fab.zip"}, "lock_file_globs": []}})
+        manifest = Manifest(write_manifest(doc, self.work))
+        builder = build_mod.Build(
+            Context(manifest, os.path.join(self.work, "ctx")),
+            os.path.join(self.work, "run"))
+        with self.assertRaisesRegex(build_mod.BuildError, "same output"):
+            builder.generate()
+
+    def test_a_symlinked_input_inside_an_install_directory_is_protected(self):
+        # `_prune` unlinks lexically; the guard must therefore protect the
+        # lexical spelling too, not only what the symlink resolves to.
+        target = os.path.join(self.work, "real.kicad_pcb")
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write("(kicad_pcb)")
+        os.makedirs(os.path.join(self.work, "out"))
+        os.symlink(target, os.path.join(self.work, "out", "case.kicad_pcb"))
+        doc = minimal_manifest({
+            "sources": {"pcb": "out/case.kicad_pcb"},
+            "artifacts": {"gerber_dir": "out"}})
+        manifest = Manifest(write_manifest(doc, self.work))
+        hits = build_mod.clobbered_inputs(manifest)
+        self.assertIn(("gerber_dir", "out/case.kicad_pcb"), hits)
+
+    def test_validate_write_refuses_escapes_and_design_inputs(self):
+        import run as run_cli
+        with open(os.path.join(self.work, "case.kicad_pcb"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("(kicad_pcb)")
+        manifest = Manifest(write_manifest(minimal_manifest(), self.work))
+        self.assertIn("outside the project", run_cli._unwritable(
+            manifest, os.path.join(self.work, "..", "escape.json")))
+        self.assertIn("design input", run_cli._unwritable(
+            manifest, os.path.join(self.work, "case.kicad_pcb")))
+        self.assertIsNone(run_cli._unwritable(
+            manifest, os.path.join(self.work, "generated", "v.json")))
 
     def test_a_destination_that_is_a_design_input_refuses_the_build(self):
         with open(os.path.join(self.work, "case.kicad_pcb"), "w",
@@ -382,6 +461,44 @@ class WorkspaceHold(unittest.TestCase):
         with self.workspace.hold("recover"):
             pass
 
+    def test_a_hold_is_never_observable_empty(self):
+        # An unreadable hold counts as abandoned, so the claim must appear
+        # atomically with its content or a live hold can be broken mid-claim.
+        with self.workspace.hold("atomic"):
+            with open(os.path.join(self.workspace.board, ".hold"),
+                      encoding="utf-8") as fh:
+                record = json.load(fh)
+            self.assertEqual(record["pid"], os.getpid())
+
+    def test_losing_the_break_race_is_a_refusal_not_a_traceback(self):
+        gone = subprocess.Popen([PYTHON, "-c", "pass"])
+        gone.wait()
+        import socket
+        os.makedirs(self.workspace.board, exist_ok=True)
+        with open(os.path.join(self.workspace.board, ".hold"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"pid": gone.pid, "host": socket.gethostname(),
+                       "purpose": "crashed"}, fh)
+        from pcbqa import layout as layout_mod
+        with mock.patch.object(layout_mod.os, "link",
+                               side_effect=FileExistsError):
+            with self.assertRaisesRegex(LayoutError, "another writer"):
+                with self.workspace.hold("racer"):
+                    pass
+
+    def test_release_leaves_a_hold_that_is_no_longer_ours(self):
+        import socket
+        hold = self.workspace.hold("mine").__enter__()
+        foreign = {"pid": 1, "host": socket.gethostname(),
+                   "purpose": "replacement"}
+        with open(os.path.join(self.workspace.board, ".hold"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(foreign, fh)
+        hold.__exit__(None, None, None)
+        with open(os.path.join(self.workspace.board, ".hold"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), foreign)
+
 
 class AddressableFindings(unittest.TestCase):
     """A geometry finding names its item and its board-frame location."""
@@ -468,6 +585,22 @@ class GatesAsALibrary(unittest.TestCase):
                                 board_path=self.candidate)
         self.assertEqual([r.status for r in judged], [core.Status.FAIL])
 
+    def test_an_override_is_stamped_into_the_emitted_document(self):
+        # The override changes WHAT was judged; a document that hid it would
+        # claim the closure of copper the gates never read.
+        from pcbqa.core import sha256_file
+        ctx = Context(Manifest(self.manifest),
+                      os.path.join(self.work, "ctx"),
+                      board_path=self.candidate)
+        doc = core.to_json([], ctx)
+        marker = doc.get("board_override")
+        self.assertIsNotNone(marker)
+        self.assertEqual(marker["board_sha256"], sha256_file(self.candidate))
+        self.assertIn("diagnostic", marker["meaning"])
+        plain = core.to_json([], Context(Manifest(self.manifest),
+                                         os.path.join(self.work, "ctx2")))
+        self.assertNotIn("board_override", plain)
+
 
 class CheckBoardCommand(unittest.TestCase):
     """The sub-second integrity preflight, end to end."""
@@ -545,6 +678,9 @@ class CheckBoardCommand(unittest.TestCase):
         self.assertIn("STACK.PHYSICAL", recorded[1])
         self.assertIn("no physical stackup", recorded[1])
         self.assertNotIn("STACK.PHYSICAL", recorded[0])
+        # The stub carries no manifest identity, so the reasons are labelled
+        # as recorded against a different manifest rather than believed.
+        self.assertIn("different manifest", recorded[1])
 
     def test_a_stale_fabrication_record_names_the_input_that_moved(self):
         board_rel = "widget_b.kicad_pcb"
@@ -560,6 +696,25 @@ class CheckBoardCommand(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("different design", proc.stdout)
         self.assertIn(board_rel, proc.stdout)
+
+    def test_a_tampered_committed_artifact_is_a_finding(self):
+        # The closure cannot see an edited gerber - no source moved - so the
+        # recorded artifact digests are checked too.
+        with open(os.path.join(self.project, "shipped.txt"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("tampered bytes")
+        fab = {"source_closure_sha256": HEX64,
+               "artifacts": {"shipped.txt": HEX64, "gone.txt": HEX64}}
+        with open(os.path.join(self.project, "fab.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(fab, fh)
+        proc = self._run(self._manifest({
+            "artifacts": {"fabrication_manifest": "fab.json"},
+            "reports": {"files": [], "source_closure": ["*.kicad_pcb"]},
+        }))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("shipped.txt has changed", proc.stdout)
+        self.assertIn("gone.txt is absent", proc.stdout)
 
 
 if __name__ == "__main__":
