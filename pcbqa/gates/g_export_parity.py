@@ -137,7 +137,7 @@ def _classify(annulus, centre, openings, target, process, contact_tol, tie_tol):
 
 @gate("VIA.NATIVE_GERBER_AGREEMENT",
       "Every via agrees between the native board and the export",
-      requires=("via_mask.design_target_mm", "via_mask.process.limit_mm",
+      gate_class="release-artifact", requires=("via_mask.design_target_mm", "via_mask.process.limit_mm",
                 "artifacts.gerber_dir"))
 def via_export_parity(ctx, res):
     from .g_geometry import _via_survey
@@ -314,7 +314,7 @@ def _native_opening_polygon(ctx, label, side):
 
 @gate("STACK.GERBER_PARITY",
       "Shipped copper layers match a fresh export of the same board",
-      requires=("artifacts.gerber_dir", "artifacts.gerber_export_flags"))
+      gate_class="release-artifact", requires=("artifacts.gerber_dir", "artifacts.gerber_export_flags"))
 def stack_gerber_parity(ctx, res):
     shipped_dir = ctx.manifest.resolve(ctx.manifest.get("artifacts.gerber_dir"))
     if not os.path.isdir(shipped_dir):

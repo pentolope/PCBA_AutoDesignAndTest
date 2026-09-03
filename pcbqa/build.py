@@ -24,6 +24,32 @@ class BuildError(Exception):
     """The build cannot proceed, and nothing may be installed."""
 
 
+#: Declared capabilities whose application step only runs when another key is
+#: also declared. Declaring the first without the second used to be a silent
+#: skip - a reviewed orientation registry that the build never applied shipped
+#: a placement file with raw layout angles. A declared capability with no step
+#: to consume it is a build error, not housekeeping.
+COHERENCE = (
+    ("release_generation.cpl_orientation",
+     "release_generation.fab_format.cpl",
+     "the orientation registry is applied inside the fab_format cpl step; "
+     "without that step the reviewed offsets are never written"),
+    ("release_generation.cpl_orientation",
+     "release_generation.cpl_orientation.reproduction_inputs",
+     "an applied registry must name the frozen evidence that re-derives it, "
+     "or the offsets it ships cannot be checked"),
+)
+
+
+def incoherent(manifest):
+    """Declared-but-unconsumable capability pairs, per COHERENCE."""
+    problems = []
+    for declared, needed, why in COHERENCE:
+        if manifest.has(declared) and not manifest.has(needed):
+            problems.append((declared, needed, why))
+    return problems
+
+
 def canonical_argv(args):
     """argv with absolute paths reduced to basenames, so it is checkout-free."""
     return [os.path.basename(a) if os.sep in a else a for a in args]
@@ -342,6 +368,10 @@ class Build:
             doc["source_sha256"] = canonical.digest(
                 source, policy.classify(relative.replace("\\", "/")))
             doc["source_closure_sha256"] = self.closure_sha256
+            # The member map, not only its digest: when the closure moves,
+            # the freshness gate can then say which input moved instead of
+            # printing two hashes.
+            doc["source_closure"] = dict(sorted(self.closure_entries.items()))
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh, indent=2)
 
@@ -393,6 +423,7 @@ class Build:
             "generated_utc": utcnow(),
             "source_closure_sha256": self.closure_sha256,
             "source_closure_files": len(self.closure_entries),
+            "source_closure": dict(sorted(self.closure_entries.items())),
             "tools": {
                 "kicad": self.ctx.kicad_version(),
                 "kicad_cli": os.path.basename(self.ctx.kicad_cli),
@@ -463,6 +494,14 @@ class Build:
 
     # -- orchestration -----------------------------------------------------
     def run(self):
+        for declared, needed, why in incoherent(self.manifest):
+            self.blockers.append((
+                "build:coherence", "ERROR",
+                "{} is declared but {} is not: {}".format(
+                    declared, needed, why)))
+        if self.blockers:
+            raise BuildError(
+                "declared capabilities that no build step would apply")
         self.isolate()
         self.generate()
         self.name_for_fab()

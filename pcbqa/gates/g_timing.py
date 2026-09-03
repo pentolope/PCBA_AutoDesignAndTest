@@ -325,7 +325,7 @@ def _requested_fields(ctx, layers):
 
 @gate("TIMING.PATH_INTEGRITY",
       "Declared electrical paths exist, end to end, across every component",
-      requires=("timing.interfaces",), order=310)
+      gate_class="design", requires=("timing.interfaces",), order=310)
 def path_integrity(ctx, res):
     """Does the board contain the paths the timing policy describes?
 
@@ -470,7 +470,7 @@ def path_integrity(ctx, res):
 
 @gate("STACK.PHYSICAL",
       "The physical stackup supports the analysis this board asks for",
-      requires=("timing.physical_stackup",), order=305)
+      gate_class="design", requires=("timing.physical_stackup",), order=305)
 def physical_stackup(ctx, res):
     """Is enough known about the materials to do what this board asked for?
 
@@ -569,7 +569,7 @@ def physical_stackup(ctx, res):
 
 @gate("TIMING.INTERCONNECT_DELAY",
       "Passive PCB propagation delay of each declared path is within its limit",
-      requires=("timing.interfaces",), order=320)
+      gate_class="design", requires=("timing.interfaces",), order=320)
 def interconnect_delay(ctx, res):
     """Board copper only. Not device-aware, and the report says so.
 
@@ -709,7 +709,7 @@ def _delay_row(interface, delay):
 
 @gate("TIMING.INTERCONNECT_SKEW",
       "Passive PCB arrival spread within each declared endpoint group",
-      requires=("timing.interfaces",), order=330)
+      gate_class="design", requires=("timing.interfaces",), order=330)
 def interconnect_skew(ctx, res):
     """The spread of passive interconnect delay across a group of endpoints.
 
@@ -987,7 +987,7 @@ def _limit_for(ctx, res, interface, key, units):
 
 @gate("TIMING.SETUP_HOLD",
       "Device-aware setup and hold margin at each declared receiver",
-      requires=("timing.device_timing",), order=340)
+      gate_class="design", requires=("timing.device_timing",), order=340)
 def setup_hold(ctx, res):
     """Only answerable with device data, so only applicable with device data.
 
@@ -1036,7 +1036,7 @@ def setup_hold(ctx, res):
 
 @gate("PROV.TIMING_MODELS",
       "Every timing model file is present and inside the source closure",
-      requires=("timing.models",), order=350)
+      gate_class="design", requires=("timing.models",), order=350)
 def timing_models(ctx, res):
     """A timing PASS may not rest on a file whose bytes nothing tracks.
 

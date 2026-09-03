@@ -178,7 +178,7 @@ def _assembly_truth(ctx):
 # ---------------------------------------------------------------------------
 
 @gate("BOM.NATIVE_PARITY", "Packaged BOM matches the native schematic",
-      requires=("artifacts.bom", "assembly.bom_fields",
+      gate_class="release-artifact", requires=("artifacts.bom", "assembly.bom_fields",
                 "assembly.schematic_export"))
 def bom_parity(ctx, res):
     path = ctx.manifest.resolve(ctx.manifest.get("artifacts.bom"))
@@ -310,7 +310,7 @@ def bom_parity(ctx, res):
 # ---------------------------------------------------------------------------
 
 @gate("CPL.NATIVE_PARITY", "Packaged CPL matches the native design",
-      requires=("artifacts.cpl", "artifacts.cpl_fields",
+      gate_class="release-artifact", requires=("artifacts.cpl", "artifacts.cpl_fields",
                 "assembly.schematic_export"))
 def cpl_parity(ctx, res):
     path = ctx.manifest.resolve(ctx.manifest.get("artifacts.cpl"))

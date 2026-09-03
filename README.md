@@ -48,10 +48,16 @@ python3 run.py build <manifest.json>
 python3 run.py validate <manifest.json> --write
 ```
 ```bash
+python3 run.py check-board <manifest.json>
+```
+```bash
 python3 run.py release-check <manifest.json>
 ```
 ```bash
 python3 run.py gates
+```
+```bash
+python3 run.py gates --missing <manifest.json>
 ```
 ```bash
 python3 run.py fab refresh | select | impedance | export-stackup
@@ -65,6 +71,25 @@ merge evidence directories. The commit is the approval and Git is the history.
 
 `<manifest.json>` is a path. For this repository's own fixtures a bare name also
 works — `portability`, `clean`, or a negative fixture's directory name.
+
+`validate --only=` takes exact gate IDs, fnmatch patterns over them
+(`ROUTE.*`), or a gate class — `design`, `release-artifact`, `fixture` — and a
+partial run is always a diagnostic, never a verdict. The same selection is
+available in-process as `pcbqa.gates.evaluate(manifest, only=..., 
+board_path=...)`, where `board_path` substitutes a candidate board so a
+routing search can be judged by the gates that will judge the release.
+
+`check-board` is the sub-second integrity preflight: the tree's board is the
+accepted routing candidate, the committed artifacts match the design as it
+stands (naming which closure member moved when not), and no KiCad file the
+design does not reach sits beside it. `gates --missing` lists every gate a
+manifest has not enabled and the key that would enable it.
+
+A manifest is validated against `schemas/manifest.v2.json` before any command
+runs, and a key the toolkit does not implement is refused by name. Board-local
+data belongs under `x_`-prefixed keys, permitted at every level;
+`description`, `note`, `why` and `rationale` are annotation strings, also
+permitted at every level.
 
 ## The release workflow
 

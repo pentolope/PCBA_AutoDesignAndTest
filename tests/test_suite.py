@@ -598,6 +598,7 @@ class Mutations(unittest.TestCase):
             "board_id": manifest.board_id,
             "constraint_version": manifest.get("constraint_version"),
             "source_closure_sha256": "0" * 64,
+            "source_closure": {"<toolkit>": "0" * 64},
             "tools": {"kicad_cli": "kicad-cli"},
             "commands": ["kicad-cli pcb export gerbers"],
             "artifacts": {artifact_set.record_key(manifest, p):
@@ -606,9 +607,12 @@ class Mutations(unittest.TestCase):
         })
         arch = validate(path)[0]["ARCH.PROVENANCE"]
         self.assertEqual(arch["status"], Status.FAIL)
-        self.assertTrue(
-            any("generated from a different design" in f.get("issue", "")
-                for f in arch["findings"]), arch["findings"])
+        stale = [f for f in arch["findings"]
+                 if "generated from a different design" in f.get("issue", "")]
+        self.assertTrue(stale, arch["findings"])
+        # A record that carries its member map gets told which member moved.
+        self.assertIn("<toolkit>", stale[0].get("changed_inputs", []),
+                      stale[0])
 
     def test_drill_map_in_the_archive_is_detected(self):
         results, _ = validate(REVA)

@@ -1,0 +1,574 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "pcbqa board manifest, schema_version 2",
+  "description": "Every key this toolkit implements. Validation refuses a key that is not here: a declaration the toolkit would ignore is a declaration that silently does nothing. Board-local data lives under keys prefixed x_, permitted at every level; description, note, why and rationale are annotation strings, also permitted at every level. Both are stripped before this schema is applied.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "board_id"],
+  "properties": {
+    "schema_version": {"enum": [2]},
+    "board_id": {"type": "string"},
+    "constraint_version": {"type": "string"},
+    "project_root": {"type": "string"},
+    "board_origin_mm": {"$ref": "#/definitions/numbers"},
+    "tools": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"kicad_cli": {"type": "string"}}
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/definitions/relpath"}
+    },
+    "documentation_globs": {"$ref": "#/definitions/strings"},
+    "waivers": {"type": "array", "items": {"type": "object"}},
+    "advisory_gates": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["gate", "reason"],
+        "properties": {"gate": {"type": "string"},
+                       "reason": {"type": "string"}}
+      }
+    },
+    "geometry_profile": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "version": {"type": "string"},
+        "units": {"type": "string"},
+        "provenance": {"type": "string"},
+        "tolerances": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false,
+            "required": ["value"],
+            "properties": {"value": {"type": "number"},
+                           "units": {"type": "string"},
+                           "provenance": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "connector_gender_tokens": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/definitions/strings"}
+    },
+    "stackup": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "expected": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "properties": {"role": {"type": "string"},
+                           "plane_net": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "net_topology": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "net_regex", "source_pad_regex",
+                         "load_pad_regex"],
+            "properties": {
+              "id": {"type": "string"},
+              "net_regex": {"type": "string"},
+              "source_pad_regex": {"type": "string"},
+              "load_pad_regex": {"type": "string"},
+              "max_spread_mm": {"type": "number"},
+              "max_vias_per_net": {"type": "integer"},
+              "permitted_layers": {"$ref": "#/definitions/strings"}
+            }
+          }
+        }
+      }
+    },
+    "placement_rules": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "reference_regex"],
+        "properties": {
+          "id": {"type": "string"},
+          "reference_regex": {"type": "string"},
+          "count": {"type": "integer"},
+          "reference_offset_local_mm": {"$ref": "#/definitions/numbers"},
+          "polar": {
+            "type": "object", "additionalProperties": false,
+            "properties": {"radius_mm": {"type": "number"},
+                           "tolerance_mm": {"type": "number"},
+                           "angular_pitch_deg": {"type": "number"},
+                           "angle_tolerance_deg": {"type": "number"}}
+          },
+          "rotation": {
+            "type": "object", "additionalProperties": false,
+            "properties": {"mode": {"type": "string"},
+                           "offset_deg": {"type": "number"},
+                           "tolerance_deg": {"type": "number"}}
+          }
+        }
+      }
+    },
+    "connector_contracts": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "reference"],
+        "properties": {
+          "id": {"type": "string"},
+          "reference": {"type": "string"},
+          "required_positions": {"type": "integer"},
+          "required_rows": {"type": "integer"},
+          "required_pitch_mm": {"type": "number"},
+          "required_side": {"type": "string"},
+          "required_gender": {"type": "string"},
+          "population": {
+            "type": "object", "additionalProperties": false,
+            "properties": {"dnp": {"type": "boolean"},
+                           "exclude_from_bom": {"type": "boolean"}}
+          },
+          "pin_map": {
+            "type": "object",
+            "additionalProperties": {"type": ["string", "null"]}
+          },
+          "unconnected_net_prefix": {"type": "string"},
+          "documentation": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "must_claim": {"$ref": "#/definitions/doc_claims"},
+              "must_not_claim": {"$ref": "#/definitions/doc_claims"}
+            }
+          }
+        }
+      }
+    },
+    "routing": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "provenance": {"$ref": "#/definitions/relpath"},
+        "hygiene": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"forbid_dangling": {"type": "boolean"},
+                         "forbid_duplicate_geometry": {"type": "boolean"},
+                         "forbid_net_crossings": {"type": "boolean"}}
+        },
+        "min_segment_mm": {"type": "number"},
+        "permitted_turn_degrees": {"$ref": "#/definitions/numbers"},
+        "angle_tolerance_deg": {"type": "number"},
+        "short_segment_justification": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"allow_pad_or_via_entry": {"type": "boolean"}}
+        }
+      }
+    },
+    "timing": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "interfaces": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/definitions/timing_interface"}
+        },
+        "propagation": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "model": {"type": "string"},
+            "via_delay_model": {"type": ["string", "object"]},
+            "declared_layers": {},
+            "reference_discontinuity": {"type": ["array", "object"]}
+          }
+        },
+        "physical_stackup": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"reference_nets": {"$ref": "#/definitions/strings"},
+                         "require_complete": {"type": "boolean"},
+                         "supplement": {}}
+        },
+        "device_timing": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "receivers": {"type": "object",
+                          "additionalProperties": {"type": "object"}}
+          }
+        },
+        "models": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/definitions/relpath"}
+        }
+      }
+    },
+    "simulation": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "models": {"$ref": "#/definitions/relpath"},
+        "stages": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/definitions/strings"}
+        },
+        "required_stages": {"$ref": "#/definitions/strings"},
+        "extracted_models": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object", "additionalProperties": false,
+                "required": ["net", "from_pad", "to_pad"],
+                "properties": {"net": {"type": "string"},
+                               "from_pad": {"type": "string"},
+                               "to_pad": {"type": "string"}}
+              }
+            },
+            "physical_inputs": {"$ref": "#/definitions/relpath"}
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "erc": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"extra_flags": {"$ref": "#/definitions/strings"}}
+        },
+        "drc": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "extra_flags": {"$ref": "#/definitions/strings"},
+            "forbidden_severities": {"$ref": "#/definitions/strings"},
+            "permitted_ignored_rules": {"$ref": "#/definitions/strings"},
+            "constraint_floor": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "rules": {"type": "object",
+                          "additionalProperties": {"type": "number"}},
+                "net_classes": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "assembly": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "bom_fields": {"$ref": "#/definitions/strmap"},
+        "compared_part_fields": {"$ref": "#/definitions/strings"},
+        "required_part_fields": {"$ref": "#/definitions/strings"},
+        "schematic_fields": {"$ref": "#/definitions/strings"},
+        "schematic_export": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "fields": {"$ref": "#/definitions/strings"},
+            "labels": {"$ref": "#/definitions/strings"},
+            "flags": {"$ref": "#/definitions/strings"},
+            "reference_label": {"type": "string"},
+            "value_label": {"type": "string"},
+            "footprint_label": {"type": "string"},
+            "dnp_label": {"type": "string"},
+            "exclude_label": {"type": "string"},
+            "true_tokens": {"$ref": "#/definitions/strings"}
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "bom": {"$ref": "#/definitions/relpath"},
+        "cpl": {"$ref": "#/definitions/relpath"},
+        "gerber_dir": {"$ref": "#/definitions/relpath"},
+        "reports_dir": {"$ref": "#/definitions/relpath"},
+        "fabrication_manifest": {"$ref": "#/definitions/relpath"},
+        "validation_report": {"$ref": "#/definitions/relpath"},
+        "gerber_export_flags": {"$ref": "#/definitions/strings"},
+        "cpl_fields": {"$ref": "#/definitions/strmap"},
+        "cpl_origin": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"frame": {"type": "string"},
+                         "offset_mm": {"$ref": "#/definitions/numbers"}}
+        },
+        "position_tolerance_mm": {"type": "number"}
+      }
+    },
+    "release_generation": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "erc": {"$ref": "#/definitions/report_step"},
+        "drc": {"$ref": "#/definitions/report_step"},
+        "drill": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"flags": {"$ref": "#/definitions/strings"}}
+        },
+        "cpl": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "output": {"$ref": "#/definitions/relpath"},
+            "flags": {"$ref": "#/definitions/strings"},
+            "field_map": {"$ref": "#/definitions/strmap"},
+            "origin": {
+              "type": "object", "additionalProperties": false,
+              "properties": {"frame": {"type": "string"},
+                             "offset_mm": {"$ref": "#/definitions/numbers"}}
+            }
+          }
+        },
+        "bom": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "output": {"$ref": "#/definitions/relpath"},
+            "fields": {"$ref": "#/definitions/strings"},
+            "labels": {"$ref": "#/definitions/strings"},
+            "group_by": {"$ref": "#/definitions/strings"},
+            "flags": {"$ref": "#/definitions/strings"},
+            "field_map": {"$ref": "#/definitions/strmap"}
+          }
+        },
+        "archive": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"zip": {"$ref": "#/definitions/relpath"}}
+        },
+        "lock_file_globs": {"$ref": "#/definitions/strings"},
+        "fab_format": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"cpl": {"$ref": "#/definitions/fab_format"},
+                         "bom": {"$ref": "#/definitions/fab_format"}}
+        },
+        "cpl_orientation": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "angle_decimals": {"type": "integer"},
+            "normalize_range_deg": {"$ref": "#/definitions/numbers"},
+            "part_number_field": {"type": "string"},
+            "evidence": {
+              "type": "object", "additionalProperties": false,
+              "properties": {"fixtures": {"$ref": "#/definitions/relpath"}}
+            },
+            "registry": {
+              "type": "array",
+              "items": {"$ref": "#/definitions/orientation_entry"}
+            },
+            "reproduction_inputs": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "required_globs": {"$ref": "#/definitions/strings"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "release_profile": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"id": {"type": "string"},
+                     "mandatory_gates": {"$ref": "#/definitions/strings"},
+                     "required_evidence": {"$ref": "#/definitions/strings"}}
+    },
+    "reports": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "files": {"$ref": "#/definitions/strings"},
+        "source_closure": {"$ref": "#/definitions/strings"},
+        "source_closure_exclude": {"$ref": "#/definitions/strings"},
+        "required_steps": {"$ref": "#/definitions/strings"},
+        "source_field": {"type": "string"},
+        "date_field": {"type": "string"},
+        "source_hash_field": {"type": "string"},
+        "closure_field": {"type": "string"},
+        "require_source_hash": {"type": "boolean"},
+        "tolerance_seconds": {"type": "number"}
+      }
+    },
+    "archive": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "zip": {"$ref": "#/definitions/relpath"},
+        "allow": {"type": "array",
+                  "items": {"$ref": "#/definitions/archive_rule"}},
+        "deny": {"type": "array",
+                 "items": {"$ref": "#/definitions/archive_rule"}}
+      }
+    },
+    "via_mask": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "design_target_mm": {"type": "number"},
+        "metric": {"type": "string"},
+        "mask_dam_rule": {"type": "string"},
+        "contact_semantics": {"type": "string"},
+        "pad_contact": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "populated_pad_attributes": {"$ref": "#/definitions/strings"},
+            "require_paste": {"type": "boolean"}
+          }
+        },
+        "process": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"name": {"type": "string"},
+                         "rule": {"type": "string"},
+                         "url": {"type": "string"},
+                         "retrieved": {"type": "string"},
+                         "interpretation": {"type": "string"},
+                         "limit_mm": {"type": "number"}}
+        }
+      }
+    },
+    "fabrication_naming": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["ship_as"],
+            "properties": {"kicad_ext": {"type": "string"},
+                           "kicad_suffix": {"type": "string"},
+                           "kicad_layer": {"type": "string"},
+                           "ship_as": {"type": "string"},
+                           "role": {"type": "string"},
+                           "require_payload": {"type": "boolean"}}
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["glob"],
+            "properties": {"glob": {"type": "string"},
+                           "reason": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "fixture": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"hash_file": {"$ref": "#/definitions/relpath"},
+                     "attributes_file": {"$ref": "#/definitions/relpath"},
+                     "reject_globs": {"$ref": "#/definitions/strings"},
+                     "inventory_policy": {"type": "string"}}
+    },
+    "closure": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"attributes_file": {"$ref": "#/definitions/relpath"}}
+    }
+  },
+  "definitions": {
+    "relpath": {
+      "type": "string"
+    },
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "numbers": {"type": "array", "items": {"type": "number"}},
+    "strmap": {"type": "object", "additionalProperties": {"type": "string"}},
+    "doc_claims": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["label", "pattern"],
+        "properties": {"label": {"type": "string"},
+                       "pattern": {"type": "string"}}
+      }
+    },
+    "report_step": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"output": {"$ref": "#/definitions/relpath"}}
+    },
+    "fab_format": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["from", "label"],
+            "properties": {"from": {"type": "string"},
+                           "label": {"type": "string"},
+                           "values": {"$ref": "#/definitions/strmap"}}
+          }
+        },
+        "field_map": {"$ref": "#/definitions/strmap"},
+        "required_columns": {"$ref": "#/definitions/strings"}
+      }
+    },
+    "timing_interface": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "expected_path_count": {"type": "integer"},
+        "required_component_crossings": {},
+        "max_unreferenced_mm": {"type": "number"},
+        "limits": {"type": "object",
+                   "additionalProperties": {"type": "number"}},
+        "groups": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "max_length_spread_mm": {"type": "number"},
+              "max_skew_ps": {"type": "number"},
+              "paths": {"type": ["string", "array"]}
+            }
+          }
+        },
+        "routes": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "paths": {"type": "array",
+                      "items": {"$ref": "#/definitions/timing_path"}},
+            "template": {"$ref": "#/definitions/timing_path"},
+            "bindings": {"type": "array", "items": {"type": "object"}}
+          }
+        }
+      }
+    },
+    "timing_path": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "steps"],
+      "properties": {"id": {"type": "string"},
+                     "steps": {"type": "array", "items": {"type": "object"}}}
+    },
+    "orientation_entry": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "lcsc": {"type": "string"},
+        "mpn": {"type": "string"},
+        "package": {"type": "string"},
+        "kicad_footprint": {"type": "string"},
+        "offset_deg": {"type": "number"},
+        "review_status": {"type": "string"},
+        "review_basis": {"type": "string"},
+        "references": {"$ref": "#/definitions/strings"},
+        "evidence_file": {"$ref": "#/definitions/relpath"},
+        "evidence_sha256": {"type": "string"},
+        "raw_file": {"$ref": "#/definitions/relpath"},
+        "pairing": {"type": "string"},
+        "margin_over_runner_up_deg": {"type": "number"},
+        "worst_pad_disagreement_deg": {"type": "number"},
+        "best_offset_deg": {"type": "number"},
+        "best_worst_deg": {"type": "number"},
+        "margin_deg": {"type": "number"},
+        "decisive": {"type": "boolean"},
+        "evidence_problems": {}
+      }
+    },
+    "archive_rule": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"file_function": {"type": "string"},
+                     "file": {"type": "string"},
+                     "file_glob": {"type": "string"},
+                     "min_count": {"type": "integer"},
+                     "require_payload": {"type": "boolean"},
+                     "role": {"type": "string"},
+                     "reason": {"type": "string"}}
+    }
+  }
+}

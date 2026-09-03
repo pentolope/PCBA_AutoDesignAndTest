@@ -29,7 +29,7 @@ from ..closure import ATTRIBUTES_KEYS as _ATTRIBUTES_KEYS
 
 
 @gate("PROV.REPORT_FRESHNESS", "Committed reports match the current sources",
-      requires=("reports", "reports.source_closure",
+      gate_class="release-artifact", requires=("reports", "reports.source_closure",
                 _ATTRIBUTES_KEYS))
 def report_freshness(ctx, res):
     """A report is fresh only if the inputs it was made from still hash the same.
@@ -171,7 +171,7 @@ def report_freshness(ctx, res):
 
 @gate("PROV.SOURCE_CLOSURE",
       "Everything the result was derived from is inside the source closure",
-      requires=("reports.source_closure",
+      gate_class="release-artifact", requires=("reports.source_closure",
                 "release_generation.cpl_orientation.reproduction_inputs"))
 def source_closure_covers_derivations(ctx, res):
     """A derived result is only as reproducible as its inputs are tracked.
@@ -300,7 +300,7 @@ def source_closure_covers_derivations(ctx, res):
 
 @gate("ROUTE.PROVENANCE",
       "The routed board in the tree is the candidate that was accepted",
-      requires=("routing.provenance",))
+      gate_class="release-artifact", requires=("routing.provenance",))
 def routing_provenance(ctx, res):
     """Copper looks like copper: a board cannot show how it was produced.
 

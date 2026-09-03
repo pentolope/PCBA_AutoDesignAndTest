@@ -73,8 +73,13 @@ def implementation_identity():
             "the toolkit's own commit cannot be read ({}), so no result can "
             "be bound to the implementation that produced "
             "it".format(record.get("detail")))
+    if record.get("working_tree_dirty") is None:
+        raise ClosureError(
+            "git cannot say whether the toolkit tree is dirty ({}), and a "
+            "tree whose cleanliness is unknown must not be recorded as "
+            "clean".format(record.get("detail")))
     return {"<toolkit>": "{}+{}".format(
-        commit, "dirty" if record.get("working_tree_dirty") else "clean")}
+        commit, "dirty" if record["working_tree_dirty"] else "clean")}
 
 
 #: The one leaf that is location rather than content. Every other path in a

@@ -590,7 +590,7 @@
       "zip": "microphone_array_v2-revA-fabrication.zip"
     }
   },
-  "derived_from": {
+  "x_derived_from": {
     "repository": "https://github.com/pentolope/PCB_MicrophoneArrayV2",
     "commit": "9ba07cf720ed0bbb2023d121d544f0144bba7b2f",
     "manifest": "verification/boards/reva.json"

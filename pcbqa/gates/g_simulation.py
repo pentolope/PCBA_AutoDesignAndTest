@@ -167,7 +167,7 @@ def _asserted(run):
 
 
 @gate("SIM.SCENARIOS", "Declared circuit simulations run and their assertions hold",
-      requires=("simulation.stages",))
+      gate_class="design", requires=("simulation.stages",))
 def sim_scenarios(ctx, res):
     runs = _stages(ctx)
     executed, asserted, decided = 0, 0, 0
@@ -211,7 +211,7 @@ def sim_scenarios(ctx, res):
 
 @gate("SIM.STAGE_COVERAGE",
       "Every design stage the board requires simulation for is covered",
-      requires=("simulation.stages", "simulation.required_stages"))
+      gate_class="design", requires=("simulation.stages", "simulation.required_stages"))
 def sim_stage_coverage(ctx, res):
     runs = _stages(ctx)
     required = res.limit(ctx.manifest.constraint(
@@ -250,7 +250,7 @@ def sim_stage_coverage(ctx, res):
 
 @gate("SIM.MODEL_PROVENANCE",
       "Board-derived simulation models describe the board being validated",
-      requires=("simulation.models", "sources.pcb"))
+      gate_class="design", requires=("simulation.models", "sources.pcb"))
 def sim_model_provenance(ctx, res):
     registry = _registry(ctx)
     board_sha256 = sha256_file(ctx.board_path())

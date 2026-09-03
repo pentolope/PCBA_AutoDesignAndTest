@@ -15,6 +15,24 @@ from ..core import Status, gate, sha256_file
 from .. import geom, gerber
 
 
+def _board_frame(ctx):
+    """KiCad-frame mm -> the declared board frame (origin-relative, y up).
+
+    The one conversion every location-bearing finding uses, so a reader
+    resolves a finding without doing a frame transform in their head. It is
+    the same convention `PlacementRule` applies. The raw kicad-frame fields a
+    finding already carries are kept unchanged.
+    """
+    origin = ctx.manifest.get("board_origin_mm", None)
+
+    def convert(x_mm, y_mm):
+        if not origin:
+            return {}
+        return {"board_x_mm": round(x_mm - origin[0], 4),
+                "board_y_mm": round(-(y_mm - origin[1]), 4)}
+    return convert
+
+
 # ---------------------------------------------------------------------------
 # stackup
 # ---------------------------------------------------------------------------
@@ -45,7 +63,7 @@ def _native_stackup(ctx):
 
 
 @gate("STACK.NATIVE_VS_MANIFEST", "Board stackup matches the frozen constraints",
-      requires=("stackup.expected",))
+      gate_class="design", requires=("stackup.expected",))
 def stack_native(ctx, res):
     expected = res.limit(ctx.manifest.constraint(
         "stackup.expected", units="layer roles", cid="stackup.expected")).value
@@ -98,6 +116,7 @@ def _via_survey(ctx):
         rows = []
         for via in g.vias:
             row = {"net": via.net, "x_mm": round(via.x, 4), "y_mm": round(via.y, 4),
+                   "kiid": geom.item_id(via.via),
                    "annular_width_mm": round(via.annular_width, 4),
                    "drill_mm": round(via.drill_radius * 2, 4),
                    "pad_mm": round(via.pad_radius * 2, 4),
@@ -126,6 +145,7 @@ def _clearance_gate(ctx, res, limit_key, label):
         "via_mask.metric", units="field name", cid="via_mask.metric")).value
     limit = constraint.value
     _, rows = _via_survey(ctx)
+    frame = _board_frame(ctx)
     offenders = []
     for row in rows:
         worst = _worst(row, metric)
@@ -134,6 +154,7 @@ def _clearance_gate(ctx, res, limit_key, label):
                        key=lambda kv: kv[1].get(metric, 9e9))
             offenders.append({
                 "net": row["net"], "x_mm": row["x_mm"], "y_mm": row["y_mm"],
+                **frame(row["x_mm"], row["y_mm"]), "kiid": row["kiid"],
                 "side": side[0], "nearest_pad": side[1]["pad"],
                 metric: side[1][metric],
                 "drill_to_opening_mm": side[1]["drill_to_opening_mm"],
@@ -151,13 +172,13 @@ def _clearance_gate(ctx, res, limit_key, label):
 
 
 @gate("VIA.MASK_CLEARANCE_TARGET", "Via to mask opening meets the project target",
-      requires=("via_mask.design_target_mm", "via_mask.metric"))
+      gate_class="design", requires=("via_mask.design_target_mm", "via_mask.metric"))
 def via_target(ctx, res):
     return _clearance_gate(ctx, res, "via_mask.design_target_mm", "design_target_mm")
 
 
 @gate("VIA.MASK_CLEARANCE_PROCESS", "Via to mask opening meets the fab process limit",
-      requires=("via_mask.process.limit_mm", "via_mask.metric"))
+      gate_class="design", requires=("via_mask.process.limit_mm", "via_mask.metric"))
 def via_process(ctx, res):
     proc = ctx.manifest.get("via_mask.process")
     res.measurements["process"] = {
@@ -169,12 +190,13 @@ def via_process(ctx, res):
 
 
 @gate("VIA.ANNULUS_MASK_OVERLAP", "No via annulus intersects a mask opening",
-      requires=("via_mask",))
+      gate_class="design", requires=("via_mask",))
 def via_overlap(ctx, res):
     res.limit(ctx.manifest.geometry_profile().tolerance("contact_mm"))
     res.limit(ctx.manifest.geometry_profile()
               .tolerance("polygon_chord_error_mm"))
     _, rows = _via_survey(ctx)
+    frame = _board_frame(ctx)
     hits, strict = [], 0
     for row in rows:
         for side, rep in row["sides"].items():
@@ -183,6 +205,7 @@ def via_overlap(ctx, res):
             kind = "overlap" if rep["annulus_overlaps_opening"] else "tangency"
             strict += 1 if rep["annulus_overlaps_opening"] else 0
             hits.append({"net": row["net"], "x_mm": row["x_mm"], "y_mm": row["y_mm"],
+                         **frame(row["x_mm"], row["y_mm"]), "kiid": row["kiid"],
                          "side": side, "pad": rep["pad"], "pad_net": rep["pad_net"],
                          "contact": kind,
                          "centre_inside": rep["centre_inside_opening"],
@@ -201,7 +224,7 @@ def via_overlap(ctx, res):
 
 
 @gate("VIA.IN_PAD_CONTACT", "No via contacts a pad that receives solder",
-      requires=("via_mask.pad_contact",))
+      gate_class="design", requires=("via_mask.pad_contact",))
 def via_in_pad(ctx, res):
     spec = ctx.manifest.get("via_mask.pad_contact")
     res.limit(ctx.manifest.constraint(
@@ -210,6 +233,7 @@ def via_in_pad(ctx, res):
     res.limit(ctx.manifest.constraint(
         "via_mask.mask_dam_rule", units="policy", cid="via_mask.mask_dam_rule"))
     g, rows = _via_survey(ctx)
+    frame = _board_frame(ctx)
     paste = _paste_pads(ctx)
     populated = set(spec["populated_pad_attributes"])
     centre_in, partial = [], []
@@ -221,6 +245,7 @@ def via_in_pad(ctx, res):
                 else rep["is_smd"]
             kind = "populated" if solderable else "unpopulated"
             entry = {"net": row["net"], "x_mm": row["x_mm"], "y_mm": row["y_mm"],
+                     **frame(row["x_mm"], row["y_mm"]), "kiid": row["kiid"],
                      "side": side, "pad": rep["pad"], "pad_net": rep["pad_net"],
                      "pad_receives_paste": bool(solderable), "class": kind,
                      "contact": ("overlap" if rep["annulus_overlaps_opening"]
@@ -296,7 +321,7 @@ def _joins(segs):
 
 
 @gate("ROUTE.ANGLE_STYLE", "Routing obeys the permitted angle style",
-      requires=("routing.permitted_turn_degrees",))
+      gate_class="design", requires=("routing.permitted_turn_degrees",))
 def route_angles(ctx, res):
     permitted_constraint = res.limit(ctx.manifest.constraint(
         "routing.permitted_turn_degrees", units="deg",
@@ -306,6 +331,7 @@ def route_angles(ctx, res):
         "routing.angle_tolerance_deg", units="deg",
         cid="routing.angle_tolerance_deg"))
     board, segs, _ = _track_graph(ctx)
+    frame = _board_frame(ctx)
     off = []
     for (k, pt), grp in _joins(segs).items():
         if len(grp) != 2:
@@ -325,6 +351,8 @@ def route_angles(ctx, res):
             off.append({"net": grp[0].GetNetname(),
                         "layer": board.GetLayerName(grp[0].GetLayer()),
                         "x_mm": round(pt[0] / 1e6, 3), "y_mm": round(-pt[1] / 1e6, 3),
+                        **frame(pt[0] / 1e6, pt[1] / 1e6),
+                        "kiids": sorted(geom.item_id(t) for t in grp),
                         "turn_deg": round(turn, 2)})
     res.measurements["corners_examined"] = sum(
         1 for _k, g in _joins(segs).items() if len(g) == 2)
@@ -345,13 +373,14 @@ def route_angles(ctx, res):
 
 
 @gate("ROUTE.TINY_SEGMENTS", "No unjustified sub-minimum track fragments",
-      requires=("routing.min_segment_mm",))
+      gate_class="design", requires=("routing.min_segment_mm",))
 def route_tiny(ctx, res):
     constraint = res.limit(ctx.manifest.constraint(
         "routing.min_segment_mm", units="mm", cid="routing.min_segment_mm"))
     limit = constraint.value
     justify = ctx.manifest.get("routing.short_segment_justification", {})
     board, segs, vias = _track_graph(ctx)
+    frame = _board_frame(ctx)
     via_pts = {(v.GetPosition().x, v.GetPosition().y) for v in vias}
     pads = []
     for fp in board.Footprints():
@@ -381,6 +410,8 @@ def route_tiny(ctx, res):
                             "layer": board.GetLayerName(t.GetLayer()),
                             "x_mm": round(t.GetStart().x / 1e6, 3),
                             "y_mm": round(-t.GetStart().y / 1e6, 3),
+                            **frame(t.GetStart().x / 1e6, t.GetStart().y / 1e6),
+                            "kiid": geom.item_id(t),
                             "length_mm": round(length, 4)})
     res.measurements["segments_total"] = len(segs)
     res.measurements["below_limit_total"] = justified + len(unjustified)
@@ -395,10 +426,11 @@ def route_tiny(ctx, res):
 
 
 @gate("ROUTE.GEOMETRY_HYGIENE", "No duplicate, dangling or crossing copper",
-      requires=("routing.hygiene",))
+      gate_class="design", requires=("routing.hygiene",))
 def route_hygiene(ctx, res):
     spec = ctx.manifest.get("routing.hygiene")
     board, segs, vias = _track_graph(ctx)
+    frame = _board_frame(ctx)
     problems = []
 
     # duplicate / collinear-overlapping fragments
@@ -414,8 +446,12 @@ def route_hygiene(ctx, res):
                     if {a1, a2} == {c1, c2}:
                         problems.append({"issue": "duplicate segment",
                                          "net": a.GetNetname(),
+                                         "layer": board.GetLayerName(a.GetLayer()),
                                          "x_mm": round(a1[0] / 1e6, 3),
-                                         "y_mm": round(-a1[1] / 1e6, 3)})
+                                         "y_mm": round(-a1[1] / 1e6, 3),
+                                         **frame(a1[0] / 1e6, a1[1] / 1e6),
+                                         "kiids": sorted((geom.item_id(a),
+                                                          geom.item_id(c)))})
 
     # different-net crossings
     if spec.get("forbid_net_crossings", True):
@@ -439,7 +475,10 @@ def route_hygiene(ctx, res):
                                          "nets": f"{a.GetNetname()}/{c.GetNetname()}",
                                          "layer": board.GetLayerName(layer),
                                          "x_mm": round(a1[0] / 1e6, 3),
-                                         "y_mm": round(-a1[1] / 1e6, 3)})
+                                         "y_mm": round(-a1[1] / 1e6, 3),
+                                         **frame(a1[0] / 1e6, a1[1] / 1e6),
+                                         "kiids": sorted((geom.item_id(a),
+                                                          geom.item_id(c)))})
 
     # dangling ends
     if spec.get("forbid_dangling", True):
@@ -471,7 +510,9 @@ def route_hygiene(ctx, res):
                                  "net": other.GetNetname(),
                                  "layer": board.GetLayerName(layer),
                                  "x_mm": round(pt[0] / 1e6, 3),
-                                 "y_mm": round(-pt[1] / 1e6, 3)})
+                                 "y_mm": round(-pt[1] / 1e6, 3),
+                                 **frame(pt[0] / 1e6, pt[1] / 1e6),
+                                 "kiid": geom.item_id(other)})
 
     counts = Counter(p["issue"] for p in problems)
     res.measurements["issues"] = dict(counts)

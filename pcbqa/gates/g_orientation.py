@@ -138,7 +138,7 @@ def _rederive(ctx, spec):
 
 @gate("CPL.ORIENTATION",
       "Placement angles come from a reviewed, evidence-backed registry",
-      requires=("artifacts.cpl", "artifacts.cpl_fields",
+      gate_class="release-artifact", requires=("artifacts.cpl", "artifacts.cpl_fields",
                 "release_generation.cpl_orientation"))
 def cpl_orientation(ctx, res):
     spec = ctx.manifest.get("release_generation.cpl_orientation")

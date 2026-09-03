@@ -106,6 +106,93 @@ class Workspace:
         return sorted(d for d in os.listdir(self.board)
                       if os.path.isdir(os.path.join(self.board, d)))
 
+    def hold(self, purpose):
+        """An advisory exclusive hold on this board's workspace.
+
+        Two processes generating into one board's tree at the same time leave
+        it holding a mixture neither of them produced. Tree-writing commands
+        take this hold; a second holder is refused by name rather than
+        silently interleaved. A hold left by a dead process on this host is
+        broken and taken over; one held by a live process, or by another
+        host, stands.
+        """
+        return Hold(self, purpose)
+
+
+class Hold:
+    """Context manager for Workspace.hold. Advisory, single-file, atomic."""
+
+    def __init__(self, workspace, purpose):
+        self.workspace = workspace
+        self.purpose = purpose
+        self.path = os.path.join(workspace.board, ".hold")
+        self._fd = None
+
+    def _claim(self):
+        import json
+        import socket
+        os.makedirs(self.workspace.board, exist_ok=True)
+        record = {"pid": os.getpid(), "host": socket.gethostname(),
+                  "purpose": self.purpose, "created_utc": _stamp()}
+        fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        self._fd = True
+
+    def _holder(self):
+        import json
+        try:
+            with open(self.path, encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, ValueError):
+            return {}
+
+    def _stale(self, holder):
+        import socket
+        pid = holder.get("pid")
+        if not isinstance(pid, int):
+            # An unreadable hold cannot name a live owner; treat it as
+            # abandoned rather than wedging every future run behind it.
+            return True
+        if holder.get("host") != socket.gethostname():
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
+
+    def __enter__(self):
+        try:
+            self._claim()
+            return self
+        except FileExistsError:
+            holder = self._holder()
+            if self._stale(holder):
+                try:
+                    os.unlink(self.path)
+                except FileNotFoundError:
+                    pass
+                self._claim()          # a second racer gets FileExistsError
+                return self
+            raise LayoutError(
+                "the workspace for this board is held by pid {} on {} "
+                "({!r} since {}); a second writer would interleave with it - "
+                "remove {} only if that process is truly gone".format(
+                    holder.get("pid"), holder.get("host"),
+                    holder.get("purpose"), holder.get("created_utc"),
+                    self.path))
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._fd:
+            try:
+                os.unlink(self.path)
+            except FileNotFoundError:
+                pass
+        return False
+
 
 class Run:
     """One invocation's private directory, and the only thing it may delete."""

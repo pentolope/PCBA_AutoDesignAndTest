@@ -84,10 +84,22 @@ def configure(polygon_chord_error_mm):
 def polygon_error_iu():
     if _POLYGON_ERROR_IU is None:
         raise UnsupportedGeometry(
-            "no polygon chord error has been configured; the geometry profile "
-            "must declare `polygon_chord_error_mm` before any shape is "
-            "approximated")
+            "no polygon chord error has been configured; call "
+            "geom.configure() with the manifest's "
+            "`geometry_profile.tolerances.polygon_chord_error_mm.value` "
+            "before any shape is approximated - the gates do this via "
+            "manifest.geometry_profile().tolerance('polygon_chord_error_mm')")
     return _POLYGON_ERROR_IU
+
+
+def item_id(item):
+    """The KIID string of a board item - the only stable identity.
+
+    `str(item.m_Uuid)` is the SWIG proxy's repr: an address, reused as objects
+    are freed, so two live items can print the same string. Every identity
+    comparison goes through `AsString()`.
+    """
+    return item.m_Uuid.AsString()
 
 
 def _effective_polygon(item, layer, error_iu=None):

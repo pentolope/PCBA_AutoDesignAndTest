@@ -141,8 +141,11 @@ class ABuildInstallsIntoTheTree(_Base):
         with open(os.path.join(project, RELEASE, "fabrication.json"),
                   encoding="utf-8") as fh:
             record = json.load(fh)
-        _entries, now = closure.current(core.load_manifest(path))
+        entries, now = closure.current(core.load_manifest(path))
         self.assertEqual(record["source_closure_sha256"], now)
+        # The member map travels with the record, so a later mismatch can
+        # name which input moved instead of printing two digests.
+        self.assertEqual(record["source_closure"], entries)
 
     def test_the_record_names_no_machine_and_no_checkout(self):
         """Two developers building one design must record the same provenance."""

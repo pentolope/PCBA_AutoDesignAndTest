@@ -28,7 +28,7 @@ SCHEMA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 SUPPORTED_KEYWORDS = {
     "$schema", "$id", "$ref", "title", "description", "default", "format",
     "type", "properties", "required", "additionalProperties", "enum", "items",
-    "pattern", "definitions",
+    "pattern", "definitions", "patternProperties",
 }
 
 _TYPES = {
@@ -90,6 +90,17 @@ def _strip_trailing_commas(text):
 _CACHE = {}
 
 
+def load_at(path):
+    """Load one of this repository's own schemas by path. Strict JSON."""
+    if path in _CACHE:
+        return _CACHE[path]
+    with open(path, encoding="utf-8") as fh:
+        doc = loads(fh.read())
+    _check_supported(doc, doc, "#")
+    _CACHE[path] = doc
+    return doc
+
+
 def load_schema(name):
     """Load a vendored schema by kind: 'drc' or 'erc'."""
     if name in _CACHE:
@@ -121,15 +132,14 @@ def load_schema(name):
 def _check_supported(node, root, where):
     """Refuse to run against a schema using keywords we do not implement."""
     if isinstance(node, dict):
-        if where != "#" or "definitions" not in node:
-            unknown = [k for k in node
-                       if k not in SUPPORTED_KEYWORDS
-                       and not k.startswith("__")]
-            if unknown and where.startswith("#/definitions"):
-                raise SchemaError(
-                    f"{where} uses unimplemented schema keyword(s) {unknown}")
+        unknown = [k for k in node
+                   if k not in SUPPORTED_KEYWORDS
+                   and not k.startswith("__")]
+        if unknown:
+            raise SchemaError(
+                f"{where} uses unimplemented schema keyword(s) {unknown}")
         for key, value in node.items():
-            if key in ("properties", "definitions"):
+            if key in ("properties", "definitions", "patternProperties"):
                 for sub, subschema in value.items():
                     _check_supported(subschema, root, f"{where}/{key}/{sub}")
             elif key == "items":
@@ -177,8 +187,18 @@ def validate(document, schema, root=None, where="$"):
             if key not in document:
                 raise ValidationError(f"{where}: missing required field {key!r}")
         properties = schema.get("properties", {})
-        if schema.get("additionalProperties", True) is False:
-            extra = sorted(set(document) - set(properties))
+        patterns = schema.get("patternProperties", {})
+        additional = schema.get("additionalProperties", True)
+
+        def pattern_for(key):
+            for pat in patterns:
+                if re.search(pat, key):
+                    return pat
+            return None
+
+        if additional is False:
+            extra = sorted(k for k in document
+                           if k not in properties and pattern_for(k) is None)
             if extra:
                 raise ValidationError(
                     f"{where}: field(s) {extra} are not permitted here; the "
@@ -186,6 +206,12 @@ def validate(document, schema, root=None, where="$"):
         for key, value in document.items():
             if key in properties:
                 validate(value, properties[key], root, f"{where}.{key}")
+                continue
+            pattern = pattern_for(key)
+            if pattern is not None:
+                validate(value, patterns[pattern], root, f"{where}.{key}")
+            elif isinstance(additional, dict):
+                validate(value, additional, root, f"{where}.{key}")
 
     if isinstance(document, list) and "items" in schema:
         for index, value in enumerate(document):
@@ -222,6 +248,8 @@ def _name(value):
 
 
 def _is_type(value, expected):
+    if isinstance(expected, list):
+        return any(_is_type(value, entry) for entry in expected)
     if expected == "number":
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     if expected == "integer":

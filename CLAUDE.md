@@ -267,5 +267,16 @@ python3 run.py validate <manifest> --write
 ```
 
 ```bash
+python3 run.py check-board <manifest>
+```
+
+```bash
 python3 run.py release-check <manifest>
 ```
+
+The manifest is checked against `schemas/manifest.v2.json` before any command
+runs: a key the toolkit does not implement is refused by name. Board-local
+data lives under `x_`-prefixed keys; `description`, `note`, `why` and
+`rationale` are annotation strings, allowed at every level. Keep the schema
+exactly as wide as what `pcbqa/` reads — a key added to one must be added to
+the other in the same change.

@@ -213,11 +213,17 @@ class ConnectorContractRule:
         if "required_positions" in self.spec and facts["positions"] != self.spec["required_positions"]:
             problems.append({"issue": "position count mismatch", "reference": ref,
                              "expected": self.spec["required_positions"],
-                             "measured": facts["positions"]})
+                             "measured": facts["positions"],
+                             "counted": "distinct pad numbers on the footprint; "
+                                        "lands sharing a number count once and "
+                                        "unnumbered mechanical pads are not "
+                                        "counted"})
         if "required_rows" in self.spec and facts.get("rows") != self.spec["required_rows"]:
             problems.append({"issue": "row count mismatch", "reference": ref,
                              "expected": self.spec["required_rows"],
-                             "measured": facts.get("rows")})
+                             "measured": facts.get("rows"),
+                             "counted": "min(distinct pad-centre x, distinct "
+                                        "pad-centre y) over one pad per number"})
         if "required_pitch_mm" in self.spec and facts.get("pitch_mm") is not None:
             if abs(facts["pitch_mm"] - self.spec["required_pitch_mm"]) > 0.02:
                 problems.append({"issue": "pitch mismatch", "reference": ref,

@@ -366,6 +366,15 @@ class Manifest:
                 f"{self.path}: board_id {board_id!r} is not a usable board "
                 f"identity; it must be a single conservative slug, because it "
                 f"names a directory this tool creates and removes")
+        # Every declared key must be one this toolkit implements: a key the
+        # toolkit would ignore is a declaration that silently does nothing,
+        # and a misspelled block is four gate failures instead of one named
+        # refusal. Board-local data goes under x_-prefixed keys.
+        from . import manifest_schema
+        try:
+            manifest_schema.check(self.data, self.path)
+        except manifest_schema.ManifestSchemaError as exc:
+            raise ManifestError(str(exc)) from exc
         self.board_id = board_id
         self.root = os.path.dirname(self.path)
         self.accesses = []       # [(key, value)] for the parity gate
@@ -439,22 +448,70 @@ def load_manifest(path):
 
 _REGISTRY = []
 
+#: What a gate judges, and therefore when running it is meaningful.
+#:
+#:   design           the design sources and the native board; answerable
+#:                    mid-search about a candidate
+#:   release-artifact committed or generated release artifacts and the records
+#:                    binding them to the design
+#:   fixture          the toolkit's own frozen test material
+GATE_CLASSES = ("design", "release-artifact", "fixture")
 
-def gate(gate_id, title, requires=(), order=100):
+
+def gate(gate_id, title, gate_class, requires=(), order=100):
     """Register a gate.
+
+    `gate_class` is one of GATE_CLASSES and is mandatory: selection by class
+    replaces board-maintained gate lists, so an unclassified gate would be a
+    gate no class-driven run could reach deliberately.
 
     `requires` lists manifest keys the gate needs; when any is absent the gate
     reports NOT_APPLICABLE with the reason instead of silently passing. An
     entry may itself be a tuple, meaning any one of those keys satisfies it -
     which is how a key can be renamed without breaking a pinned consumer.
     """
+    if gate_class not in GATE_CLASSES:
+        raise ValueError(
+            "gate {} declares class {!r}; a gate is one of {}".format(
+                gate_id, gate_class, GATE_CLASSES))
+
     def wrap(fn):
         _REGISTRY.append({
             "id": gate_id, "title": title, "requires": tuple(requires),
-            "fn": fn, "order": order,
+            "fn": fn, "order": order, "class": gate_class,
         })
         return fn
     return wrap
+
+
+def select_gates(tokens):
+    """Expand gate-selection tokens into registered gate IDs.
+
+    A token is an exact gate ID, an fnmatch pattern over gate IDs (`ROUTE.*`),
+    or a gate class from GATE_CLASSES (`design`). Returns (ids, unknown):
+    `ids` in registry order without duplicates, `unknown` the tokens that
+    selected nothing - a selector that names nothing is an error for the
+    caller to refuse, never a silently empty run.
+    """
+    import fnmatch
+
+    entries = registered()
+    ids = [entry["id"] for entry in entries]
+    chosen, unknown = [], []
+    for token in tokens:
+        if token in GATE_CLASSES:
+            hits = [e["id"] for e in entries if e["class"] == token]
+        elif any(ch in token for ch in "*?["):
+            hits = [i for i in ids if fnmatch.fnmatch(i, token)]
+        elif token in ids:
+            hits = [token]
+        else:
+            hits = []
+        if not hits:
+            unknown.append(token)
+            continue
+        chosen.extend(h for h in hits if h not in chosen)
+    return [i for i in ids if i in chosen], sorted(unknown)
 
 
 def _satisfied(manifest, requirement):
@@ -525,9 +582,16 @@ def advisory_reason(manifest, gate_id):
 class Context:
     """Everything a gate may look at. Created once per validation run."""
 
-    def __init__(self, manifest, workdir, kicad_cli=None):
+    def __init__(self, manifest, workdir, kicad_cli=None, board_path=None):
         self.manifest = manifest
         self.workdir = workdir
+        # A candidate board judged in place of the declared one - the library
+        # entry point for a search that must ask the release's own gates about
+        # copper it has not promoted yet. Only what reads the board follows it;
+        # the source closure keeps describing the authoritative design, which
+        # is why a run with an override is a diagnostic and never a verdict.
+        self._board_override = (os.path.abspath(board_path)
+                                if board_path else None)
         os.makedirs(workdir, exist_ok=True)
         # Resolved here, once, so every gate shells out to the same absolute
         # binary and the run's provenance records which one it was - a bare
@@ -546,6 +610,8 @@ class Context:
         return self._cache[key]
 
     def board_path(self):
+        if self._board_override:
+            return self._board_override
         return self.manifest.resolve(self.manifest.get("sources.pcb"))
 
     def schematic_path(self):
@@ -571,8 +637,16 @@ class Context:
         by every gate that shells out.
         """
         def build():
+            import shutil
             destination = os.path.join(self.workdir, "design")
             stage_design(self.manifest, destination)
+            if self._board_override:
+                # The candidate takes the declared board's place in the staged
+                # design, so a tool judges it with the project's own rules and
+                # library tables rather than KiCad's defaults.
+                shutil.copy2(self._board_override,
+                             os.path.join(destination,
+                                          self.manifest.get("sources.pcb")))
             return destination
         return self.cache("staged_design", build)
 
@@ -645,6 +719,11 @@ def toolkit_identity():
         if status.returncode == 0:
             record["working_tree_dirty"] = bool(
                 status.stdout.strip())
+        else:
+            # `working_tree_dirty` stays None: git being unable to answer is
+            # a refusal, and rendering it as clean would fabricate an identity.
+            record["detail"] = ("unrecorded: git status failed: "
+                                + status.stderr.strip())
     except Exception as error:                         # noqa: BLE001
         record["detail"] = "unrecorded: {}".format(error)
     return record

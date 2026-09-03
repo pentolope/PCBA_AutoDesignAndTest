@@ -5,9 +5,17 @@
     python run.py selftest [--jobs auto|N]  run the validator's own test suite
     python run.py build <manifest>          generate the fabrication outputs
     python run.py validate <manifest> [-w]  validate; nonzero if rejected
-                       [--only=A,B]         run only these gates (diagnostic)
+                       [--only=A,B]         run a selection of gates
+                                            (diagnostic): exact IDs, patterns
+                                            like ROUTE.*, or a class - design,
+                                            release-artifact, fixture
+    python run.py check-board <manifest>    sub-second integrity preflight:
+                                            accepted routing, artifact
+                                            freshness, foreign KiCad files
     python run.py release-check <manifest>  is this commit taggable as a release?
-    python run.py gates                     list gate IDs
+    python run.py gates                     list gate IDs and classes
+                 [--missing <manifest>]     which gates the manifest has not
+                                            enabled, and the enabling keys
     python run.py fab <cmd>                 JLCPCB knowledge: refresh, select,
                                             impedance, export-stackup. Only
                                             `fab refresh` may touch the
@@ -88,10 +96,8 @@ def _output_base(manifest=None):
 
 
 def _load_gates():
-    from pcbqa.gates import (g_provenance, g_checks, g_geometry,   # noqa: F401
-                             g_contracts, g_assembly, g_export_parity,
-                             g_fabrication, g_orientation, g_timing,
-                             g_simulation)
+    from pcbqa import gates
+    gates.load()
 
 
 def open_board(manifest_path):
@@ -113,9 +119,9 @@ def _refuse(exc):
     return 1
 
 
-def _emit(ctx, results, tag, directory=None):
+def _emit(ctx, results, tag, directory=None, extra=None):
     from pcbqa import core
-    doc = core.to_json(results, ctx)
+    doc = core.to_json(results, ctx, extra=extra)
     directory = directory or ctx.workdir
     jpath = os.path.join(directory, tag + ".json")
     mpath = os.path.join(directory, tag + ".md")
@@ -133,22 +139,38 @@ def cmd_validate(manifest_path, write=False, quiet=False, only=None):
     touches the working tree. `--write` records the verdict at the path the
     manifest declares, which is the report a release commit carries.
 
-    `only` restricts the run to named gates. That exists for one reason: a
-    search - routing candidates, placement candidates - has to judge the
-    DESIGN, and the release-artifact gates cannot be satisfied mid-search
-    because the artifacts are generated from the design the search has not
-    finished choosing. A partial run is a diagnostic, never a verdict: it
-    refuses `--write`, and the document it produces is marked partial so
-    nothing downstream can mistake it for a validation.
+    `only` restricts the run to a selection of gates - exact IDs, fnmatch
+    patterns over IDs (`ROUTE.*`), or a gate class (`design`,
+    `release-artifact`, `fixture`). That exists for one reason: a search -
+    routing candidates, placement candidates - has to judge the DESIGN, and
+    the release-artifact gates cannot be satisfied mid-search because the
+    artifacts are generated from the design the search has not finished
+    choosing. A partial run is a diagnostic, never a verdict: it refuses
+    `--write`, and the document it produces is marked partial so nothing
+    downstream can mistake it for a validation.
     """
-    from pcbqa import artifacts, core
-    from pcbqa.core import Context, ManifestError
+    from pcbqa.core import ManifestError
     from pcbqa.layout import LayoutError
 
     try:
         manifest, workspace = open_board(manifest_path)
     except (ManifestError, LayoutError) as exc:
         return _refuse(exc), None, None
+
+    if not write:
+        return _validate(manifest, workspace, write, quiet, only)
+    # A verdict that will be recorded in the tree is about a tree nothing
+    # else is rewriting while it is read.
+    try:
+        with workspace.hold("validate --write"):
+            return _validate(manifest, workspace, write, quiet, only)
+    except LayoutError as exc:
+        return _refuse(exc), None, None
+
+
+def _validate(manifest, workspace, write, quiet, only):
+    from pcbqa import artifacts, core
+    from pcbqa.core import Context
 
     _load_gates()
     run = workspace.new_run()
@@ -159,10 +181,16 @@ def cmd_validate(manifest_path, write=False, quiet=False, only=None):
         ctx.tool_versions["kicad"] = "UNAVAILABLE: {}".format(exc)
 
     if only is not None:
-        known = {entry["id"] for entry in core.registered()}
-        unknown = sorted(set(only) - known)
+        selection = list(only)
+        only, unknown = core.select_gates(selection)
         if unknown:
-            print("REFUSED: no such gate(s): {}".format(unknown))
+            print("REFUSED: no such gate, pattern or class: {} "
+                  "(run.py gates lists gates and their classes)"
+                  .format(unknown))
+            run.discard()
+            return 2, None, ctx
+        if not only:
+            print("REFUSED: the selection names no gate at all")
             run.discard()
             return 2, None, ctx
         if write:
@@ -173,12 +201,16 @@ def cmd_validate(manifest_path, write=False, quiet=False, only=None):
 
     try:
         results = core.run_all(ctx, only=only)
-        doc, jpath, mpath = _emit(ctx, results, "validation", run.path)
+        partial = None
         if only is not None:
-            doc["partial"] = {"only": sorted(only),
-                              "meaning": "a subset of the registered gates "
-                                         "was run; this document is not a "
-                                         "validation of the board"}
+            # Marked before the document is written, so the file on disk -
+            # the thing downstream actually reads - carries the marker too.
+            partial = {"partial": {
+                "only": sorted(only),
+                "meaning": "a subset of the registered gates was run; this "
+                           "document is not a validation of the board"}}
+        doc, jpath, mpath = _emit(ctx, results, "validation", run.path,
+                                  extra=partial)
     except BaseException:
         # This run produced nothing usable; it owns its directory and takes it
         # with it.
@@ -217,8 +249,7 @@ def cmd_build(manifest_path):
     until every generation step has succeeded: a build that could not produce a
     complete set installs none of it and leaves the previous outputs alone.
     """
-    from pcbqa import build as build_mod
-    from pcbqa.core import Context, ManifestError
+    from pcbqa.core import ManifestError
     from pcbqa.layout import LayoutError
 
     try:
@@ -234,6 +265,17 @@ def cmd_build(manifest_path):
               "artifacts.fabrication_manifest, so a build could not record "
               "what it produced")
         return 2
+
+    try:
+        with workspace.hold("build"):
+            return _build(manifest, workspace)
+    except LayoutError as exc:
+        return _refuse(exc)
+
+
+def _build(manifest, workspace):
+    from pcbqa import build as build_mod
+    from pcbqa.core import Context
 
     run = workspace.new_run()
     builder = build_mod.Build(Context(manifest, run.work), run.build)
@@ -468,15 +510,173 @@ def cmd_preflight(argv):
     return 0 if ok else 1
 
 
-def cmd_gates():
+def cmd_gates(argv):
     from pcbqa import core
+    from pcbqa.core import ManifestError, _missing_label, _satisfied
+    from pcbqa.layout import LayoutError
     _load_gates()
+
+    args = argv[2:]
+    if args and args[0] == "--missing":
+        # Which gates a manifest has NOT enabled, and the key that would
+        # enable each: the opt-in surface as a query instead of archaeology.
+        if len(args) != 2:
+            print("usage: run.py gates --missing <manifest.json>")
+            return 2
+        try:
+            manifest, _workspace = open_board(_find_manifest(args[1]))
+        except (ManifestError, LayoutError) as exc:
+            return _refuse(exc)
+        dark = 0
+        for entry in core.registered():
+            missing = [_missing_label(k) for k in entry["requires"]
+                       if not _satisfied(manifest, k)]
+            if not missing:
+                continue
+            dark += 1
+            print("{:32s} [{}] {}".format(entry["id"], entry["class"],
+                                          entry["title"]))
+            print("{:32s} declare: {}".format("", ", ".join(missing)))
+        total = len(core.registered())
+        print("\n{} of {} gates not enabled by this manifest; key shapes are "
+              "in schemas/manifest.v2.json".format(dark, total))
+        return 0
+    if args:
+        print("usage: run.py gates [--missing <manifest.json>]")
+        return 2
+
     for entry in core.registered():
         req = ", ".join(
             " OR ".join(key) if isinstance(key, tuple) else key
             for key in entry["requires"]) or "-"
-        print("{:32s} {}".format(entry["id"], entry["title"]))
+        print("{:32s} [{}] {}".format(entry["id"], entry["class"],
+                                      entry["title"]))
         print("{:32s} requires: {}".format("", req))
+    return 0
+
+
+def cmd_check_board(manifest_path):
+    """Sub-second board-integrity preflight; no DRC, extraction or simulation.
+
+    Answers three questions a long autonomous run should ask after anything
+    external touched the tree, and a pre-commit hook can afford to ask every
+    time: is the board in the tree the routing candidate that was accepted;
+    were the committed fabrication artifacts generated from the design as it
+    stands now (naming which input moved when not); and does any KiCad file
+    the design does not reach - another project's artifact, an autosave - sit
+    beside the design. Read-only; exits nonzero on any finding.
+    """
+    from pcbqa import closure as closure_mod
+    from pcbqa import routing_record
+    from pcbqa.core import (DESIGN_SUFFIXES, ManifestError, design_inputs,
+                            sha256_file)
+    from pcbqa.layout import LayoutError
+
+    try:
+        manifest, _workspace = open_board(manifest_path)
+    except (ManifestError, LayoutError) as exc:
+        return _refuse(exc)
+
+    problems = []
+    checked = []
+
+    def report(area, issue):
+        problems.append((area, issue))
+
+    board = manifest.resolve(manifest.get("sources.pcb"))
+    if not os.path.isfile(board):
+        report("sources", "declared board does not exist: " + board)
+
+    if manifest.has("routing.provenance") and os.path.isfile(board):
+        checked.append("routing record")
+        relative = manifest.get("routing.provenance")
+        path = manifest.resolve(relative)
+        if not os.path.isfile(path):
+            report("routing", "routing record {} is declared but "
+                              "absent".format(relative))
+        else:
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    record = json.load(fh)
+                for problem in routing_record.compare_to_board(
+                        record, sha256_file(board)):
+                    report("routing", problem["issue"])
+            except (ValueError, routing_record.RoutingRecordError) as exc:
+                report("routing", "routing record {}: {}".format(relative, exc))
+
+    if manifest.has("artifacts.fabrication_manifest"):
+        checked.append("artifact freshness")
+        path = manifest.resolve(manifest.get("artifacts.fabrication_manifest"))
+        if not os.path.isfile(path):
+            report("fabrication", "no fabrication record at {}; the committed "
+                                  "artifacts are unaccounted for".format(path))
+        else:
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    record = json.load(fh)
+                entries, now = closure_mod.current(manifest)
+                was = record.get("source_closure_sha256")
+                if was != now:
+                    detail = ("committed artifacts were generated from a "
+                              "different design ({} vs {})".format(
+                                  str(was)[:16], now[:16]))
+                    bound = record.get("source_closure")
+                    if isinstance(bound, dict):
+                        changed = sorted(k for k in set(bound) & set(entries)
+                                         if bound[k] != entries[k])
+                        added = sorted(set(entries) - set(bound))
+                        removed = sorted(set(bound) - set(entries))
+                        for label, names in (("changed", changed),
+                                             ("added", added),
+                                             ("removed", removed)):
+                            if names:
+                                detail += "; {}: {}".format(
+                                    label, ", ".join(names[:6]))
+                                if len(names) > 6:
+                                    detail += " (+{})".format(len(names) - 6)
+                    report("fabrication", detail)
+            except ValueError as exc:
+                report("fabrication", "fabrication record is not readable "
+                                      "JSON: {}".format(exc))
+            except Exception as exc:                           # noqa: BLE001
+                report("fabrication", "{}: {}".format(
+                    type(exc).__name__, exc))
+
+    # KiCad files the design cannot reach, sitting where the design lives:
+    # another project's artifact appearing here is how one session's work
+    # silently became another board's input.
+    root = os.path.realpath(manifest.resolve("."))
+    try:
+        known = set(design_inputs(manifest))
+    except ManifestError as exc:
+        known = set()
+        report("sources", str(exc))
+    directories = {os.path.dirname(os.path.join(root, rel)) for rel in known}
+    for directory in sorted(directories):
+        for name in sorted(os.listdir(directory)
+                           if os.path.isdir(directory) else []):
+            full = os.path.join(directory, name)
+            rel = os.path.relpath(full, root).replace("\\", "/")
+            if os.path.isfile(full) and name.endswith(DESIGN_SUFFIXES) \
+                    and rel not in known:
+                report("foreign", "{} is a KiCad file the design does not "
+                                  "reach - another project's artifact, or an "
+                                  "autosave".format(rel))
+
+    checked.append("foreign design files")
+    for area, issue in problems:
+        print("  {:12s} {}".format(area + ":", issue))
+    if problems:
+        print("\nBOARD CHECK FAILED: {} finding(s)".format(len(problems)))
+        return 1
+    skipped = [label for label, key in (
+        ("routing record", "routing.provenance"),
+        ("artifact freshness", "artifacts.fabrication_manifest"),
+    ) if not manifest.has(key)]
+    print("BOARD CHECK OK: checked {}{}".format(
+        ", ".join(checked),
+        "; not declared, so not checkable: " + ", ".join(skipped)
+        if skipped else ""))
     return 0
 
 
@@ -605,7 +805,13 @@ def main(argv):
     if cmd == "selftest":
         return cmd_selftest(argv)
     if cmd == "gates":
-        return cmd_gates()
+        return cmd_gates(argv)
+    if cmd == "check-board":
+        rest = argv[2:]
+        if len(rest) != 1:
+            print("usage: run.py check-board <manifest.json>")
+            return 2
+        return cmd_check_board(_find_manifest(rest[0]))
     if cmd == "extract":
         return cmd_extract(argv)
     if cmd == "fab":

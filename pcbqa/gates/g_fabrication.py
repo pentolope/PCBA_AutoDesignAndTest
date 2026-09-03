@@ -42,7 +42,7 @@ REGION = re.compile(r"%?G3[67]\*", re.M)
 
 @gate("FAB.LAYER_IDENTITY",
       "Every copper layer identifiable from filenames, without X2 metadata",
-      requires=("archive.zip", "fabrication_naming"))
+      gate_class="release-artifact", requires=("archive.zip", "fabrication_naming"))
 def layer_identity(ctx, res):
     spec = ctx.manifest.get("fabrication_naming")
     zpath = ctx.manifest.resolve(ctx.manifest.get("archive.zip"))

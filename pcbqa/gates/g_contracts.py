@@ -34,7 +34,7 @@ def _docs(ctx, patterns):
 # ---------------------------------------------------------------------------
 
 @gate("NET.TOPOLOGY", "Critical-net topology and length matching",
-      requires=("net_topology.rules",))
+      gate_class="design", requires=("net_topology.rules",))
 def net_topology(ctx, res):
     board = ctx.board()
     # Connectivity is decided by whether copper shapes actually intersect, so
@@ -76,7 +76,7 @@ def net_topology(ctx, res):
 # ---------------------------------------------------------------------------
 
 @gate("CONTRACT.CONNECTOR", "Connector mating contract is consistent everywhere",
-      requires=("connector_contracts",))
+      gate_class="design", requires=("connector_contracts",))
 def connector_contract(ctx, res):
     tokens = ctx.manifest.get("connector_gender_tokens")
     doc_texts = _docs(ctx, ctx.manifest.get("documentation_globs"))
@@ -101,7 +101,7 @@ def connector_contract(ctx, res):
 # ---------------------------------------------------------------------------
 
 @gate("CONTRACT.PLACEMENT", "Component placement and orientation contracts",
-      requires=("placement_rules",))
+      gate_class="design", requires=("placement_rules",))
 def placement_contract(ctx, res):
     origin = ctx.manifest.get("board_origin_mm")
     board = ctx.board()
@@ -129,7 +129,7 @@ def placement_contract(ctx, res):
 # ---------------------------------------------------------------------------
 
 @gate("ARCH.CONTENTS", "Production archive contains only approved fabrication data",
-      requires=("archive.zip", "archive.allow"))
+      gate_class="release-artifact", requires=("archive.zip", "archive.allow"))
 def archive_contents(ctx, res):
     zpath = ctx.manifest.resolve(ctx.manifest.get("archive.zip"))
     if not os.path.isfile(zpath):
@@ -244,7 +244,7 @@ def _classify(name, data):
 
 @gate("ARCH.PROVENANCE",
       "The committed fabrication artifacts are the ones the record describes",
-      requires=("artifacts.fabrication_manifest",))
+      gate_class="release-artifact", requires=("artifacts.fabrication_manifest",))
 def archive_provenance(ctx, res):
     """Bind the committed artifacts to the design they were generated from.
 
@@ -319,7 +319,7 @@ def archive_provenance(ctx, res):
                                       "hand"})
 
     try:
-        _entries, now = closure_mod.current(ctx.manifest)
+        entries, now = closure_mod.current(ctx.manifest)
     except Exception as exc:                                   # noqa: BLE001
         return res.errored("the current source closure could not be computed, "
                            "so artifact staleness cannot be decided: "
@@ -328,11 +328,21 @@ def archive_provenance(ctx, res):
     res.measurements["source_closure_sha256"] = now
     res.measurements["recorded_source_closure_sha256"] = was
     if was != now:
-        problems.append({
+        stale = {
             "issue": "the committed artifacts were generated from a different "
                      "design than the one in the tree; rebuild before "
                      "releasing",
-            "recorded": str(was)[:16], "recomputed": now[:16]})
+            "recorded": str(was)[:16], "recomputed": now[:16]}
+        bound = record.get("source_closure")
+        if isinstance(bound, dict):
+            # The record carries its member map, so the mismatch can name
+            # which input moved instead of leaving two digests to stare at.
+            stale["changed_inputs"] = sorted(
+                k for k in set(bound) & set(entries)
+                if bound[k] != entries[k])[:12]
+            stale["added_inputs"] = sorted(set(entries) - set(bound))[:12]
+            stale["removed_inputs"] = sorted(set(bound) - set(entries))[:12]
+        problems.append(stale)
 
     for problem in problems[:40]:
         res.finding(**problem)

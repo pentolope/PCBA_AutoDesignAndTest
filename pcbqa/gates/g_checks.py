@@ -31,7 +31,7 @@ from ..constraints import implementation_constant
 # ---------------------------------------------------------------------------
 
 @gate("PROV.FIXTURE_INTEGRITY", "Frozen fixture matches its canonical digests",
-      requires=("fixture.hash_file",))
+      gate_class="fixture", requires=("fixture.hash_file",))
 def fixture_integrity(ctx, res):
     """An exact inventory, not a spot check.
 
@@ -512,19 +512,19 @@ def _run(ctx, res, kind, gate_id):
 # still blocks a release. What a board cannot do is declare a schematic and
 # then ask for a weaker check of it.
 @gate("ERC.AUTHORITATIVE", "Fresh ERC on the exact final schematic",
-      requires=("sources.schematic",))
+      gate_class="design", requires=("sources.schematic",))
 def erc(ctx, res):
     return _run(ctx, res, "erc", "ERC.AUTHORITATIVE")
 
 
 @gate("DRC.AUTHORITATIVE", "Fresh DRC on the exact final board",
-      requires=("sources.pcb", "sources.project"))
+      gate_class="design", requires=("sources.pcb", "sources.project"))
 def drc(ctx, res):
     return _run(ctx, res, "drc", "DRC.AUTHORITATIVE")
 
 
 @gate("DRC.NO_SUPPRESSED_RULES", "No design rule is silently disabled",
-      requires=("checks.drc.forbidden_severities",))
+      gate_class="design", requires=("checks.drc.forbidden_severities",))
 def suppressed(ctx, res):
     forbidden = res.limit(ctx.manifest.constraint(
         "checks.drc.forbidden_severities", units="severity",
@@ -566,7 +566,7 @@ def suppressed(ctx, res):
 
 @gate("DRC.CONSTRAINT_FLOOR",
       "No design rule is weaker than the floor the board declared",
-      requires=("checks.drc.constraint_floor", "sources.project"))
+      gate_class="design", requires=("checks.drc.constraint_floor", "sources.project"))
 def drc_constraint_floor(ctx, res):
     """A disabled rule is loud; a loosened one is silent.
 
