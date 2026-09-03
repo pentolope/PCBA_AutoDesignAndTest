@@ -346,7 +346,11 @@ def _run(ctx, res, kind, gate_id):
     spec = ctx.manifest.get("checks.{}".format(kind), {}) or {}
     relative = (ctx.manifest.get("sources.schematic") if kind == "erc"
                 else ctx.manifest.get("sources.pcb"))
-    source = ctx.manifest.resolve(relative)
+    # The hash bound into the result - and into waiver bindings - is of the
+    # board the check actually judges. Under a candidate override that is the
+    # candidate, so a waiver approved against other copper cannot ride along
+    # during routing and then expire at adoption.
+    source = (ctx.schematic_path() if kind == "erc" else ctx.board_path())
     if not os.path.isfile(source):
         return res.errored("{} source not found: {}".format(kind.upper(), source))
     source_hash = sha256_file(source)

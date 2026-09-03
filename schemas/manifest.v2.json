@@ -454,18 +454,19 @@
     "fixture": {
       "type": "object", "additionalProperties": false,
       "properties": {"hash_file": {"$ref": "#/definitions/relpath"},
-                     "attributes_file": {"$ref": "#/definitions/relpath"},
+                     "attributes_file": {"type": "string"},
                      "reject_globs": {"$ref": "#/definitions/strings"},
                      "inventory_policy": {"type": "string"}}
     },
     "closure": {
       "type": "object", "additionalProperties": false,
-      "properties": {"attributes_file": {"$ref": "#/definitions/relpath"}}
+      "properties": {"attributes_file": {"type": "string"}}
     }
   },
   "definitions": {
     "relpath": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!\\\\).+"
     },
     "strings": {"type": "array", "items": {"type": "string"}},
     "numbers": {"type": "array", "items": {"type": "number"}},
@@ -485,6 +486,7 @@
     },
     "fab_format": {
       "type": "object", "additionalProperties": false,
+      "required": ["columns"],
       "properties": {
         "columns": {
           "type": "array",

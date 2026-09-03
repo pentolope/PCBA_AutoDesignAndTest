@@ -193,7 +193,7 @@ class BuildCoherence(unittest.TestCase):
         manifest = self._manifest({"cpl_orientation": {"registry": []}})
         pairs = build_mod.incoherent(manifest)
         needed = {need for _declared, need, _why in pairs}
-        self.assertIn("release_generation.fab_format.cpl", needed)
+        self.assertIn("release_generation.fab_format.cpl.columns", needed)
         self.assertIn(
             "release_generation.cpl_orientation.reproduction_inputs", needed)
 
@@ -202,8 +202,35 @@ class BuildCoherence(unittest.TestCase):
             "cpl_orientation": {
                 "registry": [],
                 "reproduction_inputs": {"required_globs": []}},
-            "fab_format": {"cpl": {"field_map": {}}}})
+            "fab_format": {"cpl": {
+                "columns": [{"from": "Ref", "label": "Designator"},
+                            {"from": "Rot", "label": "Rotation"}],
+                "field_map": {"designator": "Designator",
+                              "rotation": "Rotation"}}}})
         self.assertEqual(build_mod.incoherent(manifest), [])
+
+    def test_a_format_without_the_offset_columns_is_incoherent(self):
+        # Columns alone relabel the file; applying an offset also needs to
+        # know which columns carry the designator and the rotation.
+        manifest = self._manifest({
+            "cpl_orientation": {
+                "registry": [],
+                "reproduction_inputs": {"required_globs": []}},
+            "fab_format": {"cpl": {
+                "columns": [{"from": "Ref", "label": "Designator"}]}}})
+        needed = {need for _d, need, _w in build_mod.incoherent(manifest)}
+        self.assertIn("release_generation.fab_format.cpl.field_map.designator",
+                      needed)
+        self.assertIn("release_generation.fab_format.cpl.field_map.rotation",
+                      needed)
+
+    def test_an_empty_fab_format_entry_is_refused_outright(self):
+        # `fab_format.cpl: {}` used to pass the schema while the build's
+        # format step skipped falsey rules - the T3 trap with one more door.
+        doc = minimal_manifest({"release_generation": {
+            "fab_format": {"cpl": {}}}})
+        with self.assertRaisesRegex(ManifestError, "columns"):
+            Manifest(write_manifest(doc, self.work))
 
     def test_the_build_refuses_before_touching_anything(self):
         manifest = self._manifest({"cpl_orientation": {"registry": []}})
@@ -216,6 +243,103 @@ class BuildCoherence(unittest.TestCase):
                             for step, _status, _why in builder.blockers))
         self.assertTrue(any("fab_format" in why
                             for _step, _status, why in builder.blockers))
+
+
+class OutputPathSafety(unittest.TestCase):
+    """A declared output name can neither leave scratch nor destroy a source."""
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="pcbqa_phase0_outputs_")
+        self.addCleanup(shutil.rmtree, self.work, True)
+
+    def test_an_absolute_artifact_path_is_refused_by_the_schema(self):
+        for key, value in (("bom", "/tmp/evil.csv"),
+                           ("gerber_dir", "C:/evil"),
+                           ("fabrication_manifest", "\\\\host\\share\\f.json")):
+            doc = minimal_manifest({"artifacts": {key: value}})
+            with self.assertRaisesRegex(ManifestError, key):
+                Manifest(write_manifest(doc, self.work))
+
+    def test_a_scratch_output_cannot_escape_the_run(self):
+        doc = minimal_manifest({"release_generation": {}})
+        manifest = Manifest(write_manifest(doc, self.work))
+        builder = build_mod.Build(
+            Context(manifest, os.path.join(self.work, "ctx")),
+            os.path.join(self.work, "run"))
+        inside = builder._scratch(builder.reports, "drc.json", "drc output")
+        self.assertTrue(inside.startswith(os.path.realpath(builder.root)))
+        for hostile in ("/etc/passwd", "../../../elsewhere.json"):
+            with self.assertRaises(build_mod.BuildError):
+                builder._scratch(builder.reports, hostile, "drc output")
+
+    def test_a_destination_that_is_a_design_input_refuses_the_build(self):
+        with open(os.path.join(self.work, "case.kicad_pcb"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("(kicad_pcb)")
+        doc = minimal_manifest({
+            "artifacts": {"bom": "case.kicad_pcb",
+                          "fabrication_manifest": "fab.json"},
+            "release_generation": {}})
+        manifest = Manifest(write_manifest(doc, self.work))
+        hits = build_mod.clobbered_inputs(manifest)
+        self.assertEqual([role for role, _rel in hits], ["bom"])
+        builder = build_mod.Build(
+            Context(manifest, os.path.join(self.work, "ctx")),
+            os.path.join(self.work, "run"))
+        with self.assertRaises(build_mod.BuildError):
+            builder.run()
+        self.assertTrue(any(step == "build:destinations"
+                            for step, _s, _w in builder.blockers))
+
+    def test_an_install_directory_holding_a_design_input_is_refused(self):
+        # The prune step deletes whatever the build did not produce, so a
+        # design input inside gerber_dir would be destroyed on install.
+        with open(os.path.join(self.work, "case.kicad_pcb"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("(kicad_pcb)")
+        doc = minimal_manifest({"artifacts": {"gerber_dir": "."}})
+        manifest = Manifest(write_manifest(doc, self.work))
+        hits = build_mod.clobbered_inputs(manifest)
+        self.assertIn(("gerber_dir", "case.kicad_pcb"), hits)
+
+
+class CandidateBindings(unittest.TestCase):
+    """A candidate run binds hashes to the candidate, not the declared board."""
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="pcbqa_phase0_bindings_")
+        self.addCleanup(shutil.rmtree, self.work, True)
+        board = synth.new_board()
+        net = synth.add_net(board, "N1")
+        synth.add_pad_footprint(board, "P1", 100, 100,
+                                pcbnew.PAD_SHAPE_RECT, (1.0, 1.0), net=net)
+        synth.save(board, os.path.join(self.work, "case.kicad_pcb"))
+        synth.add_track(board, (100, 100), (105, 100), net=net)
+        self.candidate = synth.save(
+            board, os.path.join(self.work, "candidate.kicad_pcb"))
+        with open(os.path.join(self.work, "case.kicad_pro"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("{}")
+        doc = minimal_manifest({
+            "sources": {"pcb": "case.kicad_pcb", "project": "case.kicad_pro"},
+            "geometry_profile": {"tolerances": {
+                "waiver_location_mm": {"value": 0.1, "units": "mm"}}},
+        })
+        self.manifest = write_manifest(doc, self.work)
+
+    def test_drc_hashes_the_board_it_actually_judged(self):
+        from pcbqa import gates
+        from pcbqa.core import sha256_file
+        result = gates.evaluate(self.manifest, only="DRC.AUTHORITATIVE",
+                                board_path=self.candidate)[0]
+        recorded = result.measurements.get("source_sha256")
+        self.assertEqual(recorded, sha256_file(self.candidate),
+                         result.reason)
+        self.assertNotEqual(
+            recorded,
+            sha256_file(os.path.join(self.work, "case.kicad_pcb")))
+        self.assertEqual(recorded,
+                         result.measurements.get("checked_copy_sha256"))
 
 
 class WorkspaceHold(unittest.TestCase):
@@ -399,6 +523,28 @@ class CheckBoardCommand(unittest.TestCase):
             {"routing": {"provenance": "routing.json"}}))
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("not the candidate the record describes", proc.stdout)
+
+    def test_missing_lists_runtime_not_applicable_from_the_record(self):
+        # STACK.PHYSICAL's static requirement is satisfied here, so only the
+        # recorded validation can say why it did not apply.
+        with open(os.path.join(self.project, "validation.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"gates": [{
+                "gate": "STACK.PHYSICAL", "status": "NOT_APPLICABLE",
+                "reason": "the board file carries no physical stackup"}]}, fh)
+        manifest = self._manifest({
+            "timing": {"physical_stackup": {}},
+            "artifacts": {"validation_report": "validation.json"}})
+        proc = subprocess.run(
+            [PYTHON, os.path.join(HERE, "run.py"), "gates", "--missing",
+             manifest],
+            capture_output=True, text=True, cwd=HERE)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        recorded = proc.stdout.split("NOT_APPLICABLE at the last recorded")
+        self.assertEqual(len(recorded), 2, proc.stdout)
+        self.assertIn("STACK.PHYSICAL", recorded[1])
+        self.assertIn("no physical stackup", recorded[1])
+        self.assertNotIn("STACK.PHYSICAL", recorded[0])
 
     def test_a_stale_fabrication_record_names_the_input_that_moved(self):
         board_rel = "widget_b.kicad_pcb"

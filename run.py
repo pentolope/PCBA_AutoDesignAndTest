@@ -527,19 +527,45 @@ def cmd_gates(argv):
             manifest, _workspace = open_board(_find_manifest(args[1]))
         except (ManifestError, LayoutError) as exc:
             return _refuse(exc)
-        dark = 0
+        dark = set()
         for entry in core.registered():
             missing = [_missing_label(k) for k in entry["requires"]
                        if not _satisfied(manifest, k)]
             if not missing:
                 continue
-            dark += 1
+            dark.add(entry["id"])
             print("{:32s} [{}] {}".format(entry["id"], entry["class"],
                                           entry["title"]))
             print("{:32s} declare: {}".format("", ", ".join(missing)))
         total = len(core.registered())
         print("\n{} of {} gates not enabled by this manifest; key shapes are "
-              "in schemas/manifest.v2.json".format(dark, total))
+              "in schemas/manifest.v2.json".format(len(dark), total))
+
+        # A gate can also decide NOT_APPLICABLE from what its declarations
+        # contain, which no static key check can see. The recorded validation
+        # already holds those verdicts with their reasons, so read them back
+        # rather than pretending the static list is the whole answer.
+        from pcbqa import artifacts
+        recorded = artifacts.paths(manifest).get("validation_report")
+        if recorded and os.path.isfile(recorded):
+            try:
+                with open(recorded, encoding="utf-8") as fh:
+                    doc = json.load(fh)
+            except ValueError:
+                doc = None
+            rows = [g for g in (doc or {}).get("gates", [])
+                    if g.get("status") == "NOT_APPLICABLE"
+                    and g.get("gate") not in dark]
+            if rows:
+                print("\ndeclared, but NOT_APPLICABLE at the last recorded "
+                      "validation:")
+                for g in rows:
+                    print("{:32s} {}".format(g["gate"],
+                                             str(g.get("reason", ""))[:90]))
+        elif recorded:
+            print("\nno recorded validation at {}; runtime NOT_APPLICABLE "
+                  "reasons appear there after `validate --write`"
+                  .format(os.path.relpath(recorded)))
         return 0
     if args:
         print("usage: run.py gates [--missing <manifest.json>]")

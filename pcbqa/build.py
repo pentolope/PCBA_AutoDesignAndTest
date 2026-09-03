@@ -31,9 +31,16 @@ class BuildError(Exception):
 #: to consume it is a build error, not housekeeping.
 COHERENCE = (
     ("release_generation.cpl_orientation",
-     "release_generation.fab_format.cpl",
+     "release_generation.fab_format.cpl.columns",
      "the orientation registry is applied inside the fab_format cpl step; "
-     "without that step the reviewed offsets are never written"),
+     "without a consumable cpl format the reviewed offsets are never "
+     "written"),
+    ("release_generation.cpl_orientation",
+     "release_generation.fab_format.cpl.field_map.designator",
+     "applying an offset needs the designator column of the shipped format"),
+    ("release_generation.cpl_orientation",
+     "release_generation.fab_format.cpl.field_map.rotation",
+     "applying an offset needs the rotation column of the shipped format"),
     ("release_generation.cpl_orientation",
      "release_generation.cpl_orientation.reproduction_inputs",
      "an applied registry must name the frozen evidence that re-derives it, "
@@ -48,6 +55,39 @@ def incoherent(manifest):
         if manifest.has(declared) and not manifest.has(needed):
             problems.append((declared, needed, why))
     return problems
+
+
+def clobbered_inputs(manifest):
+    """Declared artifact destinations that would destroy a design input.
+
+    `_installable` proves a destination is inside the project, but a design
+    source is inside the project too: `artifacts.bom` naming the board file
+    would overwrite it on install, and a design input sitting inside
+    `gerber_dir` or `reports_dir` would be deleted by the prune that keeps
+    those directories exactly what the build produced.
+    """
+    from . import artifacts
+    from .core import design_inputs
+
+    root = os.path.realpath(manifest.resolve("."))
+    protected = {os.path.realpath(os.path.join(root, rel)): rel
+                 for rel in design_inputs(manifest)}
+    protected[os.path.realpath(manifest.path)] = "the manifest itself"
+    hits = []
+    declared = artifacts.paths(manifest)
+    for role in artifacts.FILE_ROLES:
+        target = declared.get(role)
+        if target and os.path.realpath(target) in protected:
+            hits.append((role, protected[os.path.realpath(target)]))
+    for role in ("gerber_dir", "reports_dir"):
+        directory = declared.get(role)
+        if not directory:
+            continue
+        real = os.path.realpath(directory)
+        for path, rel in sorted(protected.items()):
+            if os.path.dirname(path) == real:
+                hits.append((role, rel))
+    return hits
 
 
 def canonical_argv(args):
@@ -73,6 +113,26 @@ class Build:
         self.blockers = []
         self.excluded_layers = []
 
+    def _scratch(self, base, name, label):
+        """Join a manifest-declared output name into this run's scratch.
+
+        `os.path.join` returns the second operand verbatim when it is
+        absolute, so a declared output name could otherwise aim a KiCad
+        export anywhere on the machine. Every joined output must resolve
+        back inside the run's own root.
+        """
+        joined = os.path.realpath(os.path.join(base, str(name)))
+        root = os.path.realpath(self.root)
+        try:
+            inside = os.path.commonpath([joined, root]) == root
+        except ValueError:
+            inside = False
+        if not inside or joined == root:
+            raise BuildError(
+                "{} {!r} resolves outside the build scratch ({}); output "
+                "names are scratch-relative".format(label, name, joined))
+        return joined
+
     # -- 1: stage the design; tools never open the authoritative files -----
     def isolate(self):
         locks = closure.open_design_locks(self.manifest,
@@ -96,13 +156,19 @@ class Build:
         sch = os.path.join(self.project, self.manifest.get("sources.schematic"))
         cfg = self.cfg
         bom, cpl = cfg["bom"], cfg["cpl"]
+        outputs = {
+            "erc": self._scratch(self.reports, cfg["erc"]["output"],
+                                 "erc output"),
+            "drc": self._scratch(self.reports, cfg["drc"]["output"],
+                                 "drc output"),
+            "cpl": self._scratch(self.staged, cpl["output"], "cpl output"),
+            "bom": self._scratch(self.staged, bom["output"], "bom output"),
+        }
         commands = [
-            ("erc", [cli, "sch", "erc", "--output",
-                     os.path.join(self.reports, cfg["erc"]["output"]),
+            ("erc", [cli, "sch", "erc", "--output", outputs["erc"],
                      "--format", "json"]
              + list(required_options("erc")) + [sch]),
-            ("drc", [cli, "pcb", "drc", "--output",
-                     os.path.join(self.reports, cfg["drc"]["output"]),
+            ("drc", [cli, "pcb", "drc", "--output", outputs["drc"],
                      "--format", "json"]
              + list(required_options("drc")) + [board]),
             ("gerbers", [cli, "pcb", "export", "gerbers",
@@ -111,11 +177,9 @@ class Build:
              + [board]),
             ("drill", [cli, "pcb", "export", "drill", "--output", self.export]
              + list(cfg["drill"]["flags"]) + [board]),
-            ("cpl", [cli, "pcb", "export", "pos", "--output",
-                     os.path.join(self.staged, cpl["output"])]
+            ("cpl", [cli, "pcb", "export", "pos", "--output", outputs["cpl"]]
              + list(cpl["flags"]) + [board]),
-            ("bom", [cli, "sch", "export", "bom", "--output",
-                     os.path.join(self.staged, bom["output"]),
+            ("bom", [cli, "sch", "export", "bom", "--output", outputs["bom"],
                      "--fields", ",".join(bom["fields"]),
                      "--labels", ",".join(bom["labels"]),
                      "--group-by", ",".join(bom["group_by"])]
@@ -135,12 +199,7 @@ class Build:
                      "exit {}: {}".format(proc.returncode,
                                           (proc.stderr or "").strip()[:120])))
 
-        missing = [n for n, p in (
-            ("bom", os.path.join(self.staged, bom["output"])),
-            ("cpl", os.path.join(self.staged, cpl["output"])),
-            ("erc", os.path.join(self.reports, cfg["erc"]["output"])),
-            ("drc", os.path.join(self.reports, cfg["drc"]["output"])),
-        ) if not os.path.isfile(p)]
+        missing = [n for n, p in outputs.items() if not os.path.isfile(p)]
         if not glob.glob(os.path.join(self.export, "*")):
             missing.append("gerbers")
         for name in missing:
@@ -191,7 +250,8 @@ class Build:
                     "two exported files claim to be {}: {} and {}".format(
                         row["ship_as"], renamed[row["ship_as"]], name)))
                 continue
-            shutil.copy2(path, os.path.join(self.gerbers, row["ship_as"]))
+            shutil.copy2(path, self._scratch(self.gerbers, row["ship_as"],
+                                             "fab file name"))
             renamed[row["ship_as"]] = name
 
         for row in spec["files"]:
@@ -218,7 +278,8 @@ class Build:
             rules = spec.get(kind)
             if not rules:
                 continue
-            path = os.path.join(self.staged, self.cfg[kind]["output"])
+            path = self._scratch(self.staged, self.cfg[kind]["output"],
+                                 kind + " output")
             if not os.path.isfile(path):
                 continue
             with open(path, newline="", encoding="utf-8") as fh:
@@ -341,7 +402,8 @@ class Build:
                 os.unlink(path)
                 continue
             chosen.append(path)
-        zpath = os.path.join(self.staged, self.cfg["archive"]["zip"])
+        zpath = self._scratch(self.staged, self.cfg["archive"]["zip"],
+                              "archive name")
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
             for path in chosen:
                 zf.write(path, os.path.basename(path))
@@ -359,7 +421,8 @@ class Build:
         root = self.manifest.resolve(".")
         for name, relative in (("erc", self.manifest.get("sources.schematic")),
                                ("drc", self.manifest.get("sources.pcb"))):
-            path = os.path.join(self.reports, self.cfg[name]["output"])
+            path = self._scratch(self.reports, self.cfg[name]["output"],
+                                 name + " output")
             if not os.path.isfile(path):
                 continue
             source = os.path.join(root, relative)
@@ -391,7 +454,8 @@ class Build:
                            ("cpl", cfg["cpl"]["output"]),
                            ("archive", cfg["archive"]["zip"])):
             if role in declared:
-                mapping[os.path.join(self.staged, name)] = declared[role]
+                mapping[self._scratch(self.staged, name,
+                                      role + " output")] = declared[role]
         for role, directory in (("gerber_dir", self.gerbers),
                                 ("reports_dir", self.reports)):
             target = declared.get(role)
@@ -502,6 +566,21 @@ class Build:
         if self.blockers:
             raise BuildError(
                 "declared capabilities that no build step would apply")
+        try:
+            clobbers = clobbered_inputs(self.manifest)
+        except Exception as exc:                               # noqa: BLE001
+            raise BuildError(
+                "artifact destinations cannot be checked against the design "
+                "inputs: {}: {}".format(type(exc).__name__, exc))
+        for role, rel in clobbers:
+            self.blockers.append((
+                "build:destinations", "ERROR",
+                "artifacts.{} would destroy design input {}: installing "
+                "there overwrites or prunes a source of the design being "
+                "released".format(role, rel)))
+        if self.blockers:
+            raise BuildError(
+                "artifact destinations collide with design inputs")
         self.isolate()
         self.generate()
         self.name_for_fab()
